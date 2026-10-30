@@ -34,6 +34,7 @@ WORKDIR /app
 COPY --from=builder /install /usr/local
 COPY app ./app
 COPY static ./static
+COPY docs/ais_auto_report.md ./docs/
 # The language file and the defaults the app reads; never config.yaml, which
 # docker/Dockerfile.dockerignore keeps out of the build context entirely.
 COPY config/language.yaml config/defaults.yaml config/example_header.yaml ./config/

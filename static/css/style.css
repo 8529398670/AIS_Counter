@@ -165,6 +165,48 @@ th { color: var(--bs-secondary-color); font-size: 0.8rem; text-transform: upperc
 /* The Settings screen: fields at a readable width, not the whole card. */
 .settings-field { max-width: 28rem; }
 
+/* The About screen: readable line length, a swatch per overlay drawn the way
+   the canvas draws it (dots, line or +) on a dark tile like the image. */
+.about { max-width: 60rem; }
+.about h3 { margin-top: 1.75rem; scroll-margin-top: 1rem; }
+.about-toc { display: flex; flex-wrap: wrap; gap: 0.25rem 1rem; }
+.about-legend { list-style: none; padding-left: 0; }
+.about-legend li { display: flex; gap: 0.75rem; align-items: flex-start; margin-bottom: 0.6rem; }
+.about-swatch {
+  flex: 0 0 auto;
+  width: 2.25rem;
+  height: 1.5rem;
+  margin-top: 0.1rem;
+  border-radius: 0.25rem;
+  background-color: #111;
+  background-repeat: no-repeat;
+}
+/* The colours draw() in ais.js uses. */
+.about-colour-component { --swatch: rgb(0, 200, 255); }
+.about-colour-skeleton { --swatch: rgb(255, 40, 40); }
+.about-colour-trace { --swatch: rgb(40, 110, 255); }
+.about-colour-spline { --swatch: rgb(255, 225, 0); }
+.about-colour-saved { --swatch: rgb(60, 220, 120); }
+.about-colour-start { --swatch: rgb(255, 255, 255); }
+.about-colour-click { --swatch: rgb(255, 150, 0); }
+.about-swatch-dots { background-image: radial-gradient(circle, var(--swatch) 1.5px, transparent 2px); background-size: 6px 6px; background-repeat: repeat; }
+.about-swatch-line { background-image: linear-gradient(var(--swatch), var(--swatch)); background-size: 70% 3px; background-position: center; }
+.about-swatch-cross {
+  background-image: linear-gradient(var(--swatch), var(--swatch)), linear-gradient(var(--swatch), var(--swatch));
+  background-size: 1rem 2px, 2px 1rem;
+  background-position: center;
+}
+.about-measures { display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 1rem; }
+.about-measures dd { margin-bottom: 0; }
+@media (max-width: 575.98px) { .about-measures { grid-template-columns: 1fr; } .about-measures dd { margin-bottom: 0.5rem; } }
+.about-report h2 { font-size: 1.35rem; margin-top: 1.5rem; }
+.about-report h3 { font-size: 1.15rem; margin-top: 1.5rem; }
+.about-report h4 { font-size: 1rem; margin-top: 1.25rem; }
+.about-report h2, .about-report h3, .about-report h4 { scroll-margin-top: 1rem; }
+.about-report pre { background: var(--bs-tertiary-bg); padding: 0.75rem; border-radius: 0.375rem; overflow-x: auto; }
+.about-report code { color: inherit; }
+.about-report table { width: auto; }
+
 /* The Appearance screen's presets, each drawn in its own colours. */
 .theme-picker { display: flex; flex-wrap: wrap; gap: 0.5rem; }
 .theme-choice {

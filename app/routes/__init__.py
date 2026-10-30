@@ -91,6 +91,8 @@ def build_routes(static_server: StaticServer, cfg: Config) -> list[BaseRoute]:
         sessions_only("/api/account/login-link", account.create_my_login_link, ["POST"]),
         signed_in("/api/logout", account.logout, ["POST"]),
         signed_in("/api/team", team.list_team),
+        # The About screen's copy of docs/ais_auto_report.md.
+        signed_in("/api/about/report", meta.get_report),
         # AIS analysis (app/routes/ais.py): files, tracing, and the batches and
         # accepted AIS every signed-in user shares.
         signed_in("/api/ais/files", ais.upload, ["POST"], max_body_size=ais.UPLOAD_LIMIT_BYTES),

@@ -1,6 +1,8 @@
 # Data (large, local only)
 example-data/
 .DS_Store
+.claude/
+.pytest_cache/
 
 # Holds the secret key -- never commit. config/config.example.yaml is the committed copy.
 config/config.yaml

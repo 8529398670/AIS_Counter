@@ -74,6 +74,13 @@ the start of an AIS gives the original's trace and length. **Enter** accepts,
 - **Viewer.** Wheel or +/− zooms, drag or middle-drag pans, 1 is 100 %. The
   lock (L) freezes pan and zoom and keeps that view on every image; Reset (0),
   under the lock, fits the image (and becomes the locked view when locked).
+- **Settings.** *Minimum AIS length* (µm, 0 = off) skips a trace that comes
+  out shorter: it is shown with a note but cannot be accepted. *Trace line
+  thickness* sets how thick traces and markers are drawn, on screen and in the
+  exported PNGs. Both are kept in this browser.
+- **About.** What each overlay colour is, the numbers and keys, the MATLAB
+  requirements, and the full [ais_auto.m report](docs/ais_auto_report.md)
+  rendered in the app (`/api/about/report`).
 - **Results.** The table lists the newest first, for this batch or all.
   *Export* gives the CSV, or a ZIP with the CSV and one full-resolution PNG
   per image with its accepted traces drawn and numbered.

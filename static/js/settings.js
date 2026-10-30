@@ -5,6 +5,9 @@
 // one is an entry in methods below plus a <fieldset data-method="key"> of its
 // controls in index.html; only the chosen method's fieldset shows.
 //
+// General settings (minimum length, trace thickness) apply whatever the
+// method, and are kept apart from any one method's.
+//
 // Like the theme, the choice is remembered in this browser (localStorage)
 // only. Move it onto the account if it should follow a person to every
 // device.
@@ -18,6 +21,13 @@ const Settings = {
       controls: { threshold: "ais-threshold" , two_clicks: "ais-two-clicks" } },
   ],
 
+  // Settings for every method: field -> default, control id and allowed range.
+  general: {
+    defaults: { min_length: 0 , line_width: 1.5 },
+    controls: { min_length: "settings-min-length" , line_width: "settings-line-width" },
+    ranges: { min_length: [ 0 , 1000 ] , line_width: [ 0.5 , 6 ] },
+  },
+
   values: null,
   listeners: [],
 
@@ -30,7 +40,8 @@ const Settings = {
     } );
     select.value = this.values.method;
     select.addEventListener( "change" , () => {
-      this.values = Object.assign( { method: select.value } , this.find( select.value ).defaults , this.saved( select.value ) );
+      const general = this.pick( this.general , this.values );
+      this.values = Object.assign( { method: select.value } , general , this.find( select.value ).defaults , this.saved( select.value ) );
       this.render();
       this.save();
     } );
@@ -44,6 +55,17 @@ const Settings = {
         } );
       } );
     } );
+    // The slider redraws as it moves; the number box once it is left.
+    Object.keys( this.general.controls ).forEach( ( field ) => {
+      const control = Dom.get( this.general.controls[ field ] );
+      control.addEventListener( control.type === "range" ? "input" : "change" , ( e ) => {
+        const value = this.clean( this.general , field , e.target.value );
+        this.values[ field ] = value;
+        if ( control.type !== "range" ) e.target.value = value;
+        this.renderGeneral();
+        this.save();
+      } );
+    } );
     this.render();
   },
 
@@ -51,12 +73,23 @@ const Settings = {
     return this.methods.find( function ( method ) { return method.key === key; } ) || this.methods[ 0 ];
   },
 
-  // A number field out of range or empty goes back to its default.
-  clean( method , field , value ) {
-    const fallback = method.defaults[ field ];
+  // A number field out of range or empty goes back to its default. The range
+  // is the group's own (general.ranges), else 0..1.
+  clean( group , field , value ) {
+    const fallback = group.defaults[ field ];
     if ( typeof fallback !== "number" ) return value;
+    const range = ( group.ranges && group.ranges[ field ] ) || [ 0 , 1 ];
     const number = Number( value );
-    return value === "" || !Number.isFinite( number ) || number < 0 || number > 1 ? fallback : number;
+    return value === "" || !Number.isFinite( number ) || number < range[ 0 ] || number > range[ 1 ] ? fallback : number;
+  },
+
+  // A group's fields from values, cleaned, defaults for anything missing.
+  pick( group , values ) {
+    const out = {};
+    Object.keys( group.defaults ).forEach( ( field ) => {
+      out[ field ] = values && field in values ? this.clean( group , field , values[ field ] ) : group.defaults[ field ];
+    } );
+    return out;
   },
 
   // Everything saved, per method, so switching away and back keeps each one's.
@@ -76,7 +109,9 @@ const Settings = {
 
   load() {
     const method = this.find( this.all().method );
-    const values = Object.assign( { method: method.key } , method.defaults );
+    const all = this.all();
+    const general = this.pick( this.general , all.general && typeof all.general === "object" ? all.general : {} );
+    const values = Object.assign( { method: method.key } , general , method.defaults );
     const saved = this.saved( method.key );
     Object.keys( method.defaults ).forEach( ( field ) => {
       if ( field in saved ) values[ field ] = this.clean( method , field , saved[ field ] );
@@ -91,7 +126,8 @@ const Settings = {
     byMethod[ method.key ] = {};
     Object.keys( method.defaults ).forEach( ( field ) => { byMethod[ method.key ][ field ] = this.values[ field ]; } );
     try {
-      window.localStorage.setItem( this.storageKey , JSON.stringify( { method: method.key , by_method: byMethod } ) );
+      const general = this.pick( this.general , this.values );
+      window.localStorage.setItem( this.storageKey , JSON.stringify( { method: method.key , by_method: byMethod , general: general } ) );
     } catch ( error ) {
       // Not remembered for next time, but still used now.
     }
@@ -106,6 +142,14 @@ const Settings = {
     Object.keys( method.controls ).forEach( ( field ) => {
       Dom.get( method.controls[ field ] ).value = this.values[ field ];
     } );
+    Object.keys( this.general.controls ).forEach( ( field ) => {
+      Dom.get( this.general.controls[ field ] ).value = this.values[ field ];
+    } );
+    this.renderGeneral();
+  },
+
+  renderGeneral() {
+    Dom.text( Dom.get( "settings-line-width-value" ) , this.values.line_width + " px" );
   },
 
   // Called with the values after every change.
@@ -113,7 +157,17 @@ const Settings = {
     this.listeners.push( listener );
   },
 
+  // The method and its fields, as one string: whether a change was to them.
+  methodState() {
+    const method = this.find( this.values.method );
+    return JSON.stringify( [ method.key ].concat( Object.keys( method.defaults ).map( ( field ) => this.values[ field ] ) ) );
+  },
+
   method() { return this.values.method; },
   threshold() { return this.values.threshold; },
   twoClicks() { return this.values.two_clicks; },
+  // µm; 0 is off.
+  minLength() { return this.values.min_length; },
+  // Screen pixels, whatever the zoom.
+  lineWidth() { return this.values.line_width; },
 };

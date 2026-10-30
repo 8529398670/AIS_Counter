@@ -125,6 +125,7 @@ const App = {
     Pin.init( me );
     await Keys.init( me );
     Settings.init();
+    About.init();
     Ais.init( me );
 
     if ( me.role === "admin" ) {

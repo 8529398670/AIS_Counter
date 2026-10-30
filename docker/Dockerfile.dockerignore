@@ -11,6 +11,8 @@ data/
 # Holds the secret key: never in an image layer, which is forever.
 config/config.yaml
 *.md
+# ...except the report the About screen shows (app/routes/meta.py).
+!docs/ais_auto_report.md
 docker/
 scripts/
 misc/

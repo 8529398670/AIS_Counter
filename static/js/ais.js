@@ -64,7 +64,14 @@ const Ais = {
     Dom.get( "ais-replay" ).addEventListener( "click" , () => this.replayInMatlab() );
     Dom.get( "ais-table-scope" ).addEventListener( "change" , () => this.loadTable() );
     // A changed setting (on the Settings screen) drops a half-done two-click.
-    Settings.onChange( () => { this.firstClick = null; this.status( "" ); } );
+    // A method setting starts the click over; a general one (thickness, minimum
+    // length) only redraws, and the minimum applies from the next trace.
+    let method = Settings.methodState();
+    Settings.onChange( () => {
+      if ( Settings.methodState() !== method ) { this.firstClick = null; this.status( "" ); }
+      method = Settings.methodState();
+      this.draw();
+    } );
 
     Dom.get( "ais-file-open" ).addEventListener( "click" , () => this.openCurrent() );
     Dom.get( "ais-file-reveal" ).addEventListener( "click" , () => this.revealCurrent() );
@@ -1016,6 +1023,7 @@ const Ais = {
         return;
       }
       this.firstClick = null;
+      this.skipShort( result );
       this.result = Object.assign( result , { image: entry.key , source: this.kind( entry ) } );
       this.status( this.imageNote( entry ) , true );
       this.renderResult();
@@ -1029,6 +1037,17 @@ const Ais = {
       this.queuedBody = null;
       if ( queued ) this.traceBody( queued );
     }
+  },
+
+  // Settings > Minimum AIS length: a shorter trace stays on screen but is not
+  // ok, so it cannot be accepted.
+  skipShort( result ) {
+    const min = Settings.minLength();
+    const m = result.measures;
+    if ( !result.ok || !min || !m || !( m.length_um < min ) ) return;
+    result.ok = false;
+    result.skipped = true;
+    result.error = I18n.get( "ais.too_short" ).replace( "{length}" , m.length_str ).replace( "{min}" , this.fmt( min ) );
   },
 
   // note: the text is an image note, which gets a close button.
@@ -1295,7 +1314,7 @@ const Ais = {
     ctx.setTransform( dpr * s , 0 , 0 , dpr * s , dpr * this.view.ox , dpr * this.view.oy );
     ctx.imageSmoothingEnabled = s < 1;
     ctx.drawImage( this.bitmap , 0 , 0 );
-    const lw = 1.5 / s;
+    const lw = Settings.lineWidth() / s;
 
     const entry = this.images[ this.index ];
     if ( entry && this.layer( "saved" ) ) {
@@ -1316,12 +1335,12 @@ const Ais = {
       if ( r.skeleton && this.layer( "skeleton" ) ) this.dots( r.skeleton , "rgba(255, 40, 40, 0.95)" );
       if ( r.pixels && this.layer( "trace" ) ) this.polyline( r.pixels , "rgba(40, 110, 255, 1)" , lw );
       if ( r.spline && this.layer( "spline" ) ) this.polyline( r.spline , "rgba(255, 225, 0, 1)" , lw );
-      if ( r.start ) this.cross( r.start , "rgba(255, 255, 255, 1)" , 4 / s , lw );
+      if ( r.start ) this.cross( r.start , "rgba(255, 255, 255, 1)" , ( 4 + Settings.lineWidth() ) / s , lw );
     }
     // The click(s) where they are now: a nudge shows before its trace returns.
     if ( this.lastBody ) {
       [ this.lastBody.click , this.lastBody.click2 ].filter( Boolean )
-        .forEach( ( c ) => this.cross( c , "rgba(255, 150, 0, 1)" , 6 / s , lw ) );
+        .forEach( ( c ) => this.cross( c , "rgba(255, 150, 0, 1)" , ( 6 + Settings.lineWidth() ) / s , lw ) );
     }
   },
 
