@@ -1,2 +1,27 @@
+# Data (large, local only)
 example-data/
 .DS_Store
+
+# Holds the secret key -- never commit. config/config.example.yaml is the committed copy.
+config/config.yaml
+
+# Local runtime
+.venv/
+venv/
+.run/
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# Generated at build time
+app/core/layout_pinned.py
+app/build_info.py
+
+# Python
+__pycache__/
+*.pyc
+
+# MATLAB parity harness output (generated from local example-data)
+tests/matlab/build/
+tests/golden/
