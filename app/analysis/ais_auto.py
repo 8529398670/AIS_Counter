@@ -207,7 +207,9 @@ def measure(path: list[tuple[int, int]], raw: np.ndarray) -> Measures:
     N = len(path)
     xy = np.array([[c for _, c in path], [r for r, _ in path]], np.float64)   # line 266: [Yais; Xais]
     if N < 2:
-        raise MatlabError("SPLINES:CHCKXYWP:XdontmatchY (single-pixel trace)")
+        # length(xy) of a 2x1 array is 2, so csaps fits the two coordinates as
+        # a 2-point scalar series and returns one row; line 274 then indexes row 2.
+        raise MatlabError("Index in position 2 exceeds array bounds (single-pixel trace)")
     ts = np.append(ml.colon(1, 0.1, N), N)                            # line 271
     xysm = ml.csaps(np.arange(1, N + 1, dtype=np.float64), xy, SPLINE_P, ts)
     seg = np.sqrt((xysm[0, 1:] - xysm[0, :-1]) ** 2 + (xysm[1, 1:] - xysm[1, :-1]) ** 2)
