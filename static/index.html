@@ -57,6 +57,7 @@
       <div class="offcanvas-body">
         <nav id="sidebar-nav" class="nav nav-pills flex-column w-100 gap-1">
           <a class="nav-link" href="#ais" data-nav="ais"><i class="bi bi-bezier2" aria-hidden="true"></i><span data-i18n="nav.ais"></span></a>
+          <a class="nav-link" href="#settings" data-nav="settings"><i class="bi bi-sliders" aria-hidden="true"></i><span data-i18n="nav.settings"></span></a>
           <!-- Account: its second line names who is signed in (App.labelAccount). -->
           <a class="nav-link" href="#account" data-nav="account"><i class="bi bi-person-circle" aria-hidden="true"></i><span class="nav-link-text"><span data-i18n="nav.account"></span><span id="sidebar-user" class="nav-link-sub"></span></span></a>
           <a class="nav-link" href="#appearance" data-nav="appearance"><i class="bi bi-palette" aria-hidden="true"></i><span data-i18n="nav.appearance"></span></a>
@@ -144,7 +145,7 @@
       </section>
 
       <section id="signed-in" hidden>
-        <!-- Original: the ais_auto.m port. Everything here is driven by
+        <!-- Process: the ais_auto.m port. Everything here is driven by
              static/js/ais.js; the analysis runs on the server. -->
         <section class="view ais-view" data-view="ais" id="ais-panel">
           <div class="card mb-3">
@@ -170,17 +171,6 @@
                 <button id="ais-prev" class="btn btn-outline-secondary" type="button" data-i18n-attr="title:ais.prev"><i class="bi bi-chevron-left" aria-hidden="true"></i></button>
                 <select id="ais-image" class="form-select" data-i18n-attr="aria-label:ais.image_label"></select>
                 <button id="ais-next" class="btn btn-outline-secondary" type="button" data-i18n-attr="title:ais.next"><i class="bi bi-chevron-right" aria-hidden="true"></i></button>
-              </div>
-              <div class="ais-threshold">
-                <label for="ais-threshold" class="form-label small mb-0" data-i18n="ais.threshold_label"></label>
-                <input id="ais-threshold" class="form-control form-control-sm" type="number" min="0" max="1" step="0.001" value="0.01" />
-              </div>
-              <div class="ais-threshold" data-i18n-attr="title:ais.second_click_help">
-                <label for="ais-two-clicks" class="form-label small mb-0" data-i18n="ais.two_clicks"></label>
-                <select id="ais-two-clicks" class="form-select form-select-sm">
-                  <option value="auto" data-i18n="ais.second_auto"></option>
-                  <option value="manual" data-i18n="ais.second_manual"></option>
-                </select>
               </div>
             </div>
           </div>
@@ -407,6 +397,35 @@
             <hr />
 
             <button id="logout-button" class="btn btn-outline-danger" data-i18n="account.logout_button"></button>
+          </div>
+        </section>
+
+        <!-- How Process calculates: the method, then that method's own
+             settings (one fieldset per method, data-method = its key). Kept
+             in this browser; see settings.js. -->
+        <section class="card view" data-view="settings" id="settings">
+          <div class="card-body">
+            <h2 class="h4 card-title" data-i18n="settings.heading"></h2>
+            <p class="text-body-secondary" data-i18n="settings.description"></p>
+            <div class="mb-3 settings-field">
+              <label for="settings-method" class="form-label" data-i18n="settings.method_label"></label>
+              <select id="settings-method" class="form-select"></select>
+            </div>
+            <fieldset data-method="ais_auto">
+              <legend class="h6" data-i18n="settings.method_settings"></legend>
+              <div class="mb-3 settings-field">
+                <label for="ais-threshold" class="form-label" data-i18n="ais.threshold_label"></label>
+                <input id="ais-threshold" class="form-control" type="number" min="0" max="1" step="0.001" value="0.01" />
+              </div>
+              <div class="mb-3 settings-field">
+                <label for="ais-two-clicks" class="form-label" data-i18n="ais.two_clicks"></label>
+                <select id="ais-two-clicks" class="form-select" aria-describedby="ais-two-clicks-help">
+                  <option value="auto" data-i18n="ais.second_auto"></option>
+                  <option value="manual" data-i18n="ais.second_manual"></option>
+                </select>
+                <div id="ais-two-clicks-help" class="form-text" data-i18n="ais.second_click_help"></div>
+              </div>
+            </fieldset>
           </div>
         </section>
 
@@ -648,6 +667,7 @@
   <script src="/js/invites.js"></script>
   <script src="/js/tiff.js"></script>
   <script src="/js/zip.js"></script>
+  <script src="/js/settings.js"></script>
   <script src="/js/ais.js"></script>
   <script src="/js/ais_images.js"></script>
   <script src="/js/ais_export.js"></script>

@@ -162,6 +162,9 @@ th { color: var(--bs-secondary-color); font-size: 0.8rem; text-transform: upperc
 .link-box { display: flex; align-items: flex-start; gap: 0.5rem; }
 .link-box code { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; color: inherit; font-size: 0.85rem; }
 
+/* The Settings screen: fields at a readable width, not the whole card. */
+.settings-field { max-width: 28rem; }
+
 /* The Appearance screen's presets, each drawn in its own colours. */
 .theme-picker { display: flex; flex-wrap: wrap; gap: 0.5rem; }
 .theme-choice {
@@ -184,14 +187,10 @@ th { color: var(--bs-secondary-color); font-size: 0.8rem; text-transform: upperc
 }
 .theme-swatch-dark { --swatch-bg: #101215; --swatch-accent: #6ea0ff; }
 
-/* The Original screen (static/js/ais*.js). The image stage stays dark in every theme:
+/* The Process screen (static/js/ais*.js). The image stage stays dark in every theme:
    it is a fluorescence image, and the overlay colours are picked against black. */
 .ais-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem; }
 .ais-picker { flex: 1 1 20rem; min-width: 0; }
-.ais-threshold { display: flex; align-items: center; gap: 0.4rem; }
-.ais-threshold input { width: 6rem; }
-.ais-threshold label { white-space: nowrap; }
-.ais-threshold select { width: auto; }
 .ais-grid { display: grid; grid-template-columns: minmax(0, 1fr) 22rem; gap: 1rem; align-items: start; }
 @media (max-width: 1199.98px) { .ais-grid { grid-template-columns: minmax(0, 1fr); } }
 .ais-stage-card { overflow: hidden; }

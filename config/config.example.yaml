@@ -120,7 +120,7 @@ server:
   # auth.api_keys; false removes /mcp.
   mcp: true
 
-  # The Original screen's "Open path": read TIFF folders straight off this
+  # The Process screen's "Open path": read TIFF folders straight off this
   # machine's disk, show a file in Finder, copy its real path. Admins only,
   # and only when the server listens on loopback outside the container --
   # anything else would let a remote browser read the host's files.

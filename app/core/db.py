@@ -42,7 +42,7 @@ BUCKET_LOGIN_TOKENS = "login_tokens"
 BUCKET_API_KEYS = "api_keys"
 BUCKET_INVITE_LINKS = "invite_links"
 BUCKET_META = "meta"
-# The Original screen's batches (one opened folder each) and accepted AIS,
+# The Process screen's batches (one opened folder each) and accepted AIS,
 # shared by every signed-in user. See app/models/ais.py.
 BUCKET_AIS_BATCHES = "ais_batches"
 BUCKET_AIS_RESULTS = "ais_results"

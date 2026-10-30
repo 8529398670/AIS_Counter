@@ -1,4 +1,4 @@
-"""Folders on this machine's disk, for the Original screen's "Open path".
+"""Folders on this machine's disk, for the Process screen's "Open path".
 
 A browser never learns where a picked file lives, so an uploaded folder cannot
 be shown in Finder or copied as a path. When the server runs on the same

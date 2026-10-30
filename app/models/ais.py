@@ -1,4 +1,4 @@
-"""Batches and accepted AIS for the Original screen, shared by every signed-in
+"""Batches and accepted AIS for the Process screen, shared by every signed-in
 user so a link to a folder and image works for the whole team.
 
 A batch is one opened folder: its TIFFs grouped into images by cell (the

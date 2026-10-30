@@ -1,4 +1,4 @@
-// The Original screen: open a folder of TIFF pairs (or lone TIFFs), click near
+// The Process screen: open a folder of TIFF pairs (or lone TIFFs), click near
 // an AIS, see the original ais_auto.m's trace and length, accept or reject it.
 //
 // The analysis is all server-side (app/analysis/). Each opened folder becomes
@@ -58,7 +58,8 @@ const Ais = {
     Dom.get( "ais-reject" ).addEventListener( "click" , () => this.reject() );
     Dom.get( "ais-replay" ).addEventListener( "click" , () => this.replayInMatlab() );
     Dom.get( "ais-table-scope" ).addEventListener( "change" , () => this.loadTable() );
-    Dom.get( "ais-two-clicks" ).addEventListener( "change" , () => { this.firstClick = null; this.status( "" ); } );
+    // A changed setting (on the Settings screen) drops a half-done two-click.
+    Settings.onChange( () => { this.firstClick = null; this.status( "" ); } );
 
     Dom.get( "ais-file-open" ).addEventListener( "click" , () => this.openCurrent() );
     Dom.get( "ais-file-reveal" ).addEventListener( "click" , () => this.revealCurrent() );
@@ -624,7 +625,7 @@ const Ais = {
         processed: this.sha( entry ),
         raw: this.kind( entry ) === "pair" ? this.sha( entry , "raw" ) : null,
         cell: entry.cell,
-        threshold: Number( Dom.get( "ais-threshold" ).value ),
+        threshold: Settings.threshold(),
         clicks: clicks || null,
       } );
       Dom.toast( I18n.get( "ais.matlab_started" ) , "ok" );
@@ -866,10 +867,10 @@ const Ais = {
       const result = await Api.post( "/api/ais/trace" , Object.assign( {
         processed: this.sha( entry ),
         raw: this.kind( entry ) === "pair" ? this.sha( entry , "raw" ) : null,
-        threshold: Number( Dom.get( "ais-threshold" ).value ),
+        threshold: Settings.threshold(),
       } , body ) );
       if ( this.images[ this.index ] !== entry ) return;
-      const twoClicks = Dom.get( "ais-two-clicks" ).value === "manual";
+      const twoClicks = Settings.twoClicks() === "manual";
       if ( twoClicks && !body.click2 && result.rethresholded ) {
         // The original asks for a second click after re-thresholding.
         this.firstClick = body.click;

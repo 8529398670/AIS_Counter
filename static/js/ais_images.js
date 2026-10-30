@@ -1,4 +1,4 @@
-// The Original screen's dialogs: Images (which of the batch to step through,
+// The Process screen's dialogs: Images (which of the batch to step through,
 // with previews and duplicates), Open path (a folder on this machine, read by
 // the server) and Batches (every shared batch, to open or delete). Ais
 // (ais.js) owns the images; this file only edits their `included` flag, and

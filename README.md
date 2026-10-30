@@ -35,9 +35,9 @@ On a fresh clone, `cp config/config.example.yaml config/config.yaml` and set a
 `~/.config/ais-counter/`. `server.secure_cookies` is `false` for plain-http
 localhost; set it to `true` behind https.
 
-## Original (ais_auto.m)
+## Process
 
-The **Original (ais_auto.m)** screen (the default after signing in) is our
+The **Process** screen (the default after signing in) is our
 reimplementation of the original `ais_auto.m`. It opens a folder of TIFF pairs:
 `<cell>.tif` (raw, sampled for the intensity profile) and
 `<cell>.tif - Processed method 2.5.tif` (segmented and traced). One click near
