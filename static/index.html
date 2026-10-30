@@ -144,7 +144,7 @@
       </section>
 
       <section id="signed-in" hidden>
-        <!-- AIS tracing: the ais_auto.m port. Everything here is driven by
+        <!-- Original: the ais_auto.m port. Everything here is driven by
              static/js/ais.js; the analysis runs on the server. -->
         <section class="view ais-view" data-view="ais" id="ais-panel">
           <div class="card mb-3">
@@ -157,6 +157,15 @@
                 <i class="bi bi-images" aria-hidden="true"></i> <span data-i18n="ais.open_files"></span>
                 <input id="ais-files" type="file" accept=".tif,.tiff" multiple hidden />
               </label>
+              <button id="ais-open-path" class="btn btn-outline-primary" type="button" hidden>
+                <i class="bi bi-hdd" aria-hidden="true"></i> <span data-i18n="ais.open_path"></span>
+              </button>
+              <button id="ais-batches-open" class="btn btn-outline-secondary" type="button">
+                <i class="bi bi-collection" aria-hidden="true"></i> <span data-i18n="ais.batches"></span>
+              </button>
+              <button id="ais-images-open" class="btn btn-outline-secondary" type="button" disabled>
+                <i class="bi bi-grid-3x3-gap" aria-hidden="true"></i> <span data-i18n="ais.images"></span> <span id="ais-images-count" class="badge text-bg-secondary"></span>
+              </button>
               <div class="input-group ais-picker">
                 <button id="ais-prev" class="btn btn-outline-secondary" type="button" data-i18n-attr="title:ais.prev"><i class="bi bi-chevron-left" aria-hidden="true"></i></button>
                 <select id="ais-image" class="form-select" data-i18n-attr="aria-label:ais.image_label"></select>
@@ -166,19 +175,57 @@
                 <label for="ais-threshold" class="form-label small mb-0" data-i18n="ais.threshold_label"></label>
                 <input id="ais-threshold" class="form-control form-control-sm" type="number" min="0" max="1" step="0.001" value="0.01" />
               </div>
-              <div class="form-check form-switch mb-0">
-                <input id="ais-two-clicks" class="form-check-input" type="checkbox" />
-                <label class="form-check-label small" for="ais-two-clicks" data-i18n="ais.two_clicks"></label>
+              <div class="ais-threshold" data-i18n-attr="title:ais.second_click_help">
+                <label for="ais-two-clicks" class="form-label small mb-0" data-i18n="ais.two_clicks"></label>
+                <select id="ais-two-clicks" class="form-select form-select-sm">
+                  <option value="auto" data-i18n="ais.second_auto"></option>
+                  <option value="manual" data-i18n="ais.second_manual"></option>
+                </select>
               </div>
             </div>
           </div>
 
           <div class="ais-grid">
             <div class="card ais-stage-card">
+              <!-- The image being traced: its file, where it is, and the batch's progress. -->
+              <div class="card-header ais-current" id="ais-current" hidden>
+                <div class="ais-current-name">
+                  <div class="small text-body-secondary"><i class="bi bi-collection me-1" aria-hidden="true"></i><span id="ais-batch-name"></span></div>
+                  <div class="ais-current-file"><span id="ais-current-pos" class="text-body-secondary me-2"></span><span id="ais-current-stem" class="fw-semibold"></span><span id="ais-current-ext" class="text-body-secondary"></span></div>
+                  <div id="ais-current-partner" class="small text-body-secondary ais-current-file"></div>
+                </div>
+                <div class="btn-group btn-group-sm" role="group">
+                  <button id="ais-file-open" class="btn btn-outline-secondary" type="button" data-i18n-attr="title:ais.file_open,aria-label:ais.file_open"><i class="bi bi-box-arrow-up-right" aria-hidden="true"></i></button>
+                  <button id="ais-file-reveal" class="btn btn-outline-secondary" type="button" data-i18n-attr="title:ais.file_reveal,aria-label:ais.file_reveal"><i class="bi bi-folder2-open" aria-hidden="true"></i></button>
+                  <button id="ais-file-copy" class="btn btn-outline-secondary" type="button" data-i18n-attr="title:ais.file_copy,aria-label:ais.file_copy"><i class="bi bi-clipboard" aria-hidden="true"></i></button>
+                  <button id="ais-file-link" class="btn btn-outline-secondary" type="button" data-i18n-attr="title:ais.file_link,aria-label:ais.file_link"><i class="bi bi-link-45deg" aria-hidden="true"></i></button>
+                  <div class="btn-group btn-group-sm" role="group" id="ais-matlab-group" hidden>
+                    <button id="ais-matlab-menu" class="btn btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" data-i18n-attr="title:ais.matlab,aria-label:ais.matlab"><i class="bi bi-window-stack" aria-hidden="true"></i></button>
+                    <ul class="dropdown-menu dropdown-menu-end">
+                      <li><button class="dropdown-item" type="button" data-matlab="open"><i class="bi bi-file-earmark-code me-2" aria-hidden="true"></i><span data-i18n="ais.matlab_open"></span></button></li>
+                      <li><button class="dropdown-item" type="button" data-matlab="run"><i class="bi bi-play me-2" aria-hidden="true"></i><span data-i18n="ais.matlab_run"></span></button></li>
+                    </ul>
+                  </div>
+                  <button id="ais-file-done" class="btn btn-outline-secondary" type="button" data-i18n-attr="title:ais.file_done,aria-label:ais.file_done" aria-pressed="false"><i class="bi bi-check2-circle" aria-hidden="true"></i></button>
+                </div>
+                <div class="ais-progress">
+                  <span id="ais-upload-status" class="small text-body-secondary"></span>
+                  <span id="ais-progress-text" class="small text-body-secondary"></span>
+                  <div class="progress" role="progressbar" id="ais-progress-bar-wrap"><div id="ais-progress-bar" class="progress-bar bg-success"></div></div>
+                </div>
+              </div>
               <div class="ais-stage" id="ais-stage">
                 <canvas id="ais-canvas"></canvas>
                 <p id="ais-empty" class="ais-empty" data-i18n="ais.empty"></p>
                 <p id="ais-status" class="ais-status small" hidden></p>
+                <!-- Pan and zoom: drag (or middle-drag) pans, the wheel zooms; lock freezes the view across images. -->
+                <div class="ais-viewtools btn-group-vertical btn-group-sm" role="group">
+                  <button id="ais-zoom-in" class="btn btn-dark" type="button" data-i18n-attr="title:ais.zoom_in,aria-label:ais.zoom_in"><i class="bi bi-zoom-in" aria-hidden="true"></i></button>
+                  <button id="ais-zoom-level" class="btn btn-dark ais-zoom-level" type="button" data-i18n-attr="title:ais.zoom_100"></button>
+                  <button id="ais-zoom-out" class="btn btn-dark" type="button" data-i18n-attr="title:ais.zoom_out,aria-label:ais.zoom_out"><i class="bi bi-zoom-out" aria-hidden="true"></i></button>
+                  <button id="ais-view-lock" class="btn btn-dark" type="button" data-i18n-attr="title:ais.view_lock,aria-label:ais.view_lock" aria-pressed="false"><i class="bi bi-unlock" aria-hidden="true"></i></button>
+                  <button id="ais-view-reset" class="btn btn-dark" type="button" data-i18n-attr="title:ais.view_reset,aria-label:ais.view_reset"><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i></button>
+                </div>
               </div>
               <div class="card-footer ais-layers small">
                 <span class="text-body-secondary" data-i18n="ais.hint"></span>
@@ -206,6 +253,7 @@
                   <div class="row-actions">
                     <button id="ais-accept" class="btn btn-primary btn-sm" type="button"><i class="bi bi-check-lg" aria-hidden="true"></i> <span data-i18n="ais.accept"></span></button>
                     <button id="ais-reject" class="btn btn-outline-secondary btn-sm" type="button"><i class="bi bi-x-lg" aria-hidden="true"></i> <span data-i18n="ais.reject"></span></button>
+                    <button id="ais-replay" class="btn btn-outline-secondary btn-sm" type="button" hidden data-i18n-attr="title:ais.replay_help"><i class="bi bi-window-stack" aria-hidden="true"></i> <span data-i18n="ais.replay"></span></button>
                   </div>
                 </div>
               </div>
@@ -214,19 +262,114 @@
 
           <div class="card mt-3">
             <div class="card-body">
-              <div class="d-flex align-items-center gap-2 mb-2">
+              <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
                 <h2 class="h5 card-title mb-0 me-auto" data-i18n="ais.results_heading"></h2>
-                <button id="ais-export" class="btn btn-outline-primary btn-sm" type="button"><i class="bi bi-download" aria-hidden="true"></i> <span data-i18n="ais.export"></span></button>
+                <select id="ais-table-scope" class="form-select form-select-sm w-auto" data-i18n-attr="aria-label:ais.scope_label">
+                  <option value="batch" data-i18n="ais.scope_batch"></option>
+                  <option value="all" data-i18n="ais.scope_all"></option>
+                </select>
+                <div class="btn-group">
+                  <button id="ais-export" class="btn btn-outline-primary btn-sm dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false"><i class="bi bi-download" aria-hidden="true"></i> <span data-i18n="ais.export"></span></button>
+                  <ul class="dropdown-menu dropdown-menu-end">
+                    <li><button id="ais-export-csv" class="dropdown-item" type="button"><i class="bi bi-filetype-csv me-2" aria-hidden="true"></i><span data-i18n="ais.export_csv"></span></button></li>
+                    <li><button id="ais-export-zip" class="dropdown-item" type="button"><i class="bi bi-file-zip me-2" aria-hidden="true"></i><span data-i18n="ais.export_zip"></span></button></li>
+                  </ul>
+                </div>
                 <button id="ais-clear" class="btn btn-outline-danger btn-sm" type="button" data-i18n="ais.clear"></button>
               </div>
               <div class="table-responsive">
                 <table class="table table-sm align-middle mb-0 small" id="ais-table">
                   <thead><tr>
                     <th data-i18n="ais.col_image"></th><th>#</th><th data-i18n="ais.col_length"></th><th data-i18n="ais.col_start"></th>
-                    <th data-i18n="ais.col_end"></th><th data-i18n="ais.col_max"></th><th data-i18n="ais.col_threshold"></th><th data-i18n="ais.col_click"></th><th></th>
+                    <th data-i18n="ais.col_end"></th><th data-i18n="ais.col_max"></th><th data-i18n="ais.col_threshold"></th><th data-i18n="ais.col_click"></th>
+                    <th data-i18n="ais.col_source"></th><th data-i18n="ais.col_batch"></th><th></th>
                   </tr></thead>
                   <tbody></tbody>
                 </table>
+              </div>
+            </div>
+          </div>
+
+          <!-- Images: which of the opened batch to step through (static/js/ais_images.js).
+               Opens after a folder is opened; the selection applies on "Use". -->
+          <div class="modal fade" id="ais-images-modal" tabindex="-1" aria-labelledby="ais-images-title" aria-hidden="true">
+            <div class="modal-dialog modal-xl modal-fullscreen-lg-down modal-dialog-scrollable ais-images-dialog">
+              <div class="modal-content">
+                <div class="modal-header flex-wrap gap-2">
+                  <div class="me-auto ais-images-heading">
+                    <h2 class="modal-title h5 mb-0" id="ais-images-title" data-i18n="ais.images"></h2>
+                    <div id="ais-images-batch" class="small text-body-secondary text-truncate"></div>
+                  </div>
+                  <input id="ais-images-filter" class="form-control form-control-sm ais-images-filter" type="search" data-i18n-attr="placeholder:ais.filter,aria-label:ais.filter" />
+                  <div id="ais-images-dups" class="form-check form-switch mb-0 small" hidden>
+                    <input id="ais-images-hide-dups" class="form-check-input" type="checkbox" />
+                    <label class="form-check-label" for="ais-images-hide-dups"><span data-i18n="ais.hide_duplicates"></span> (<span id="ais-images-dups-count"></span>)</label>
+                  </div>
+                  <span id="ais-images-selected" class="small text-body-secondary"></span>
+                  <button id="ais-images-all" class="btn btn-outline-secondary btn-sm" type="button" data-i18n="ais.select_all"></button>
+                  <button id="ais-images-none" class="btn btn-outline-secondary btn-sm" type="button" data-i18n="ais.select_none"></button>
+                  <button type="button" class="btn-close" data-bs-dismiss="modal" data-i18n-attr="aria-label:nav.close"></button>
+                </div>
+                <div class="modal-body">
+                  <p class="small text-body-secondary mb-2" data-i18n="ais.list_hint"></p>
+                  <div id="ais-images-grid" class="ais-images-grid" role="listbox" aria-multiselectable="true" tabindex="0" data-i18n-attr="aria-label:ais.images"></div>
+                </div>
+                <div class="modal-footer">
+                  <span id="ais-images-progress" class="small text-body-secondary me-auto"></span>
+                  <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal" data-i18n="ais.cancel"></button>
+                  <button id="ais-images-use" type="button" class="btn btn-primary"></button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Batches: every opened folder, shared by all signed-in users (app/models/ais.py). -->
+          <div class="modal fade" id="ais-batches-modal" tabindex="-1" aria-labelledby="ais-batches-title" aria-hidden="true">
+            <div class="modal-dialog modal-xl modal-dialog-scrollable">
+              <div class="modal-content">
+                <div class="modal-header">
+                  <h2 class="modal-title h5" id="ais-batches-title" data-i18n="ais.batches"></h2>
+                  <button type="button" class="btn-close" data-bs-dismiss="modal" data-i18n-attr="aria-label:nav.close"></button>
+                </div>
+                <div class="modal-body">
+                  <p id="ais-batches-none" class="text-body-secondary small" data-i18n="ais.batches_none" hidden></p>
+                  <div class="table-responsive">
+                    <table class="table table-sm align-middle small mb-0">
+                      <thead><tr>
+                        <th data-i18n="ais.batch_col_name"></th><th data-i18n="ais.batch_col_done"></th><th data-i18n="ais.batch_col_dups"></th>
+                        <th data-i18n="ais.batch_col_by"></th><th data-i18n="ais.batch_col_when"></th><th></th>
+                      </tr></thead>
+                      <tbody id="ais-batches-list"></tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Open path: a folder on this machine, read by the server (app/analysis/local.py). -->
+          <div class="modal fade" id="ais-path-modal" tabindex="-1" aria-labelledby="ais-path-title" aria-hidden="true">
+            <div class="modal-dialog modal-lg modal-dialog-scrollable">
+              <div class="modal-content">
+                <div class="modal-header">
+                  <h2 class="modal-title h5" id="ais-path-title" data-i18n="ais.open_path"></h2>
+                  <button type="button" class="btn-close" data-bs-dismiss="modal" data-i18n-attr="aria-label:nav.close"></button>
+                </div>
+                <div class="modal-body">
+                  <form id="ais-path-form" class="input-group mb-2" autocomplete="off">
+                    <input id="ais-path-input" class="form-control font-monospace" type="text" spellcheck="false" data-i18n-attr="placeholder:ais.path_placeholder,aria-label:ais.open_path" />
+                    <button class="btn btn-outline-secondary" type="submit" data-i18n="ais.path_go"></button>
+                    <button id="ais-path-choose" class="btn btn-outline-secondary" type="button" hidden><i class="bi bi-folder2" aria-hidden="true"></i> <span data-i18n="ais.path_choose"></span></button>
+                  </form>
+                  <div id="ais-path-recent" class="d-flex flex-wrap gap-1 mb-2"></div>
+                  <p id="ais-path-error" class="alert alert-warning small py-2" hidden></p>
+                  <div id="ais-path-list" class="list-group list-group-flush ais-path-list"></div>
+                </div>
+                <div class="modal-footer">
+                  <span id="ais-path-summary" class="small text-body-secondary me-auto"></span>
+                  <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal" data-i18n="ais.cancel"></button>
+                  <button id="ais-path-open" type="button" class="btn btn-primary" disabled data-i18n="ais.path_open"></button>
+                </div>
               </div>
             </div>
           </div>
@@ -503,7 +646,11 @@
   <script src="/js/join.js"></script>
   <script src="/js/pin.js"></script>
   <script src="/js/invites.js"></script>
+  <script src="/js/tiff.js"></script>
+  <script src="/js/zip.js"></script>
   <script src="/js/ais.js"></script>
+  <script src="/js/ais_images.js"></script>
+  <script src="/js/ais_export.js"></script>
   <script src="/js/app.js"></script>
 </body>
 </html>

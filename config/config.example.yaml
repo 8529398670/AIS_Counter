@@ -120,6 +120,17 @@ server:
   # auth.api_keys; false removes /mcp.
   mcp: true
 
+  # The Original screen's "Open path": read TIFF folders straight off this
+  # machine's disk, show a file in Finder, copy its real path. Admins only,
+  # and only when the server listens on loopback outside the container --
+  # anything else would let a remote browser read the host's files.
+  local_folders: true
+  # The MATLAB that "Verify in MATLAB" launches, with the GUI, on the original
+  # original-code/ais_auto.m. Empty finds the newest
+  # /Applications/MATLAB_R*.app (macOS) or `matlab` on the PATH. Needs
+  # local_folders, and the same loopback-only rule applies.
+  matlab: ""
+
 auth:
   session_ttl_seconds: 1209600     # 14 days
   login_token_ttl_seconds: 1800    # 30 minutes

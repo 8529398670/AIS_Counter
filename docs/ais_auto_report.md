@@ -234,7 +234,7 @@ The new threshold is `0.01 × max(raw inside blob) / max(raw anywhere)`.
 re-thresholding, the second click picks the blob again and sets where the
 trace begins. If it lands a pixel or two from the first, the trace start can
 move. The web app reuses the first click, which is exactly "clicked the same
-pixel twice". The *Separate second click* switch restores the old behaviour.
+pixel twice" (*Second click: Auto*). *Second click: Manual* restores the old behaviour.
 
 **4.3 Clicking on background picks the nearest blob, ties resolved by memory
 order.** `bwdist` gives the nearest foreground pixel. When two pixels are

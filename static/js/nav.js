@@ -43,7 +43,8 @@ const Nav = {
   // A hash naming a screen this user does not have (an admin link opened by a
   // non-admin, a typo) shows the account screen rather than nothing.
   current() {
-    const name = window.location.hash.replace( /^#/ , "" );
+    // Only the first segment names the screen: #ais/3-folder/image is #ais.
+    const name = window.location.hash.replace( /^#/ , "" ).split( "/" )[ 0 ];
     return this.available( name ) ? name : this.fallback;
   },
 

@@ -91,11 +91,31 @@ def build_routes(static_server: StaticServer, cfg: Config) -> list[BaseRoute]:
         sessions_only("/api/account/login-link", account.create_my_login_link, ["POST"]),
         signed_in("/api/logout", account.logout, ["POST"]),
         signed_in("/api/team", team.list_team),
-        # AIS analysis: upload a TIFF (bigger body limit than the rest of the
-        # API), preview it, and trace from a click -- see app/routes/ais.py.
+        # AIS analysis (app/routes/ais.py): files, tracing, and the batches and
+        # accepted AIS every signed-in user shares.
         signed_in("/api/ais/files", ais.upload, ["POST"], max_body_size=ais.UPLOAD_LIMIT_BYTES),
         signed_in("/api/ais/files/{sha}/view.png", ais.view),
+        signed_in("/api/ais/files/{sha}/thumb.png", ais.thumb),
         signed_in("/api/ais/trace", ais.trace, ["POST"]),
+        signed_in("/api/ais/batches", ais.batch_list),
+        signed_in("/api/ais/batches/upload", ais.batch_upload, ["POST"]),
+        signed_in("/api/ais/batches/{batch_id}", ais.batch_get),
+        signed_in("/api/ais/batches/{batch_id}/done", ais.batch_done, ["POST"]),
+        signed_in("/api/ais/batches/{batch_id}/delete", ais.batch_delete, ["POST"]),
+        signed_in("/api/ais/results", ais.result_list),
+        signed_in("/api/ais/results", ais.result_add, ["POST"]),
+        signed_in("/api/ais/results/import", ais.result_import, ["POST"], max_body_size=ais.UPLOAD_LIMIT_BYTES),
+        signed_in("/api/ais/results/{result_id}/delete", ais.result_delete, ["POST"]),
+        # Folders on this machine (Open path) and MATLAB: admins with a
+        # session, and only when cfg.local_folders_enabled -- each handler
+        # checks that too.
+        signed_in("/api/ais/local/status", ais.local_status),
+        admin_sessions("/api/ais/batches/path", ais.batch_path, ["POST"]),
+        admin_sessions("/api/ais/local/list", ais.local_list, ["POST"]),
+        admin_sessions("/api/ais/local/reveal", ais.local_reveal, ["POST"]),
+        admin_sessions("/api/ais/local/open", ais.local_open, ["POST"]),
+        admin_sessions("/api/ais/local/choose", ais.local_choose, ["POST"]),
+        admin_sessions("/api/ais/local/matlab", ais.local_matlab, ["POST"]),
         my_keys("/api/keys", api_keys.list_my_keys),
         my_keys("/api/keys", api_keys.create_my_key, ["POST"]),
         my_keys("/api/keys/{key_id}/revoke", api_keys.revoke_my_key, ["POST"]),

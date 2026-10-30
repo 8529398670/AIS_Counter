@@ -124,7 +124,7 @@ const App = {
     // that knows the API keys screen exists.
     Pin.init( me );
     await Keys.init( me );
-    Ais.init();
+    Ais.init( me );
 
     if ( me.role === "admin" ) {
       Dom.show( Dom.get( "admin-panel" ) , true );

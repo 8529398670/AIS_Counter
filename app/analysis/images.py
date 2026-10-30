@@ -61,3 +61,13 @@ def preview_png(arr: np.ndarray) -> bytes:
 
     return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 0, 0, 0, 0))
             + chunk(b"IDAT", zlib.compress(raw, 6)) + chunk(b"IEND", b""))
+
+
+THUMB_SIDE = 256
+
+
+def thumbnail_png(arr: np.ndarray, side: int = THUMB_SIDE) -> bytes:
+    """A small min..max preview: every k-th pixel, k chosen so the long side
+    is about `side`."""
+    step = max(1, int(np.ceil(max(arr.shape) / side)))
+    return preview_png(arr[::step, ::step])

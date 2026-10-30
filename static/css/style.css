@@ -184,12 +184,14 @@ th { color: var(--bs-secondary-color); font-size: 0.8rem; text-transform: upperc
 }
 .theme-swatch-dark { --swatch-bg: #101215; --swatch-accent: #6ea0ff; }
 
-/* AIS tracing (static/js/ais.js). The image stage stays dark in every theme:
+/* The Original screen (static/js/ais*.js). The image stage stays dark in every theme:
    it is a fluorescence image, and the overlay colours are picked against black. */
 .ais-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem; }
 .ais-picker { flex: 1 1 20rem; min-width: 0; }
 .ais-threshold { display: flex; align-items: center; gap: 0.4rem; }
 .ais-threshold input { width: 6rem; }
+.ais-threshold label { white-space: nowrap; }
+.ais-threshold select { width: auto; }
 .ais-grid { display: grid; grid-template-columns: minmax(0, 1fr) 22rem; gap: 1rem; align-items: start; }
 @media (max-width: 1199.98px) { .ais-grid { grid-template-columns: minmax(0, 1fr); } }
 .ais-stage-card { overflow: hidden; }
@@ -213,5 +215,46 @@ th { color: var(--bs-secondary-color); font-size: 0.8rem; text-transform: upperc
 .ais-profile .ais-marker { stroke: #2f6fe0; stroke-width: 1.2; }
 .ais-profile .ais-curve { fill: none; stroke: #2a9d4b; stroke-width: 1.5; }
 .ais-cell-name { max-width: 22rem; }
+.ais-batch-name { max-width: 12rem; }
+.ais-stage canvas.ais-locked { cursor: crosshair; }
+
+/* The current image's bar above the stage. */
+.ais-current { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 1rem; }
+.ais-current-name { flex: 1 1 16rem; min-width: 0; }
+.ais-current-file { overflow-wrap: anywhere; line-height: 1.3; }
+.ais-progress { display: flex; align-items: center; gap: 0.5rem; }
+.ais-progress .progress { width: 8rem; height: 0.4rem; }
+
+/* Pan and zoom tools, floating on the (always dark) stage. */
+.ais-viewtools { position: absolute; top: 0.75rem; right: 0.75rem; opacity: 0.85; }
+.ais-viewtools:hover { opacity: 1; }
+.ais-zoom-level { font-size: 0.7rem; font-variant-numeric: tabular-nums; min-width: 3.2rem; padding-left: 0.25rem; padding-right: 0.25rem; }
+#ais-view-lock.active { background: var(--bs-warning); color: #000; border-color: var(--bs-warning); }
+
+/* The Images dialog: most of the screen, a grid of previews. */
+@media (min-width: 992px) {
+  .ais-images-dialog { max-width: 92vw; }
+  .ais-images-dialog .modal-content { height: 88vh; }
+}
+.ais-images-heading { min-width: 0; max-width: 40rem; }
+.ais-images-filter { width: 14rem; }
+.ais-images-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(13rem, 1fr)); gap: 0.75rem; outline: none; }
+.ais-image-card {
+  position: relative; border: 2px solid var(--bs-border-color); border-radius: 0.5rem; overflow: hidden;
+  cursor: pointer; user-select: none; background: var(--bs-body-bg); opacity: 0.55;
+}
+.ais-image-card.ais-selected { border-color: var(--bs-primary); opacity: 1; }
+.ais-image-card.ais-current { box-shadow: 0 0 0 3px var(--bs-warning); }
+.ais-thumb { aspect-ratio: 4 / 3; background: #000; display: flex; align-items: center; justify-content: center; font-size: 2rem; }
+.ais-thumb img, .ais-thumb canvas { width: 100%; height: 100%; object-fit: contain; display: block; }
+.ais-card-check { position: absolute; top: 0.5rem; left: 0.5rem; width: 1.25rem; height: 1.25rem; margin: 0; }
+.ais-card-body { padding: 0.4rem 0.6rem 0.5rem; font-size: 0.8rem; }
+.ais-card-name { overflow-wrap: anywhere; line-height: 1.25; }
+
+/* Open path. */
+.ais-path-list { max-height: 50vh; overflow-y: auto; }
+.ais-recent { max-width: 14rem; }
+.ais-batch-path { max-width: 28rem; }
+.ais-card-matlab::after { display: none; }
 /* The tracing screen needs the full width the account screens do not. */
 .app-main:has(.ais-view.view-active) { max-width: none; }

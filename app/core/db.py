@@ -42,8 +42,13 @@ BUCKET_LOGIN_TOKENS = "login_tokens"
 BUCKET_API_KEYS = "api_keys"
 BUCKET_INVITE_LINKS = "invite_links"
 BUCKET_META = "meta"
+# The Original screen's batches (one opened folder each) and accepted AIS,
+# shared by every signed-in user. See app/models/ais.py.
+BUCKET_AIS_BATCHES = "ais_batches"
+BUCKET_AIS_RESULTS = "ais_results"
 
-BUCKETS = (BUCKET_USERS, BUCKET_SESSIONS, BUCKET_LOGIN_TOKENS, BUCKET_API_KEYS, BUCKET_INVITE_LINKS, BUCKET_META)
+BUCKETS = (BUCKET_USERS, BUCKET_SESSIONS, BUCKET_LOGIN_TOKENS, BUCKET_API_KEYS, BUCKET_INVITE_LINKS, BUCKET_META,
+           BUCKET_AIS_BATCHES, BUCKET_AIS_RESULTS)
 
 # How long a writer waits for another writer before giving up. Without it a
 # second process (a `manage` command during a busy moment) fails at once with

@@ -21,6 +21,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.middleware import Middleware
 
 from app.analysis.service import Library
+from app.models import ais as ais_batches
 from app.core import assets, bootstrap, config, db, language
 from app.core.middleware import EXCEPTION_HANDLERS, RateLimit, SecurityHeaders
 from app.core.security import LoadActor
@@ -86,7 +87,10 @@ def build_app(
     app.state.config = cfg
     app.state.store = store
     app.state.language = lang
-    app.state.ais = Library(cfg.storage_dir)
+    # Files an Open-path batch recorded can be fetched for anyone viewing it,
+    # but only while local folders are allowed at all.
+    resolver = (lambda sha: ais_batches.local_path_for(store, sha)) if cfg.local_folders_enabled else None
+    app.state.ais = Library(cfg.storage_dir, resolver)
     # Reported to MCP clients as serverInfo.version.
     app.state.version = version
     return app

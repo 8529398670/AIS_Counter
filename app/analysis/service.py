@@ -1,11 +1,15 @@
 """What the routes call: store uploaded TIFFs, and turn one click into the
 original's trace and measures as JSON.
 
-Files are content-addressed per user under <storage>/ais/<user id>/<sha256>.tif,
-so re-uploading the same image is free and one user cannot open another's by
-guessing a hash. The click-independent part of the pipeline (mat2gray and the
-Gaussian smoothing) is cached in memory for the last few images, which makes
-every click after the first on an image take a fraction of a second.
+Files are content-addressed under <storage>/ais/files/<sha256>.tif, one store
+shared by every user: batches are shared (app/models/ais.py), so anyone who
+can open a batch can see its images, and a sha is only ever learnt from a
+batch. Re-uploading the same image is free. A file that is not there yet is
+looked for in the per-user folders older versions used, then at the path an
+Open-path batch recorded for it (`resolver`), and copied in. The
+click-independent part of the pipeline (mat2gray and the Gaussian smoothing)
+is cached in memory for the last few images, which makes every click after
+the first on an image take a fraction of a second.
 """
 from __future__ import annotations
 
@@ -14,79 +18,114 @@ import re
 import threading
 from collections import OrderedDict
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 
 from app.analysis import ais_auto as aa
 from app.analysis import mlcompat as ml
-from app.analysis.images import ImageError, preview_png, read_tiff
+from app.analysis.images import ImageError, preview_png, read_tiff, thumbnail_png
 
 SHA_RE = re.compile(r"^[0-9a-f]{64}$")
 CACHE_SIZE = 6
+SINGLE_NOTE = "single image: traced and profiled from the same file (the original profiles the raw <cell>.tif)"
 
 
 class Library:
-    def __init__(self, storage_dir: Path) -> None:
+    def __init__(self, storage_dir: Path, resolver: Callable[[str], str | None] | None = None) -> None:
         self.root = storage_dir / "ais"
+        self.files = self.root / "files"
+        # sha -> a path on this machine holding those bytes (Open-path batches).
+        self.resolver = resolver
         self._lock = threading.Lock()
-        self._prepared: OrderedDict[tuple[int, str], aa.PreparedImage] = OrderedDict()
-        self._arrays: OrderedDict[tuple[int, str], np.ndarray] = OrderedDict()
+        self._prepared: OrderedDict[str, aa.PreparedImage] = OrderedDict()
+        self._arrays: OrderedDict[str, np.ndarray] = OrderedDict()
 
-    def _path(self, user_id: int, sha: str) -> Path:
-        if not SHA_RE.match(sha):
+    def _path(self, sha: str) -> Path:
+        if not isinstance(sha, str) or not SHA_RE.match(sha):
             raise ImageError("unknown image")
-        return self.root / str(int(user_id)) / f"{sha}.tif"
+        return self.files / f"{sha}.tif"
 
-    def add(self, user_id: int, data: bytes) -> dict[str, Any]:
+    def _store(self, path: Path, data: bytes) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".part")
+        tmp.write_bytes(data)
+        tmp.replace(path)
+
+    def add(self, data: bytes) -> dict[str, Any]:
         arr = read_tiff(data)
         sha = hashlib.sha256(data).hexdigest()
-        path = self._path(user_id, sha)
+        path = self._path(sha)
         if not path.exists():
-            path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = path.with_suffix(".part")
-            tmp.write_bytes(data)
-            tmp.replace(path)
+            self._store(path, data)
         return {"sha256": sha, "width": int(arr.shape[1]), "height": int(arr.shape[0]), "dtype": str(arr.dtype)}
 
-    def array(self, user_id: int, sha: str) -> np.ndarray:
-        key = (user_id, sha)
+    def has(self, sha: str) -> bool:
+        return self._path(sha).exists()
+
+    def file_path(self, sha: str) -> Path:
+        """The stored TIFF, fetched in if it is known elsewhere (see the
+        module docstring); ImageError when it is nowhere."""
+        path = self._path(sha)
+        if path.exists():
+            return path
+        for legacy in self.root.glob(f"[0-9]*/{sha}.tif"):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            legacy.replace(path)
+            return path
+        source = self.resolver(sha) if self.resolver else None
+        if source:
+            try:
+                data = Path(source).read_bytes()
+            except OSError:
+                data = b""
+            # Only if the file there still has the same bytes.
+            if data and hashlib.sha256(data).hexdigest() == sha:
+                self._store(path, data)
+                return path
+        raise ImageError("image not uploaded yet")
+
+    def array(self, sha: str) -> np.ndarray:
         with self._lock:
-            if key in self._arrays:
-                self._arrays.move_to_end(key)
-                return self._arrays[key]
-        path = self._path(user_id, sha)
-        if not path.exists():
-            raise ImageError("unknown image")
-        arr = read_tiff(path.read_bytes())
+            if sha in self._arrays:
+                self._arrays.move_to_end(sha)
+                return self._arrays[sha]
+        arr = read_tiff(self.file_path(sha).read_bytes())
         with self._lock:
-            self._arrays[key] = arr
+            self._arrays[sha] = arr
             while len(self._arrays) > CACHE_SIZE * 2:
                 self._arrays.popitem(last=False)
         return arr
 
-    def prepared(self, user_id: int, sha: str) -> aa.PreparedImage:
-        key = (user_id, sha)
+    def prepared(self, sha: str) -> aa.PreparedImage:
         with self._lock:
-            if key in self._prepared:
-                self._prepared.move_to_end(key)
-                return self._prepared[key]
-        prep = aa.PreparedImage.from_array(self.array(user_id, sha))
+            if sha in self._prepared:
+                self._prepared.move_to_end(sha)
+                return self._prepared[sha]
+        prep = aa.PreparedImage.from_array(self.array(sha))
         with self._lock:
-            self._prepared[key] = prep
+            self._prepared[sha] = prep
             while len(self._prepared) > CACHE_SIZE:
                 self._prepared.popitem(last=False)
         return prep
 
-    def preview(self, user_id: int, sha: str) -> bytes:
-        return preview_png(self.array(user_id, sha))
+    def preview(self, sha: str) -> bytes:
+        return preview_png(self.array(sha))
 
-    def trace(self, user_id: int, processed: str, raw: str | None,
+    def thumbnail(self, sha: str) -> bytes:
+        return thumbnail_png(self.array(sha))
+
+    def trace(self, processed: str, raw: str | None,
               click: tuple[float, float], click2: tuple[float, float] | None,
               threshold: float) -> dict[str, Any]:
-        prep = self.prepared(user_id, processed)
-        raw_arr = self.array(user_id, raw) if raw else None
-        if raw_arr is not None and raw_arr.shape != prep.pic.shape:
+        prep = self.prepared(processed)
+        if not raw:
+            # Only one file for this cell: profile the image that was traced.
+            out = run_click(prep, prep.pic, click, click2, threshold)
+            out.setdefault("notes", []).insert(0, SINGLE_NOTE)
+            return out
+        raw_arr = self.array(raw)
+        if raw_arr.shape[:2] != prep.pic.shape:
             raise ImageError("raw and processed images differ in size")
         return run_click(prep, raw_arr, click, click2, threshold)
 

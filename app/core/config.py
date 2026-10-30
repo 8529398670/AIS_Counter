@@ -73,6 +73,9 @@ class ConfigError(Exception):
 # it starts anything.
 
 
+LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
+
+
 @dataclass
 class AppSection:
     name: str
@@ -97,6 +100,8 @@ class ServerSection:
     rate_limit_max: int
     rate_limit_window_seconds: int
     mcp: bool
+    local_folders: bool
+    matlab: str
 
 
 @dataclass
@@ -232,6 +237,13 @@ class Config:
     # Whether POST /mcp exists. It answers only API keys, so with
     # api_keys_enabled off it is not registered either.
     mcp_enabled: bool = True
+
+    # Whether the AIS screen may read folders off this machine's disk
+    # (app/analysis/local.py). server.local_folders, and only on a loopback
+    # listen address outside the container.
+    local_folders_enabled: bool = False
+    # server.matlab as written; empty means find it (app/analysis/local.py).
+    matlab: str = ""
 
     @property
     def listen_address(self) -> str:
@@ -700,7 +712,15 @@ def load() -> Config:
         trusted_proxies=tuple(entry.strip() for entry in file.server.trusted_proxies),
         proxy_header=file.server.proxy_header,
         mcp_enabled=file.server.mcp,
+        local_folders_enabled=local_folders_allowed(file),
+        matlab=file.server.matlab.strip(),
     )
+
+
+def local_folders_allowed(file: File) -> bool:
+    """server.local_folders, and only where nobody but this machine can ask:
+    a loopback listen address, outside the container."""
+    return file.server.local_folders and not in_container() and file.server.host in LOOPBACK_HOSTS
 
 
 @dataclass(frozen=True)
