@@ -150,21 +150,21 @@
         <section class="view ais-view" data-view="ais" id="ais-panel">
           <div class="card mb-3">
             <div class="card-body ais-toolbar">
-              <label class="btn btn-primary mb-0">
+              <label class="btn btn-primary mb-0 ais-focus-hide">
                 <i class="bi bi-folder2-open" aria-hidden="true"></i> <span data-i18n="ais.open_folder"></span>
                 <input id="ais-folder" type="file" webkitdirectory multiple hidden />
               </label>
-              <label class="btn btn-outline-primary mb-0">
+              <label class="btn btn-outline-primary mb-0 ais-focus-hide">
                 <i class="bi bi-images" aria-hidden="true"></i> <span data-i18n="ais.open_files"></span>
                 <input id="ais-files" type="file" accept=".tif,.tiff" multiple hidden />
               </label>
-              <button id="ais-open-path" class="btn btn-outline-primary" type="button" hidden>
+              <button id="ais-open-path" class="btn btn-outline-primary ais-focus-hide" type="button" hidden>
                 <i class="bi bi-hdd" aria-hidden="true"></i> <span data-i18n="ais.open_path"></span>
               </button>
-              <button id="ais-batches-open" class="btn btn-outline-secondary" type="button">
+              <button id="ais-batches-open" class="btn btn-outline-secondary ais-focus-hide" type="button">
                 <i class="bi bi-collection" aria-hidden="true"></i> <span data-i18n="ais.batches"></span>
               </button>
-              <button id="ais-images-open" class="btn btn-outline-secondary" type="button" disabled>
+              <button id="ais-images-open" class="btn btn-outline-secondary ais-focus-hide" type="button" disabled>
                 <i class="bi bi-grid-3x3-gap" aria-hidden="true"></i> <span data-i18n="ais.images"></span> <span id="ais-images-count" class="badge text-bg-secondary"></span>
               </button>
               <div class="input-group ais-picker">
@@ -207,7 +207,7 @@
               <div class="ais-stage" id="ais-stage">
                 <canvas id="ais-canvas"></canvas>
                 <p id="ais-empty" class="ais-empty" data-i18n="ais.empty"></p>
-                <p id="ais-status" class="ais-status small" hidden></p>
+                <p id="ais-status" class="ais-status small" hidden><span id="ais-status-text"></span><button id="ais-status-close" class="btn-close btn-close-white" type="button" data-i18n-attr="title:ais.note_close,aria-label:ais.note_close" hidden></button></p>
                 <!-- Pan and zoom: drag (or middle-drag) pans, the wheel zooms; lock freezes the view across images. -->
                 <div class="ais-viewtools btn-group-vertical btn-group-sm" role="group">
                   <button id="ais-zoom-in" class="btn btn-dark" type="button" data-i18n-attr="title:ais.zoom_in,aria-label:ais.zoom_in"><i class="bi bi-zoom-in" aria-hidden="true"></i></button>
@@ -215,10 +215,12 @@
                   <button id="ais-zoom-out" class="btn btn-dark" type="button" data-i18n-attr="title:ais.zoom_out,aria-label:ais.zoom_out"><i class="bi bi-zoom-out" aria-hidden="true"></i></button>
                   <button id="ais-view-lock" class="btn btn-dark" type="button" data-i18n-attr="title:ais.view_lock,aria-label:ais.view_lock" aria-pressed="false"><i class="bi bi-unlock" aria-hidden="true"></i></button>
                   <button id="ais-view-reset" class="btn btn-dark" type="button" data-i18n-attr="title:ais.view_reset,aria-label:ais.view_reset"><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i></button>
+                  <button id="ais-focus" class="btn btn-dark" type="button" data-i18n-attr="title:ais.focus,aria-label:ais.focus" aria-pressed="false"><i class="bi bi-arrows-fullscreen" aria-hidden="true"></i></button>
                 </div>
               </div>
               <div class="card-footer ais-layers small">
-                <span class="text-body-secondary" data-i18n="ais.hint"></span>
+                <span id="ais-hint" class="ais-hint text-body-secondary"><span data-i18n="ais.hint"></span><button id="ais-hint-close" class="btn-close" type="button" data-i18n-attr="title:ais.hint_close,aria-label:ais.hint_close"></button></span>
+                <button id="ais-hint-show" class="btn btn-link btn-sm p-0 text-body-secondary" type="button" data-i18n-attr="title:ais.hint_show,aria-label:ais.hint_show" hidden><i class="bi bi-question-circle" aria-hidden="true"></i></button>
                 <span class="ms-auto d-flex flex-wrap gap-3">
                   <label class="form-check-label"><input class="form-check-input me-1" type="checkbox" data-layer="component" checked /><span data-i18n="ais.layer_component"></span></label>
                   <label class="form-check-label"><input class="form-check-input me-1" type="checkbox" data-layer="skeleton" checked /><span data-i18n="ais.layer_skeleton"></span></label>
@@ -250,7 +252,7 @@
             </div>
           </div>
 
-          <div class="card mt-3">
+          <div class="card mt-3 ais-focus-hide">
             <div class="card-body">
               <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
                 <h2 class="h5 card-title mb-0 me-auto" data-i18n="ais.results_heading"></h2>

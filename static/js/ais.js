@@ -21,6 +21,10 @@ const Ais = {
   legacyResultsKey: "ais-results",
   includeKey: "ais-include-",
   viewKey: "ais-view",
+  lastKey: "ais-last",   // the last batch and image, for a bare #ais or /
+  focusKey: "ais-focus",
+  hintKey: "ais-hint-hidden",
+  noteKey: "ais-note-hidden",   // the batch whose single-image note was closed
   // An image: { key, cell, dir, dup_of?, included, files: { processed?, raw? } }
   // with a file { name, rel, sha, size, stored, path?, file? } -- `file` only
   // in the browser that picked it, `path` only for Open path.
@@ -33,6 +37,7 @@ const Ais = {
   source: null,          // its decoded <img>
   view: { scale: 1 , ox: 0 , oy: 0 },
   locked: false,         // pan and zoom frozen, the same view on every image
+  focus: false,          // focus mode: only the image, navigation and result
   result: null,          // the last trace answer from the server
   lastBody: null,        // the clicks that produced it, for nudging
   queuedBody: null,      // a nudge that arrived while a trace was running
@@ -74,12 +79,27 @@ const Ais = {
     Dom.get( "ais-zoom-level" ).addEventListener( "click" , () => this.zoomTo( 1 ) );
     Dom.get( "ais-view-reset" ).addEventListener( "click" , () => this.resetView() );
     Dom.get( "ais-view-lock" ).addEventListener( "click" , () => this.setLocked( !this.locked ) );
+    Dom.get( "ais-focus" ).addEventListener( "click" , () => this.setFocus( !this.focus ) );
+    Dom.get( "ais-hint-close" ).addEventListener( "click" , () => this.setHint( false ) );
+    Dom.get( "ais-hint-show" ).addEventListener( "click" , () => this.setHint( true ) );
+    Dom.get( "ais-status-close" ).addEventListener( "click" , () => this.hideNote() );
+    // Esc out of the browser's full screen leaves focus mode too.
+    document.addEventListener( "fullscreenchange" , () => {
+      if ( !document.fullscreenElement && this.focus ) this.setFocus( false );
+    } );
 
     this.bindCanvas();
     document.addEventListener( "keydown" , ( e ) => this.onKey( e ) );
     // The stage has no size while its view is hidden, so size the canvas
     // whenever the stage itself changes size, including when it first shows.
     new ResizeObserver( () => this.resize() ).observe( Dom.get( "ais-stage" ) );
+    // In focus mode the stage runs to the bottom of the window, so it grows
+    // back whatever the toolbar, file header or footer give up (closing the
+    // instructions, a shorter file name, a narrower window).
+    const around = new ResizeObserver( () => this.fitStage() );
+    [ Dom.get( "ais-current" ) , document.querySelector( ".ais-layers" ) , document.querySelector( ".ais-toolbar" ) ]
+      .forEach( ( element ) => around.observe( element ) );
+    window.addEventListener( "resize" , () => this.fitStage() );
     window.addEventListener( "hashchange" , () => this.followUrl() );
     window.addEventListener( "popstate" , () => this.followUrl() );
     AisImages.init();
@@ -87,6 +107,8 @@ const Ais = {
     this.renderPicker();
     this.renderTable();
     this.renderViewTools();
+    this.loadFocus();
+    this.loadHint();
     this.resize();
     this.loadLocal();
     this.importLegacy().finally( () => this.followUrl() );
@@ -147,15 +169,37 @@ const Ais = {
 
   setUrl( push ) {
     const hash = this.urlFor( this.batch , this.images[ this.index ] );
+    if ( this.batch ) {
+      try {
+        window.localStorage.setItem( this.lastKey , hash );
+      } catch ( error ) { /* storage blocked: a reload keeps only the URL */ }
+    }
     if ( window.location.hash === hash ) return;
     if ( push ) window.history.pushState( null , "" , hash );
     else window.history.replaceState( null , "" , hash );
   },
 
   // A pasted link, back / forward, or the first load: open what the URL names.
+  // A bare #ais (or /) goes back to the open batch, or the last one seen.
   async followUrl() {
-    const want = this.parseUrl();
-    if ( !want ) return;
+    if ( Nav.current() !== "ais" ) {
+      if ( this.focus ) this.setFocus( false );
+      return;
+    }
+    let want = this.parseUrl();
+    let remembered = false;
+    if ( !want ) {
+      if ( this.batch ) { this.setUrl( false ); return; }
+      let last = null;
+      try {
+        last = window.localStorage.getItem( this.lastKey );
+      } catch ( error ) { /* storage blocked */ }
+      if ( !last ) return;
+      window.history.replaceState( null , "" , last );
+      want = this.parseUrl();
+      if ( !want ) return;
+      remembered = true;
+    }
     if ( this.batch && this.batch.id === want.id ) {
       const i = this.images.findIndex( ( entry ) => entry.key === want.key );
       if ( i >= 0 && i !== this.index ) {
@@ -168,8 +212,17 @@ const Ais = {
       const batch = await Api.request( "/api/ais/batches/" + want.id );
       await this.loadBatch( batch , null , { key: want.key } );
     } catch ( error ) {
-      App.showError( error.status === 404 ? I18n.get( "ais.no_batch" ) : error.message );
+      // A remembered batch that has since been deleted is just forgotten.
+      if ( remembered && error.status === 404 ) this.forgetLast();
+      else App.showError( error.status === 404 ? I18n.get( "ais.no_batch" ) : error.message );
     }
+  },
+
+  forgetLast() {
+    try {
+      window.localStorage.removeItem( this.lastKey );
+    } catch ( error ) { /* storage blocked */ }
+    window.history.replaceState( null , "" , "#ais" );
   },
 
   // --- opening a batch -----------------------------------------------------
@@ -225,6 +278,12 @@ const Ais = {
   async loadBatch( batch , byRel , options ) {
     const opts = options || {};
     this.batch = batch;
+    // A newly opened set of images shows the single-image note again.
+    if ( opts.fresh ) {
+      try {
+        window.localStorage.removeItem( this.noteKey );
+      } catch ( error ) { /* storage blocked */ }
+    }
     const excluded = this.savedExclusions( batch.id );
     this.images = batch.images.map( ( image ) => {
       const files = {};
@@ -271,7 +330,7 @@ const Ais = {
     this.reject();
     Dom.show( Dom.get( "ais-empty" ) , true );
     Dom.text( Dom.get( "ais-upload-status" ) , "" );
-    window.history.replaceState( null , "" , "#ais" );
+    this.forgetLast();
     this.renderPicker();
     this.renderTable();
     this.draw();
@@ -448,15 +507,17 @@ const Ais = {
       this.buildBitmap();
       if ( !this.locked ) this.fit();
       Dom.show( Dom.get( "ais-empty" ) , false );
-      this.status( this.imageNote( entry ) );
+      this.status( this.imageNote( entry ) , true );
       this.draw();
     };
     img.onerror = () => { if ( this.index === index ) this.status( I18n.get( "ais.not_uploaded" ) ); };
     img.src = "/api/ais/files/" + this.sha( entry ) + "/view.png";
   },
 
+  // Why a lone TIFF is handled the way it is -- until closed for this batch.
   imageNote( entry ) {
     const kind = this.kind( entry );
+    if ( kind !== "pair" && this.noteHidden() ) return "";
     return kind === "pair" ? "" : I18n.get( kind === "raw only" ? "ais.raw_only" : "ais.no_raw" );
   },
 
@@ -742,6 +803,79 @@ const Ais = {
     } catch ( error ) { /* storage blocked: the lock lasts this session */ }
   },
 
+  // Focus mode hides the navbar, sidebar, open buttons and results table, and
+  // asks the browser for full screen. The layout survives a reload; full
+  // screen itself needs a click, so it does not.
+  setFocus( on ) {
+    this.focus = on;
+    try {
+      if ( on ) window.localStorage.setItem( this.focusKey , "1" );
+      else window.localStorage.removeItem( this.focusKey );
+    } catch ( error ) { /* storage blocked: it just is not remembered */ }
+    if ( on && !document.fullscreenElement && document.documentElement.requestFullscreen ) {
+      document.documentElement.requestFullscreen().catch( () => {} );
+    } else if ( !on && document.fullscreenElement ) {
+      document.exitFullscreen().catch( () => {} );
+    }
+    this.renderFocus();
+  },
+
+  loadFocus() {
+    try {
+      this.focus = window.localStorage.getItem( this.focusKey ) === "1";
+    } catch ( error ) {
+      this.focus = false;
+    }
+    this.renderFocus();
+  },
+
+  renderFocus() {
+    document.documentElement.classList.toggle( "ais-focus" , this.focus );
+    this.fitStage();
+    const button = Dom.get( "ais-focus" );
+    button.setAttribute( "aria-pressed" , String( this.focus ) );
+    button.classList.toggle( "active" , this.focus );
+    button.querySelector( "i" ).className = "bi " + ( this.focus ? "bi-fullscreen-exit" : "bi-arrows-fullscreen" );
+    button.title = I18n.get( this.focus ? "ais.focus_exit" : "ais.focus" );
+  },
+
+  // The keyboard help under the image can be closed; a ? brings it back.
+  setHint( shown ) {
+    try {
+      if ( shown ) window.localStorage.removeItem( this.hintKey );
+      else window.localStorage.setItem( this.hintKey , "1" );
+    } catch ( error ) { /* storage blocked: it just is not remembered */ }
+    this.renderHint( shown );
+  },
+
+  loadHint() {
+    let hidden = false;
+    try {
+      hidden = window.localStorage.getItem( this.hintKey ) === "1";
+    } catch ( error ) { /* storage blocked */ }
+    this.renderHint( !hidden );
+  },
+
+  renderHint( shown ) {
+    Dom.show( Dom.get( "ais-hint" ) , shown );
+    Dom.show( Dom.get( "ais-hint-show" ) , !shown );
+    this.fitStage();
+  },
+
+  // Focus mode: the stage takes the window's height below the toolbar and
+  // header, less the footer under it. Otherwise the stylesheet's height.
+  fitStage() {
+    const stage = Dom.get( "ais-stage" );
+    if ( !this.focus || !stage.offsetParent ) {
+      stage.style.height = "";
+      return;
+    }
+    const top = stage.getBoundingClientRect().top + window.scrollY;
+    const footer = document.querySelector( ".ais-layers" ).offsetHeight;
+    const margin = 8;   // .ais-focus .app-main's bottom padding
+    stage.style.height = Math.max( 240 , window.innerHeight - top - footer - margin ) + "px";
+  },
+
   renderViewTools() {
     const lock = Dom.get( "ais-view-lock" );
     lock.setAttribute( "aria-pressed" , String( this.locked ) );
@@ -826,6 +960,7 @@ const Ais = {
     else if ( key === "0" ) this.resetView();
     else if ( key === "1" ) this.zoomTo( 1 );
     else if ( key === "l" || key === "L" ) this.setLocked( !this.locked );
+    else if ( key === "f" || key === "F" ) this.setFocus( !this.focus );
   },
 
   // --- tracing -------------------------------------------------------------
@@ -882,7 +1017,7 @@ const Ais = {
       }
       this.firstClick = null;
       this.result = Object.assign( result , { image: entry.key , source: this.kind( entry ) } );
-      this.status( this.imageNote( entry ) );
+      this.status( this.imageNote( entry ) , true );
       this.renderResult();
       this.draw();
     } catch ( error ) {
@@ -896,10 +1031,29 @@ const Ais = {
     }
   },
 
-  status( text ) {
+  // note: the text is an image note, which gets a close button.
+  status( text , note ) {
     const box = Dom.get( "ais-status" );
-    Dom.text( box , text );
+    Dom.text( Dom.get( "ais-status-text" ) , text );
+    Dom.show( Dom.get( "ais-status-close" ) , Boolean( note && text ) );
     Dom.show( box , Boolean( text ) );
+  },
+
+  noteHidden() {
+    try {
+      return Boolean( this.batch ) && window.localStorage.getItem( this.noteKey ) === String( this.batch.id );
+    } catch ( error ) {
+      return false;
+    }
+  },
+
+  hideNote() {
+    if ( this.batch ) {
+      try {
+        window.localStorage.setItem( this.noteKey , String( this.batch.id ) );
+      } catch ( error ) { /* storage blocked: it comes back on the next image */ }
+    }
+    this.status( "" );
   },
 
   // num2str(x, 6) style: six significant digits, no trailing zeros.

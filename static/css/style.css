@@ -203,6 +203,10 @@ th { color: var(--bs-secondary-color); font-size: 0.8rem; text-transform: upperc
 .ais-status { top: 0.75rem; background: rgba(0, 0, 0, 0.6); padding: 0.35rem 0.6rem; border-radius: 0.35rem; width: fit-content; max-width: calc(100% - 2rem); }
 .ais-layers { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem; }
 .ais-gamma { width: 7rem; }
+.ais-status:has(#ais-status-close:not([hidden])) { padding-right: 1.75rem; max-width: calc(100% - 5rem); }
+.ais-status #ais-status-close { position: absolute; top: 0.45rem; right: 0.45rem; font-size: 0.55rem; pointer-events: auto; }
+.ais-hint { position: relative; flex: 1 1 20rem; padding-right: 1.5rem; }
+.ais-hint .btn-close { position: absolute; top: 0; right: 0; font-size: 0.6rem; }
 .ais-length { font-size: 2.25rem; font-weight: 600; line-height: 1.1; margin-bottom: 0.75rem; font-variant-numeric: tabular-nums; }
 .ais-measures { display: grid; grid-template-columns: auto 1fr; gap: 0.15rem 0.75rem; margin-bottom: 0.75rem; }
 .ais-measures dt { font-weight: 500; color: var(--bs-secondary-color); }
@@ -228,7 +232,12 @@ th { color: var(--bs-secondary-color); font-size: 0.8rem; text-transform: upperc
 .ais-viewtools { position: absolute; top: 0.75rem; right: 0.75rem; opacity: 0.85; }
 .ais-viewtools:hover { opacity: 1; }
 .ais-zoom-level { font-size: 0.7rem; font-variant-numeric: tabular-nums; min-width: 3.2rem; padding-left: 0.25rem; padding-right: 0.25rem; }
-#ais-view-lock.active { background: var(--bs-warning); color: #000; border-color: var(--bs-warning); }
+/* Focus mode (Ais.setFocus): only the image, the picker and the result. */
+.ais-focus .app-navbar, .ais-focus .app-sidebar, .ais-focus .ais-focus-hide { display: none !important; }
+.ais-focus .app-main { padding: 0.5rem; }
+.ais-focus .ais-view > .card.mb-3 { margin-bottom: 0.5rem !important; }
+.ais-focus .ais-toolbar { padding: 0.5rem; }
+#ais-focus.active, #ais-view-lock.active { background: var(--bs-warning); color: #000; border-color: var(--bs-warning); }
 
 /* The Images dialog: most of the screen, a grid of previews. */
 @media (min-width: 992px) {
