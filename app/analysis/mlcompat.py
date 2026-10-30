@@ -64,6 +64,26 @@ def fspecial_gaussian(size: tuple[int, int], sigma: float) -> np.ndarray:
     return h / s if s != 0 else h
 
 
+def fspecial_log(size: tuple[int, int], sigma: float) -> np.ndarray:
+    """fspecial('log', size, sigma): the normalised Gaussian times the
+    Laplacian factor, then shifted to sum to zero (fspecial.m, case 'log')."""
+    sr, sc = (size[0] - 1) / 2, (size[1] - 1) / 2
+    std2 = sigma ** 2
+    x, y = np.meshgrid(np.arange(-sc, sc + 1), np.arange(-sr, sr + 1))
+    h = np.exp(-(x * x + y * y) / (2 * std2))
+    h[h < EPS * h.max()] = 0
+    s = h.sum()
+    if s != 0:
+        h = h / s
+    h1 = h * (x * x + y * y - 2 * std2) / (std2 ** 2)
+    return h1 - h1.sum() / (size[0] * size[1])
+
+
+# The smoothing types fspecial accepts with the original's (type, [k k], sigma)
+# call; every other type errors in MATLAB ("Too many arguments").
+FSPECIAL = {"gaussian": fspecial_gaussian, "log": fspecial_log}
+
+
 def imfilter_zero_same(a: np.ndarray, h: np.ndarray) -> np.ndarray:
     """imfilter(A, h) with the defaults: correlation, zero padding, 'same'.
 
@@ -122,30 +142,55 @@ def im2bw(img: np.ndarray, level: float) -> np.ndarray:
 
 # --- binary morphology -----------------------------------------------------
 
-def _shifts3(bw: np.ndarray, border: bool) -> list[np.ndarray]:
-    p = np.pad(bw, 1, constant_values=border)
+def _offsets(k: int) -> np.ndarray:
+    """strel('square',k) offsets about its centre, floor((k+1)/2) (1-based)."""
+    return np.arange(k) - ((k + 1) // 2 - 1)
+
+
+def _shifted(bw: np.ndarray, offsets: np.ndarray, border: bool) -> list[np.ndarray]:
+    """bw(p + (dr, dc)) for every pair of offsets, outside read as border."""
+    m = int(np.abs(offsets).max()) if offsets.size else 0
+    p = np.pad(bw, m, constant_values=border)
     H, W = bw.shape
-    return [p[i:i + H, j:j + W] for i in range(3) for j in range(3)]
+    return [p[m + dr:m + dr + H, m + dc:m + dc + W] for dr in offsets for dc in offsets]
+
+
+def imerode_square(bw: np.ndarray, k: int = 3) -> np.ndarray:
+    """Binary erosion pads with true, so the image border does not erode."""
+    return np.logical_and.reduce(_shifted(bw, _offsets(k), True))
+
+
+def imdilate_square(bw: np.ndarray, k: int = 3) -> np.ndarray:
+    """Dilation uses the reflected element, which matters for even k."""
+    return np.logical_or.reduce(_shifted(bw, -_offsets(k), False))
+
+
+def imopen_square(bw: np.ndarray, k: int = 3) -> np.ndarray:
+    return imdilate_square(imerode_square(bw, k), k)
+
+
+def imclose_square(bw: np.ndarray, k: int = 3) -> np.ndarray:
+    """imclose zero-pads by ceil(k/2) first (imopen does not), so closing
+    can open up along the image border."""
+    m = (k + 1) // 2
+    p = np.pad(bw, m)
+    return imerode_square(imdilate_square(p, k), k)[m:-m, m:-m]
 
 
 def imerode_square3(bw: np.ndarray) -> np.ndarray:
-    """Binary erosion pads with true, so the image border does not erode."""
-    return np.logical_and.reduce(_shifts3(bw, True))
+    return imerode_square(bw, 3)
 
 
 def imdilate_square3(bw: np.ndarray) -> np.ndarray:
-    return np.logical_or.reduce(_shifts3(bw, False))
+    return imdilate_square(bw, 3)
 
 
 def imopen_square3(bw: np.ndarray) -> np.ndarray:
-    return imdilate_square3(imerode_square3(bw))
+    return imopen_square(bw, 3)
 
 
 def imclose_square3(bw: np.ndarray) -> np.ndarray:
-    """imclose zero-pads by ceil(3/2) = 2 first (imopen does not), so closing
-    can open up along the image border."""
-    p = np.pad(bw, 2)
-    return imerode_square3(imdilate_square3(p))[2:-2, 2:-2]
+    return imclose_square(bw, 3)
 
 
 def components8(bw: np.ndarray, min_pixels: int = 0) -> np.ndarray:

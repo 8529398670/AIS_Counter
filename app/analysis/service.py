@@ -7,9 +7,9 @@ can open a batch can see its images, and a sha is only ever learnt from a
 batch. Re-uploading the same image is free. A file that is not there yet is
 looked for in the per-user folders older versions used, then at the path an
 Open-path batch recorded for it (`resolver`), and copied in. The
-click-independent part of the pipeline (mat2gray and the Gaussian smoothing)
-is cached in memory for the last few images, which makes every click after
-the first on an image take a fraction of a second.
+click-independent part of the pipeline (mat2gray and the smoothing) is cached
+in memory for the last few images and smoothing settings, which makes every
+click after the first on an image take a fraction of a second.
 """
 from __future__ import annotations
 
@@ -38,7 +38,7 @@ class Library:
         # sha -> a path on this machine holding those bytes (Open-path batches).
         self.resolver = resolver
         self._lock = threading.Lock()
-        self._prepared: OrderedDict[str, aa.PreparedImage] = OrderedDict()
+        self._prepared: OrderedDict[tuple, aa.PreparedImage] = OrderedDict()
         self._arrays: OrderedDict[str, np.ndarray] = OrderedDict()
 
     def _path(self, sha: str) -> Path:
@@ -97,14 +97,15 @@ class Library:
                 self._arrays.popitem(last=False)
         return arr
 
-    def prepared(self, sha: str) -> aa.PreparedImage:
+    def prepared(self, sha: str, settings: aa.Settings = aa.DEFAULT) -> aa.PreparedImage:
+        key = (sha, settings.smooth, settings.kernel, settings.sigma)
         with self._lock:
-            if sha in self._prepared:
-                self._prepared.move_to_end(sha)
-                return self._prepared[sha]
-        prep = aa.PreparedImage.from_array(self.array(sha))
+            if key in self._prepared:
+                self._prepared.move_to_end(key)
+                return self._prepared[key]
+        prep = aa.PreparedImage.from_array(self.array(sha), settings)
         with self._lock:
-            self._prepared[sha] = prep
+            self._prepared[key] = prep
             while len(self._prepared) > CACHE_SIZE:
                 self._prepared.popitem(last=False)
         return prep
@@ -117,17 +118,17 @@ class Library:
 
     def trace(self, processed: str, raw: str | None,
               click: tuple[float, float], click2: tuple[float, float] | None,
-              threshold: float) -> dict[str, Any]:
-        prep = self.prepared(processed)
+              threshold: float, settings: aa.Settings = aa.DEFAULT) -> dict[str, Any]:
+        prep = self.prepared(processed, settings)
         if not raw:
             # Only one file for this cell: profile the image that was traced.
-            out = run_click(prep, prep.pic, click, click2, threshold)
+            out = run_click(prep, prep.pic, click, click2, threshold, settings)
             out.setdefault("notes", []).insert(0, SINGLE_NOTE)
             return out
         raw_arr = self.array(raw)
         if raw_arr.shape[:2] != prep.pic.shape:
             raise ImageError("raw and processed images differ in size")
-        return run_click(prep, raw_arr, click, click2, threshold)
+        return run_click(prep, raw_arr, click, click2, threshold, settings)
 
 
 def _xy(points) -> list[list[int]]:
@@ -137,12 +138,13 @@ def _xy(points) -> list[list[int]]:
 
 def run_click(prep: aa.PreparedImage, raw: np.ndarray | None,
               click: tuple[float, float], click2: tuple[float, float] | None,
-              threshold: float) -> dict[str, Any]:
+              threshold: float, settings: aa.Settings = aa.DEFAULT) -> dict[str, Any]:
     """The JSON for one click. Coordinates in and out are MATLAB axes
     coordinates: x = column, y = row, pixel centres at 1..n."""
-    out: dict[str, Any] = {"ok": False, "stage": "trace", "error": None}
+    out: dict[str, Any] = {"ok": False, "stage": "trace", "error": None,
+                           "settings": settings.to_dict(), "settings_changed": settings.changed()}
     try:
-        tr = aa.trace(prep, click, click2, threshold)
+        tr = aa.trace(prep, click, click2, threshold, settings)
     except ml.MatlabError as exc:
         out["error"] = str(exc)
         return out
@@ -169,7 +171,7 @@ def run_click(prep: aa.PreparedImage, raw: np.ndarray | None,
         return out
     out["stage"] = "measure"
     try:
-        ms = aa.measure(tr.path, raw)
+        ms = aa.measure(tr.path, raw, settings)
     except ml.MatlabError as exc:
         out["error"] = str(exc)
         return out
@@ -179,7 +181,7 @@ def run_click(prep: aa.PreparedImage, raw: np.ndarray | None,
         "spline": np.round(ms.xysm.T, 3).tolist(),
         "pixels": [[int(x), int(y)] for x, y in zip(ms.x_pix, ms.y_pix)],
         "profile": {"lv_ss": ms.lv_ss.tolist(), "norm_lv": ms.norm_lv.tolist(), "max_i": ms.max_i,
-                    "ais_start": ms.ais_start, "ais_end": ms.ais_end, "f": aa.F, "pixconv": aa.PIXCONV},
+                    "ais_start": ms.ais_start, "ais_end": ms.ais_end, "f": settings.f, "pixconv": settings.pixconv},
         "measures": {"start_um": ms.debut, "end_um": ms.fin, "mid_um": ms.mid, "max_um": ms.maxi,
                      "length_um": ms.lngth, "length_str": ms.lngth_str, "arc_um": ms.arc_um},
         "notes": ms.notes,

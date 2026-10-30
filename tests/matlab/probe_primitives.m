@@ -35,6 +35,17 @@ for k = 1:20
     P.(sprintf('morph_close_%d',k)) = imclose(m, strel('square',3));
 end
 
+% --- method settings: the log kernel, other strel sizes (even ones too) ---
+P.h_log = fspecial('log', [20 20], 2);
+P.strel_ks = [1 2 4 5 7];
+for k = P.strel_ks
+    for j = 1:5
+        m = P.(sprintf('morph_in_%d',j));
+        P.(sprintf('open_k%d_%d',k,j)) = imopen(m, strel('square',k));
+        P.(sprintf('close_k%d_%d',k,j)) = imclose(m, strel('square',k));
+    end
+end
+
 % --- bwdist feature transform: random sparse images, many ties -----------
 nb = 300;
 P.bwd_n = nb;

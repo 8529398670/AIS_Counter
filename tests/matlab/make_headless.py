@@ -5,13 +5,27 @@ to the original: only the interactive calls (zoom/pause, ginput, clipboard) and
 the _xy.txt destination change, plus a few lines that save intermediates for
 the parity tests. Every replacement must match exactly once, so a change to the
 original fails loudly here instead of silently producing a different harness.
+
+    python tests/matlab/make_headless.py [JOBS.json]
+
+With a jobs file, every distinct "settings" in it also gets its own copy,
+ais_auto_headless_<hash>.m, with the constants written in exactly as the app's
+MATLAB launch writes them (Settings.patches), and each job is given the "fn"
+run_golden.m should call.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT))
+
+from app.analysis.ais_auto import Settings  # noqa: E402
+from app.analysis.matlab import apply_patches  # noqa: E402
+
 SRC = ROOT / "original-code" / "ais_auto.m"
 OUT = ROOT / "tests" / "matlab" / "build" / "ais_auto_headless.m"
 
@@ -35,20 +49,37 @@ PATCHES = [
 COUNTS = {"savexy = [cell '_xy.txt'];": 2}
 
 
-def main() -> int:
+def build(settings: Settings) -> str:
+    """Writes the headless copy for these settings; returns its function name."""
+    patches = settings.patches()
+    name = OUT.stem
+    if patches:
+        name += "_" + hashlib.sha256(json.dumps(settings.to_dict(), sort_keys=True).encode()).hexdigest()[:10]
     text = SRC.read_text()
     for old, new in PATCHES:
         n = text.count(old)
         want = COUNTS.get(old, 1)
         if n != want:
-            print(f"patch anchor found {n}x (want {want}): {old!r}", file=sys.stderr)
-            return 1
-        text = text.replace(old, new)
-    OUT.parent.mkdir(parents=True, exist_ok=True)
-    OUT.write_text(text)
-    print(OUT)
+            raise SystemExit(f"patch anchor found {n}x (want {want}): {old!r}")
+        text = text.replace(old, new.replace(OUT.stem + "(", name + "(", 1))
+    text = apply_patches(text, patches)
+    path = OUT.with_name(name + ".m")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+    return name
+
+
+def main(argv: list[str]) -> int:
+    print(OUT.with_name(build(Settings()) + ".m"))
+    if argv:
+        jobs_file = Path(argv[0])
+        jobs = json.loads(jobs_file.read_text())
+        for job in jobs:
+            job["fn"] = build(Settings.from_dict(job.get("settings")))
+        jobs_file.write_text(json.dumps(jobs, indent=1))
+        print(f"{len({j['fn'] for j in jobs})} headless variant(s) for {jobs_file}")
     return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(main(sys.argv[1:]))

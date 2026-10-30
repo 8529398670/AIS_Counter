@@ -17,8 +17,23 @@ const Settings = {
   // Each method's settings and their defaults. Field -> control id in its
   // fieldset. Names come from language.yaml (settings.method_<key>).
   methods: [
-    { key: "ais_auto" , defaults: { threshold: 0.01 , two_clicks: "auto" } ,
-      controls: { threshold: "ais-threshold" , two_clicks: "ais-two-clicks" } },
+    // ais_auto: threshold and smooth are the original's arguments; the
+    // constants it hard-codes (app/analysis/ais_auto.py Settings) follow,
+    // with the same ranges the server checks.
+    { key: "ais_auto" ,
+      defaults: { threshold: 0.01 , two_clicks: "auto" , smooth: "gaussian" ,
+        pixconv: 0.161 , f: 0.33 , kernel: 20 , sigma: 2 , strel: 3 , min_pixels: 70 ,
+        max_path: 300 , max_passes: 10 , spline_p: 0.3 , window_um: 1.5 } ,
+      controls: { threshold: "ais-threshold" , two_clicks: "ais-two-clicks" , smooth: "ais-smooth" ,
+        pixconv: "ais-pixconv" , f: "ais-f" , kernel: "ais-kernel" , sigma: "ais-sigma" , strel: "ais-strel" ,
+        min_pixels: "ais-min-pixels" , max_path: "ais-max-path" , max_passes: "ais-max-passes" ,
+        spline_p: "ais-spline-p" , window_um: "ais-window-um" } ,
+      ranges: { pixconv: [ 0.0001 , 1000 ] , kernel: [ 1 , 201 ] , sigma: [ 0.01 , 100 ] , strel: [ 1 , 25 ] ,
+        min_pixels: [ 0 , 10000000 ] , max_path: [ 1 , 100000 ] , max_passes: [ 1 , 1000 ] , window_um: [ 0.001 , 1000 ] } ,
+      integers: [ "kernel" , "strel" , "min_pixels" , "max_path" , "max_passes" ] ,
+      // Sent to the server as settings; the rest are the call's or this screen's.
+      sent: [ "smooth" , "pixconv" , "f" , "kernel" , "sigma" , "strel" , "min_pixels" , "max_path" , "max_passes" , "spline_p" , "window_um" ] ,
+      constants: [ "pixconv" , "f" , "kernel" , "sigma" , "strel" , "min_pixels" , "max_path" , "max_passes" , "spline_p" , "window_um" ] },
   ],
 
   // Settings for every method: field -> default, control id and allowed range.
@@ -66,6 +81,13 @@ const Settings = {
         this.save();
       } );
     } );
+    // Back to the original's constants, for the method shown.
+    Dom.get( "ais-constants-reset" ).addEventListener( "click" , () => {
+      const method = this.find( this.values.method );
+      ( method.constants || [] ).forEach( ( field ) => { this.values[ field ] = method.defaults[ field ]; } );
+      this.render();
+      this.save();
+    } );
     this.render();
   },
 
@@ -73,14 +95,16 @@ const Settings = {
     return this.methods.find( function ( method ) { return method.key === key; } ) || this.methods[ 0 ];
   },
 
-  // A number field out of range or empty goes back to its default. The range
-  // is the group's own (general.ranges), else 0..1.
+  // A number field out of range, empty or (for a whole-number field) not
+  // whole goes back to its default. The range is the group's own
+  // (group.ranges), else 0..1.
   clean( group , field , value ) {
     const fallback = group.defaults[ field ];
     if ( typeof fallback !== "number" ) return value;
     const range = ( group.ranges && group.ranges[ field ] ) || [ 0 , 1 ];
     const number = Number( value );
-    return value === "" || !Number.isFinite( number ) || number < range[ 0 ] || number > range[ 1 ] ? fallback : number;
+    const whole = !( group.integers || [] ).includes( field ) || Number.isInteger( number );
+    return value === "" || !Number.isFinite( number ) || !whole || number < range[ 0 ] || number > range[ 1 ] ? fallback : number;
   },
 
   // A group's fields from values, cleaned, defaults for anything missing.
@@ -165,6 +189,13 @@ const Settings = {
 
   method() { return this.values.method; },
   threshold() { return this.values.threshold; },
+  // The method's settings the server takes (the trace and MATLAB bodies).
+  methodSettings() {
+    const method = this.find( this.values.method );
+    const out = {};
+    ( method.sent || [] ).forEach( ( field ) => { out[ field ] = this.values[ field ]; } );
+    return out;
+  },
   twoClicks() { return this.values.two_clicks; },
   // µm; 0 is off.
   minLength() { return this.values.min_length; },

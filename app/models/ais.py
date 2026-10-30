@@ -34,8 +34,11 @@ SOURCES = ("upload", "path")
 
 # What an accepted row may carry, and the type each value must have.
 RESULT_NUMBERS = ("length_um", "start_um", "end_um", "mid_um", "max_um", "arc_um", "threshold_initial",
-                  "threshold", "click_x", "click_y", "click2_x", "click2_y", "profile_points")
-RESULT_TEXTS = ("length_str", "source", "notes", "file", "sha")
+                  "threshold", "click_x", "click_y", "click2_x", "click2_y", "profile_points",
+                  # the method settings it was measured with (app/analysis/ais_auto.Settings)
+                  "pixconv", "f", "kernel", "sigma", "strel", "min_pixels", "max_path", "max_passes",
+                  "spline_p", "window_um")
+RESULT_TEXTS = ("length_str", "source", "notes", "file", "sha", "smooth")
 
 
 class BatchError(ValueError):

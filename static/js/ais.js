@@ -694,6 +694,7 @@ const Ais = {
         raw: this.kind( entry ) === "pair" ? this.sha( entry , "raw" ) : null,
         cell: entry.cell,
         threshold: Settings.threshold(),
+        settings: Settings.methodSettings(),
         clicks: clicks || null,
       } );
       Dom.toast( I18n.get( "ais.matlab_started" ) , "ok" );
@@ -1010,6 +1011,7 @@ const Ais = {
         processed: this.sha( entry ),
         raw: this.kind( entry ) === "pair" ? this.sha( entry , "raw" ) : null,
         threshold: Settings.threshold(),
+        settings: Settings.methodSettings(),
       } , body ) );
       if ( this.images[ this.index ] !== entry ) return;
       const twoClicks = Settings.twoClicks() === "manual";
@@ -1112,6 +1114,8 @@ const Ais = {
     if ( r.component ) row( "m_component" , r.component.pixels + " " + I18n.get( "ais.px" ) );
     if ( r.path ) row( "m_trace" , r.path.length + " " + I18n.get( "ais.px" ) + ", " + r.passes + " " + I18n.get( "ais.passes" ) );
     if ( r.clicks ) row( "m_click" , r.clicks.map( ( c ) => "(" + c[ 0 ] + ", " + c[ 1 ] + ")" ).join( " → " ) );
+    const changed = Object.entries( r.settings_changed || {} );
+    if ( changed.length ) row( "m_settings" , changed.map( ( kv ) => kv[ 0 ] + " = " + kv[ 1 ] ).join( ", " ) );
 
     const notes = Dom.get( "ais-notes" );
     Dom.clear( notes );
@@ -1183,9 +1187,12 @@ const Ais = {
       click2_y: r.clicks[ r.clicks.length - 1 ][ 1 ],
       profile_points: r.pixels.length,
       source: r.source,
+      smooth: r.settings.smooth,
       notes: ( r.notes || [] ).join( "; " ),
       pixels: r.pixels,
     };
+    // The constants it was measured with (app/analysis/ais_auto.py Settings).
+    AisExport.settingCols.forEach( ( key ) => { if ( key !== "smooth" ) row[ key ] = r.settings[ key ]; } );
     try {
       const saved = await Api.post( "/api/ais/results" , { batch_id: this.batch.id , image: entry.key , row: row } );
       this.batchRows.push( saved );

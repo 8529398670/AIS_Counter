@@ -1,7 +1,9 @@
 function run_golden(jobs_file, out_dir)
 % Runs the headless original on every job in jobs_file (JSON list of
-% {id, base, clicks:[[x,y],...]}) and writes <id>_trace.mat, <id>_final.mat
-% and <id>.json ({id, ok, error_id, error_msg, seconds}) into out_dir.
+% {id, base, clicks:[[x,y],...], threshold?, settings?, fn?}) and writes
+% <id>_trace.mat, <id>_final.mat and <id>.json ({id, ok, error_id, error_msg,
+% seconds}) into out_dir. fn is the headless copy built for the job's settings
+% (make_headless.py); threshold and settings.smooth are the call's arguments.
 global AIS_CLICKS
 here = fileparts(mfilename('fullpath'));
 addpath(here, fullfile(here, 'build'));
@@ -21,13 +23,17 @@ for k = 1:numel(jobs)
     setappdata(0, 'ais_dump_trace', [stem '_trace.mat']);
     setappdata(0, 'ais_dump_final', [stem '_final.mat']);
     setappdata(0, 'ais_xy_prefix', stem);
+    fn = 'ais_auto_headless'; th = 0.01; sm = 'gaussian';
+    if isfield(job, 'fn'), fn = job.fn; end
+    if isfield(job, 'threshold'), th = job.threshold; end
+    if isfield(job, 'settings') && isstruct(job.settings) && isfield(job.settings, 'smooth'), sm = job.settings.smooth; end
     r = struct('id', job.id, 'ok', true, 'error_id', '', 'error_msg', '', 'error_line', 0, 'seconds', 0);
     t0 = tic;
     try
-        evalc('ais_auto_headless(job.base, 0.01, ''gaussian'', 0);');
+        evalc('feval(fn, job.base, th, sm, 0);');
     catch err
         r.ok = false; r.error_id = err.identifier; r.error_msg = err.message;
-        hit = err.stack(strcmp({err.stack.name}, 'ais_auto_headless'));
+        hit = err.stack(strcmp({err.stack.name}, fn));
         if ~isempty(hit), r.error_line = hit(1).line; end
     end
     r.seconds = toc(t0);

@@ -1,0 +1,11 @@
+[
+ {"threshold": 0},
+ {"settings": {"pixconv": 0.1}},
+ {"settings": {"f": 0.5}},
+ {"settings": {"kernel": 15, "sigma": 3}},
+ {"settings": {"strel": 5}},
+ {"settings": {"min_pixels": 200, "max_path": 150}},
+ {"settings": {"max_passes": 2, "spline_p": 0.6, "window_um": 2.5}},
+ {"settings": {"smooth": "log"}, "threshold": 0.001},
+ {"threshold": 0.02, "settings": {"pixconv": 0.2, "f": 0.25, "kernel": 11, "sigma": 1.5, "strel": 4}}
+]

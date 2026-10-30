@@ -62,6 +62,18 @@ ais_auto('/path/to/<cell>', 0.01, 'gaussian', 0)
 | `smooth` | `'gaussian'` | passed straight to `fspecial` |
 | `chosen` | `0` | **never used** |
 
+**In this app.** Settings → Method settings exposes `threshold`, `smooth` and,
+under *Original constants*, the numbers the script hard-codes (`pixconv`, `f`,
+the `fspecial` size and sigma, the `strel` size, the 70-pixel minimum, the
+300-pixel cap, the 10-pass limit, the `csaps` p and the 1.5 µm sliding-mean
+width). The defaults are the original's values. `smooth` offers only
+`gaussian` and `log`, because every other `fspecial` type errors on the
+`(type, [20 20], 2)` call. A changed constant is written into a copy of the
+script (`ais_auto_settings.m`, with a header listing the changes) when an image
+is opened or replayed in MATLAB. The golden set built from
+`tests/matlab/settings_variants.json` matches MATLAB stage by stage for every
+variant.
+
 **Files read.** Both are single-page 16-bit greyscale, 1388×1040:
 
 | File | Used for |

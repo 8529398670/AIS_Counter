@@ -13,23 +13,130 @@ are 1-based. Internally arrays are numpy 0-based.
 
 Where MATLAB would stop with an error, MatlabError is raised with what the
 original would have hit, so callers can report "no length" the same way.
+
+Settings holds the original's smooth argument and the constants it hard-codes.
+The defaults are the original's values; any other value has a matching edit of
+ais_auto.m (Settings.patches) so MATLAB can be run with the same settings.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 
 import numpy as np
 
 from app.analysis import mlcompat as ml
 from app.analysis.mlcompat import MatlabError
 
-PIXCONV = 0.161     # microns per pixel (line 5)
-F = 0.33            # fraction of the normalised peak for start/end (line 6)
-MIN_PIXELS = 70     # components smaller than this are dropped (line 87)
-MAX_PATH = 300      # tracing stops once the path is longer than this (line 192)
-MAX_PASSES = 10     # branch passes stop once loop2 > 10 (line 233)
-SPLINE_P = 0.3      # csaps smoothing parameter (line 272)
-SLIDE_D = int(ml.round_half_away(1.5 / PIXCONV)) + 1   # 10 (line 403)
+
+
+@dataclass(frozen=True)
+class Settings:
+    smooth: str = "gaussian"   # fspecial type, the smooth argument (line 37)
+    kernel: int = 20           # fspecial size, [kernel kernel] (line 37)
+    sigma: float = 2.0         # fspecial sigma (line 37)
+    strel: int = 3             # strel('square', strel) for open and close (lines 70-71)
+    min_pixels: int = 70       # components smaller than this are dropped (line 87)
+    max_path: int = 300        # tracing stops once the path is longer than this (line 192)
+    max_passes: int = 10       # branch passes stop once loop2 > max_passes (line 233)
+    spline_p: float = 0.3      # csaps smoothing parameter (line 272)
+    window_um: float = 1.5     # sliding-mean half width in microns (line 402)
+    pixconv: float = 0.161     # microns per pixel (line 5)
+    f: float = 0.33            # fraction of the normalised peak for start/end (line 6)
+
+    # field -> (type, lowest, highest); ranges keep MATLAB's calls valid.
+    RANGES = {
+        "kernel": (int, 1, 201), "sigma": (float, 0.01, 100.0), "strel": (int, 1, 25),
+        "min_pixels": (int, 0, 10_000_000), "max_path": (int, 1, 100_000),
+        "max_passes": (int, 1, 1000), "spline_p": (float, 0.0, 1.0),
+        "window_um": (float, 0.001, 1000.0), "pixconv": (float, 0.0001, 1000.0),
+        "f": (float, 0.0, 1.0),
+    }
+
+    @classmethod
+    def from_dict(cls, data: dict | None) -> "Settings":
+        """Settings from client JSON; missing fields keep the original's
+        values. ValueError names the first bad field."""
+        if data is None:
+            return cls()
+        if not isinstance(data, dict):
+            raise ValueError("settings must be an object")
+        known = {f.name for f in fields(cls)}
+        values = {}
+        for key, value in data.items():
+            if key not in known:
+                raise ValueError(f"unknown setting {key}")
+            if key == "smooth":
+                if value not in ml.FSPECIAL:
+                    raise ValueError("smooth must be one of " + ", ".join(ml.FSPECIAL))
+                values[key] = value
+                continue
+            kind, lo, hi = cls.RANGES[key]
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError(f"{key} must be a number")
+            if kind is int and value != int(value):
+                raise ValueError(f"{key} must be a whole number")
+            if not lo <= value <= hi:
+                raise ValueError(f"{key} must be between {lo} and {hi}")
+            values[key] = kind(value)
+        return cls(**values)
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    def changed(self) -> dict:
+        """The fields that differ from the original's values."""
+        default = Settings()
+        return {k: v for k, v in asdict(self).items() if getattr(default, k) != v}
+
+    @property
+    def slide_d(self) -> int:
+        """d = round(width) + 1, width = window_um / pixconv (lines 402-403)."""
+        return int(ml.round_half_away(self.window_um / self.pixconv)) + 1
+
+    def patches(self) -> list[tuple[str, str, int]]:
+        """(text in ais_auto.m, replacement, times it occurs) for every
+        constant that differs from the original's value. smooth is not here:
+        it is the call's own argument."""
+        d, out = Settings(), []
+
+        def add(old: str, new: str, count: int = 1) -> None:
+            out.append((old, new, count))
+
+        if self.pixconv != d.pixconv:
+            add("pixconv=0.161;", f"pixconv={_m(self.pixconv)};")
+        if self.f != d.f:
+            add("f = 0.33;", f"f = {_m(self.f)};")
+            add("yline(0.33,", f"yline({_m(self.f)},")
+        if (self.kernel, self.sigma) != (d.kernel, d.sigma):
+            add("fspecial(smooth,[20 20],2)", f"fspecial(smooth,[{self.kernel} {self.kernel}],{_m(self.sigma)})")
+        if self.strel != d.strel:
+            add("strel('square',3)", f"strel('square',{self.strel})", 2)
+        if self.min_pixels != d.min_pixels:
+            add("numPixels<70", f"numPixels<{self.min_pixels}")
+        if self.max_path != d.max_path:
+            add("length(Xais)>300", f"length(Xais)>{self.max_path}")
+        if self.max_passes != d.max_passes:
+            add("loop2>10", f"loop2>{self.max_passes}")
+        if self.spline_p != d.spline_p:
+            add("csaps(t,xy,0.3,ts)", f"csaps(t,xy,{_m(self.spline_p)},ts)")
+        if self.window_um != d.window_um:
+            add("width = (1.5/(pixconv))", f"width = ({_m(self.window_um)}/(pixconv))")
+        return out
+
+
+def _m(x: float) -> str:
+    """A number as MATLAB source that parses back to the same double."""
+    return repr(int(x)) if float(x).is_integer() else repr(float(x))
+
+
+DEFAULT = Settings()
+PIXCONV = DEFAULT.pixconv
+F = DEFAULT.f
+MIN_PIXELS = DEFAULT.min_pixels
+MAX_PATH = DEFAULT.max_path
+MAX_PASSES = DEFAULT.max_passes
+SPLINE_P = DEFAULT.spline_p
+SLIDE_D = DEFAULT.slide_d   # 10 (line 403)
 
 
 @dataclass
@@ -41,13 +148,14 @@ class PreparedImage:
     max_all: float
 
     @classmethod
-    def from_array(cls, pic: np.ndarray, smooth: str = "gaussian") -> "PreparedImage":
+    def from_array(cls, pic: np.ndarray, settings: Settings = DEFAULT) -> "PreparedImage":
         if pic.ndim == 3:
             pic = pic[:, :, 0]                                       # line 15
-        if smooth != "gaussian":
-            raise ValueError("only the 'gaussian' smoothing of the original is supported")
+        if settings.smooth not in ml.FSPECIAL:
+            raise ValueError(f"fspecial type {settings.smooth!r} is not supported")
         chais = ml.mat2gray(pic)                                     # line 33
-        sm = ml.imfilter_zero_same(chais, ml.fspecial_gaussian((20, 20), 2))  # line 37
+        h = ml.FSPECIAL[settings.smooth]((settings.kernel, settings.kernel), settings.sigma)
+        sm = ml.imfilter_zero_same(chais, h)                         # line 37
         D = ml.im2double(pic)                                        # line 125
         return cls(pic=pic, smooth=sm, D=D, max_all=float(D.max()))  # line 126
 
@@ -108,16 +216,17 @@ def _select(L: np.ndarray, X: int, Y: int) -> np.ndarray:
     return L == I
 
 
-def segment(prep: PreparedImage, threshold: float) -> np.ndarray:
+def segment(prep: PreparedImage, threshold: float, settings: Settings = DEFAULT) -> np.ndarray:
     """Lines 56-89 + 105: threshold, open, close, drop small components."""
     bw = ml.im2bw(prep.smooth, threshold)
-    closed = ml.imclose_square3(ml.imopen_square3(bw))
-    return ml.components8(closed, MIN_PIXELS)
+    k = settings.strel
+    closed = ml.imclose_square(ml.imopen_square(bw, k), k)
+    return ml.components8(closed, settings.min_pixels)
 
 
 def trace(prep: PreparedImage, click: tuple[float, float],
           click2: tuple[float, float] | None = None,
-          threshold: float = 0.01) -> Trace:
+          threshold: float = 0.01, settings: Settings = DEFAULT) -> Trace:
     """Lines 47-246. click is (x, y) in MATLAB axes coordinates. click2 is the
     click the original asks for after re-thresholding; None repeats click."""
     threshold_initial = threshold
@@ -129,7 +238,7 @@ def trace(prep: PreparedImage, click: tuple[float, float],
     loop = 0
     max_ais = prep.max_all
     while True:                                                       # line 55
-        L = segment(prep, threshold)
+        L = segment(prep, threshold, settings)
         X, Y = _click_to_pixel(*queue[loop], prep.pic.shape)
         clicks.append((X, Y))
         sel = _select(L, X, Y)
@@ -162,7 +271,7 @@ def trace(prep: PreparedImage, click: tuple[float, float],
                 raise MatlabError("Index in position 1 exceeds array bounds (skeleton touches the image border)")
             win = work[r - 1:r + 2, c - 1:c + 2]
             nb = [(r - 1 + i, c - 1 + j) for j in range(3) for i in range(3) if win[i, j]]  # find(temp), column-major
-            if len(path) > MAX_PATH:
+            if len(path) > settings.max_path:
                 work[:] = False
             elif len(nb) > 1:
                 branch = nb[0]                                        # line 195
@@ -183,7 +292,7 @@ def trace(prep: PreparedImage, click: tuple[float, float],
             work = traceq.copy()
             work[r0, c0] = False
             again = True
-        if loop2 > MAX_PASSES:
+        if loop2 > settings.max_passes:
             again = False
         if not again:
             break
@@ -199,7 +308,7 @@ def trace(prep: PreparedImage, click: tuple[float, float],
     )
 
 
-def measure(path: list[tuple[int, int]], raw: np.ndarray) -> Measures:
+def measure(path: list[tuple[int, int]], raw: np.ndarray, settings: Settings = DEFAULT) -> Measures:
     """Lines 266-455: spline through the path, intensity profile from the raw
     image, AIS start/end/max/length. path is 1-based (row, col)."""
     if raw.ndim == 3:
@@ -211,9 +320,10 @@ def measure(path: list[tuple[int, int]], raw: np.ndarray) -> Measures:
         # a 2-point scalar series and returns one row; line 274 then indexes row 2.
         raise MatlabError("Index in position 2 exceeds array bounds (single-pixel trace)")
     ts = np.append(ml.colon(1, 0.1, N), N)                            # line 271
-    xysm = ml.csaps(np.arange(1, N + 1, dtype=np.float64), xy, SPLINE_P, ts)
+    xysm = ml.csaps(np.arange(1, N + 1, dtype=np.float64), xy, settings.spline_p, ts)
     seg = np.sqrt((xysm[0, 1:] - xysm[0, :-1]) ** 2 + (xysm[1, 1:] - xysm[1, :-1]) ** 2)
-    ax_um = np.cumsum(np.concatenate([[0.0], seg])) * PIXCONV         # lines 273-277
+    pixconv, F = settings.pixconv, settings.f
+    ax_um = np.cumsum(np.concatenate([[0.0], seg])) * pixconv         # lines 273-277
     xys = ml.round_half_away(xysm)                                    # line 278
 
     seen: set[tuple[float, float]] = set()
@@ -238,7 +348,7 @@ def measure(path: list[tuple[int, int]], raw: np.ndarray) -> Measures:
         tot = tot + rawd[yi + dr, xi + dc]
     lv_smooth = tot / 9                                               # line 395
 
-    d = SLIDE_D
+    d = settings.slide_d
     if n < 2 * d:
         raise MatlabError(f"Index exceeds the number of array elements ({n} profile points; the sliding mean needs {2 * d})")
     lv_ss = np.zeros(n)
@@ -271,13 +381,13 @@ def measure(path: list[tuple[int, int]], raw: np.ndarray) -> Measures:
     else:
         ais_start = 0.0
         notes.append("profile never drops below f before its peak; ais_start is 0")
-    debut = ais_start * PIXCONV
-    fin = ais_end * PIXCONV
+    debut = ais_start * pixconv
+    fin = ais_end * pixconv
     lngth = fin - debut
     return Measures(
         xysm=xysm, arc_um=float(ax_um[-1]), x_pix=x_pix, y_pix=y_pix, lv_smooth=lv_smooth,
         lv_ss=lv_ss, norm_lv=norm_lv, max_i=max_i, ais_start=ais_start, ais_end=ais_end,
-        debut=debut, fin=fin, mid=(debut + fin) / 2, maxi=max_i * PIXCONV, lngth=lngth,
+        debut=debut, fin=fin, mid=(debut + fin) / 2, maxi=max_i * pixconv, lngth=lngth,
         lngth_str=ml.num2str(lngth, 6), notes=notes,
     )
 

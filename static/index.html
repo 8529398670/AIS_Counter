@@ -434,7 +434,16 @@
               <legend class="h6" data-i18n="settings.method_settings"></legend>
               <div class="mb-3 settings-field">
                 <label for="ais-threshold" class="form-label" data-i18n="ais.threshold_label"></label>
-                <input id="ais-threshold" class="form-control" type="number" min="0" max="1" step="0.001" value="0.01" />
+                <input id="ais-threshold" class="form-control" type="number" min="0" max="1" step="0.001" value="0.01" aria-describedby="ais-threshold-help" />
+                <div id="ais-threshold-help" class="form-text" data-i18n="settings.threshold_help"></div>
+              </div>
+              <div class="mb-3 settings-field">
+                <label for="ais-smooth" class="form-label" data-i18n="settings.smooth_label"></label>
+                <select id="ais-smooth" class="form-select" aria-describedby="ais-smooth-help">
+                  <option value="gaussian" data-i18n="settings.smooth_gaussian"></option>
+                  <option value="log" data-i18n="settings.smooth_log"></option>
+                </select>
+                <div id="ais-smooth-help" class="form-text" data-i18n="settings.smooth_help"></div>
               </div>
               <div class="mb-3 settings-field">
                 <label for="ais-two-clicks" class="form-label" data-i18n="ais.two_clicks"></label>
@@ -444,6 +453,84 @@
                 </select>
                 <div id="ais-two-clicks-help" class="form-text" data-i18n="ais.second_click_help"></div>
               </div>
+              <!-- The constants ais_auto.m hard-codes. Any other value is
+                   written into a copy of ais_auto.m when MATLAB is opened. -->
+              <details id="ais-constants" class="mb-3">
+                <summary data-i18n="settings.constants"></summary>
+                <p class="form-text" data-i18n="settings.constants_help"></p>
+                <div class="mb-3 settings-field">
+                  <label for="ais-pixconv" class="form-label" data-i18n="settings.pixconv_label"></label>
+                  <div class="input-group">
+                    <input id="ais-pixconv" class="form-control" type="number" min="0.0001" max="1000" step="any" value="0.161" aria-describedby="ais-pixconv-help" />
+                    <span class="input-group-text">µm/px</span>
+                  </div>
+                  <div id="ais-pixconv-help" class="form-text" data-i18n="settings.pixconv_help"></div>
+                </div>
+                <div class="mb-3 settings-field">
+                  <label for="ais-f" class="form-label" data-i18n="settings.f_label"></label>
+                  <input id="ais-f" class="form-control" type="number" min="0" max="1" step="0.01" value="0.33" aria-describedby="ais-f-help" />
+                  <div id="ais-f-help" class="form-text" data-i18n="settings.f_help"></div>
+                </div>
+                <div class="mb-3 settings-field">
+                  <label for="ais-kernel" class="form-label" data-i18n="settings.kernel_label"></label>
+                  <div class="input-group">
+                    <input id="ais-kernel" class="form-control" type="number" min="1" max="201" step="1" value="20" aria-describedby="ais-kernel-help" />
+                    <span class="input-group-text">px</span>
+                  </div>
+                  <div id="ais-kernel-help" class="form-text" data-i18n="settings.kernel_help"></div>
+                </div>
+                <div class="mb-3 settings-field">
+                  <label for="ais-sigma" class="form-label" data-i18n="settings.sigma_label"></label>
+                  <div class="input-group">
+                    <input id="ais-sigma" class="form-control" type="number" min="0.01" max="100" step="any" value="2" aria-describedby="ais-sigma-help" />
+                    <span class="input-group-text">px</span>
+                  </div>
+                  <div id="ais-sigma-help" class="form-text" data-i18n="settings.sigma_help"></div>
+                </div>
+                <div class="mb-3 settings-field">
+                  <label for="ais-strel" class="form-label" data-i18n="settings.strel_label"></label>
+                  <div class="input-group">
+                    <input id="ais-strel" class="form-control" type="number" min="1" max="25" step="1" value="3" aria-describedby="ais-strel-help" />
+                    <span class="input-group-text">px</span>
+                  </div>
+                  <div id="ais-strel-help" class="form-text" data-i18n="settings.strel_help"></div>
+                </div>
+                <div class="mb-3 settings-field">
+                  <label for="ais-min-pixels" class="form-label" data-i18n="settings.min_pixels_label"></label>
+                  <div class="input-group">
+                    <input id="ais-min-pixels" class="form-control" type="number" min="0" max="10000000" step="1" value="70" aria-describedby="ais-min-pixels-help" />
+                    <span class="input-group-text">px</span>
+                  </div>
+                  <div id="ais-min-pixels-help" class="form-text" data-i18n="settings.min_pixels_help"></div>
+                </div>
+                <div class="mb-3 settings-field">
+                  <label for="ais-max-path" class="form-label" data-i18n="settings.max_path_label"></label>
+                  <div class="input-group">
+                    <input id="ais-max-path" class="form-control" type="number" min="1" max="100000" step="1" value="300" aria-describedby="ais-max-path-help" />
+                    <span class="input-group-text">px</span>
+                  </div>
+                  <div id="ais-max-path-help" class="form-text" data-i18n="settings.max_path_help"></div>
+                </div>
+                <div class="mb-3 settings-field">
+                  <label for="ais-max-passes" class="form-label" data-i18n="settings.max_passes_label"></label>
+                  <input id="ais-max-passes" class="form-control" type="number" min="1" max="1000" step="1" value="10" aria-describedby="ais-max-passes-help" />
+                  <div id="ais-max-passes-help" class="form-text" data-i18n="settings.max_passes_help"></div>
+                </div>
+                <div class="mb-3 settings-field">
+                  <label for="ais-spline-p" class="form-label" data-i18n="settings.spline_p_label"></label>
+                  <input id="ais-spline-p" class="form-control" type="number" min="0" max="1" step="any" value="0.3" aria-describedby="ais-spline-p-help" />
+                  <div id="ais-spline-p-help" class="form-text" data-i18n="settings.spline_p_help"></div>
+                </div>
+                <div class="mb-3 settings-field">
+                  <label for="ais-window-um" class="form-label" data-i18n="settings.window_um_label"></label>
+                  <div class="input-group">
+                    <input id="ais-window-um" class="form-control" type="number" min="0.001" max="1000" step="any" value="1.5" aria-describedby="ais-window-um-help" />
+                    <span class="input-group-text">µm</span>
+                  </div>
+                  <div id="ais-window-um-help" class="form-text" data-i18n="settings.window_um_help"></div>
+                </div>
+                <button id="ais-constants-reset" type="button" class="btn btn-outline-secondary btn-sm" data-i18n="settings.constants_reset"></button>
+              </details>
             </fieldset>
           </div>
         </section>

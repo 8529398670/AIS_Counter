@@ -17,6 +17,7 @@ from typing import Any
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
+from app.analysis import ais_auto as aa
 from app.analysis import local, matlab
 from app.analysis.images import ImageError
 from app.analysis.service import Library
@@ -92,8 +93,18 @@ def _threshold(value: Any) -> float | None:
     return float(value)
 
 
+def _settings(value: Any) -> tuple[aa.Settings | None, str]:
+    """The method settings a body carries (app/analysis/ais_auto.Settings);
+    missing ones are the original's. (None, why) when one is bad."""
+    try:
+        return aa.Settings.from_dict(value), ""
+    except ValueError as exc:
+        return None, str(exc)
+
+
 async def trace(request: Request) -> Response:
-    """Body: {processed, raw?, click: [x, y], click2?: [x, y], threshold?}.
+    """Body: {processed, raw?, click: [x, y], click2?: [x, y], threshold?,
+    settings?: {smooth, kernel, sigma, ...}}.
     Clicks are MATLAB axes coordinates (x = column, y = row, pixel centres at
     1..n). click2 stands in for the second ginput after re-thresholding; by
     default the first click is used again. threshold defaults to 0.01, what
@@ -110,8 +121,11 @@ async def trace(request: Request) -> Response:
         return bad_request("click must be [x, y]")
     if threshold is None:
         return bad_request("threshold must be between 0 and 1")
+    settings, why = _settings(body.get("settings"))
+    if settings is None:
+        return bad_request(why)
     try:
-        result = await run(_library(request).trace, processed, raw, click, click2, threshold)
+        result = await run(_library(request).trace, processed, raw, click, click2, threshold, settings)
     except ImageError as exc:
         return bad_request(str(exc))
     return JSONResponse(result)
@@ -328,7 +342,7 @@ async def local_choose(request: Request) -> Response:
 
 async def local_matlab(request: Request) -> Response:
     """Body: {mode: open|run|replay, processed, raw?, cell, threshold?,
-    clicks?: [[x, y], ...]}. Starts MATLAB's desktop on the original
+    settings?, clicks?: [[x, y], ...]}. Starts MATLAB's desktop on the original
     ais_auto.m for that image (app/analysis/matlab.py). processed is the
     traced image's id, raw the profile image's when the cell has both."""
     body, refused = await _local_body(request)
@@ -343,6 +357,9 @@ async def local_matlab(request: Request) -> Response:
         return bad_request("processed, raw and cell must be strings")
     if threshold is None:
         return bad_request("threshold must be between 0 and 1")
+    settings, why = _settings(body.get("settings"))
+    if settings is None:
+        return bad_request(why)
     clicks = None
     if mode == "replay":
         raw_clicks = body.get("clicks")
@@ -359,7 +376,7 @@ async def local_matlab(request: Request) -> Response:
         processed_path = await run(library.file_path, processed)
         raw_path = await run(library.file_path, raw) if raw else None
         stem = await run(matlab.stage, cfg.storage_dir / "ais-matlab" / str(int(user)), cell, processed_path, raw_path)
-        await run(matlab.launch, binary, mode, stem, threshold, clicks)
+        await run(matlab.launch, binary, mode, stem, threshold, clicks, settings)
     except ImageError as exc:
         return bad_request(str(exc))
     except OSError as exc:

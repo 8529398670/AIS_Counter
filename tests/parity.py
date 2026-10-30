@@ -27,9 +27,9 @@ from app.analysis.mlcompat import MatlabError  # noqa: E402
 SUFFIX = ".tif - Processed method 2.5.tif"
 
 
-@lru_cache(maxsize=4)
-def prepared(base: str) -> aa.PreparedImage:
-    return aa.PreparedImage.from_array(tifffile.imread(base + SUFFIX))
+@lru_cache(maxsize=8)
+def prepared(base: str, settings: aa.Settings = aa.DEFAULT) -> aa.PreparedImage:
+    return aa.PreparedImage.from_array(tifffile.imread(base + SUFFIX), settings)
 
 
 @lru_cache(maxsize=4)
@@ -65,12 +65,14 @@ def compare(job: dict) -> tuple[str, str]:
     """(stage, detail); stage "ok" when everything matches."""
     base, res, d = job["base"], job["result"], job["dir"]
     clicks = [tuple(c) for c in np.atleast_2d(job["clicks"])]
-    prep = prepared(base)
+    settings = aa.Settings.from_dict(job.get("settings"))
+    prep = prepared(base, settings)
     tr_file = d / f"{job['id']}_trace.mat"
     fin_file = d / f"{job['id']}_final.mat"
 
     try:
-        tr = aa.trace(prep, clicks[0], clicks[1] if len(clicks) > 1 else None)
+        tr = aa.trace(prep, clicks[0], clicks[1] if len(clicks) > 1 else None,
+                      job.get("threshold", 0.01), settings)
     except MatlabError as e:
         if not res["ok"] and not tr_file.exists():
             return "ok", f"both error before the trace: {res['error_msg']} | {e}"
@@ -102,7 +104,7 @@ def compare(job: dict) -> tuple[str, str]:
         return "path", "chosen path differs"
 
     try:
-        ms = aa.measure(tr.path, raw_image(base))
+        ms = aa.measure(tr.path, raw_image(base), settings)
     except MatlabError as e:
         if not res["ok"]:
             return "ok", f"both error in the profile: {res['error_msg']} | {e}"

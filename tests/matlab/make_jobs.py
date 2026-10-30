@@ -5,6 +5,10 @@ edges, on background, near borders, two different clicks), so an approximate
 scipy segmentation is enough to aim them; MATLAB decides what they hit.
 
     python tests/matlab/make_jobs.py OUT.json [--images N] [--per-image K] [--seed S]
+                                     [--settings VARIANTS.json]
+
+VARIANTS.json is a list of {"threshold"?, "settings"?} objects; jobs take them
+in turn, so every variant is run on every image.
 """
 from __future__ import annotations
 
@@ -100,6 +104,7 @@ def main() -> None:
     ap.add_argument("--per-image", type=int, default=30)
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--kinds", default="", help="comma list to draw click kinds from, e.g. ais,ais,two")
+    ap.add_argument("--settings", default="", help="JSON list of {threshold?, settings?} variants to cycle through")
     a = ap.parse_args()
     if a.kinds:
         KINDS[:] = a.kinds.split(",")
@@ -107,6 +112,12 @@ def main() -> None:
     bases = pairs()
     pick = sorted(rng.choice(len(bases), size=min(a.images, len(bases)), replace=False))
     jobs = [j for i in pick for j in jobs_for(bases[i], a.per_image, rng)]
+    if a.settings:
+        variants = json.loads(Path(a.settings).read_text())
+        for k, job in enumerate(jobs):
+            v = variants[k % len(variants)]
+            job["id"] += f"_v{k % len(variants)}"
+            job.update({key: v[key] for key in ("threshold", "settings") if key in v})
     Path(a.out).parent.mkdir(parents=True, exist_ok=True)
     Path(a.out).write_text(json.dumps(jobs, indent=1))
     print(f"{len(jobs)} jobs from {len(pick)} of {len(bases)} image pairs -> {a.out}")

@@ -19,6 +19,12 @@ ais_auto returns, and quits -- taking the result figures with it):
           the click becomes ais_replay_click, which plays back the web clicks
           and marks each with an orange +). The final key press is still
           yours, after the spline is drawn. Every other line is the original's.
+
+The smooth setting is the call's own argument. Any other setting that differs
+from the original's constants (ais_auto.Settings.patches) is written into a
+copy, ais_auto_settings.m (or the replay copy), in the run folder, with a
+header listing what changed; with the original's constants open and run use
+ais_auto.m itself.
 """
 from __future__ import annotations
 
@@ -27,6 +33,7 @@ import subprocess
 import time
 from pathlib import Path
 
+from app.analysis.ais_auto import DEFAULT, Settings
 from app.analysis.images import ImageError
 from app.analysis.local import platform
 
@@ -81,13 +88,36 @@ def _str(text: str) -> str:
     return "'" + text.replace("'", "''") + "'"
 
 
-def replay_source() -> str:
-    text = (ORIGINAL_CODE / "ais_auto.m").read_text()
-    for old, new in REPLAY_PATCHES:
-        if text.count(old) != 1:
-            raise ImageError(f"ais_auto.m has changed: cannot build the replay ({old.strip()[:40]!r})")
+def apply_patches(text: str, patches) -> str:
+    """Each (old, new[, count]) must occur exactly count (default 1) times."""
+    for old, new, *count in patches:
+        want = count[0] if count else 1
+        if text.count(old) != want:
+            raise ImageError(f"ais_auto.m has changed: cannot apply a patch ({old.strip()[:40]!r})")
         text = text.replace(old, new)
     return text
+
+
+def settings_header(settings: Settings) -> str:
+    changed = settings.changed()
+    changed.pop("smooth", None)
+    lines = ["% Built by AIS Counter from original-code/ais_auto.m with these constants changed",
+             "% (every other line is the original's):"]
+    lines += [f"%   {k} = {v!r} (original {getattr(DEFAULT, k)!r})" for k, v in changed.items()]
+    return "\n".join(lines) + "\n"
+
+
+def settings_source(settings: Settings = DEFAULT, name: str = "ais_auto_settings") -> str:
+    """ais_auto.m with the settings' constants written in, as function name."""
+    text = (ORIGINAL_CODE / "ais_auto.m").read_text()
+    text = apply_patches(text, [("function [out] = ais_auto(cell,", f"function [out] = {name}(cell,")])
+    text = apply_patches(text, settings.patches())
+    return settings_header(settings) + text if settings.patches() else text
+
+
+def replay_source(settings: Settings = DEFAULT) -> str:
+    text = settings_source(settings, "ais_auto")
+    return apply_patches(text, REPLAY_PATCHES)
 
 
 def stage(runs_dir: Path, cell: str, processed: Path, raw: Path | None) -> Path:
@@ -110,18 +140,29 @@ def stage(runs_dir: Path, cell: str, processed: Path, raw: Path | None) -> Path:
     return stem
 
 
-def command(mode: str, stem: Path, threshold: float, clicks: list[tuple[float, float]] | None = None) -> str:
+def function_name(mode: str, settings: Settings) -> str:
+    if mode == "replay":
+        return "ais_auto_replay"
+    return "ais_auto_settings" if settings.patches() else "ais_auto"
+
+
+def command(mode: str, stem: Path, threshold: float, clicks: list[tuple[float, float]] | None = None,
+            settings: Settings = DEFAULT) -> str:
     """What the new MATLAB session runs."""
-    call = f"ais_auto({_str(str(stem))}, {threshold!r}, 'gaussian', 0)"
+    fn = function_name(mode, settings)
+    call = f"{fn}({_str(str(stem))}, {threshold!r}, {_str(settings.smooth)}, 0)"
+    source = ORIGINAL_CODE / "ais_auto.m" if fn == "ais_auto" else stem.parent / f"{fn}.m"
     # diary copies the command window into <stem>_matlab.log: with the desktop,
     # MATLAB's output goes there rather than to stdout.
     steps = [f"diary({_str(str(stem) + '_matlab.log')})", f"cd({_str(str(stem.parent))})",
              f"addpath({_str(str(ORIGINAL_CODE))})"]
     if mode == "open":
         steps += [
-            f"edit({_str(str(ORIGINAL_CODE / 'ais_auto.m'))})",
+            f"edit({_str(str(source))})",
             f"clipboard('copy', {_str(call)})",
-            "disp('The original ais_auto.m is open in the Editor. To run it on this image, paste (it is on the clipboard):')",
+            (f"disp('{source.name} (the original with the changed constants listed at its top) is open in the Editor. "
+             "To run it on this image, paste (it is on the clipboard):')" if fn != "ais_auto" else
+             "disp('The original ais_auto.m is open in the Editor. To run it on this image, paste (it is on the clipboard):')"),
             f"disp({_str('    ' + call)})",
         ]
     elif mode == "run":
@@ -139,7 +180,7 @@ def command(mode: str, stem: Path, threshold: float, clicks: list[tuple[float, f
             f"AIS_REPLAY_CLICKS = [{rows}]",
             "disp('Replaying the web click(s) in ais_auto.m (orange +). After the trace shows, press a key "
             "(n discards). The results stay open here.')",
-            call.replace("ais_auto(", "ais_auto_replay(", 1),
+            call,
         ]
     else:
         raise ImageError("unknown MATLAB mode")
@@ -147,14 +188,16 @@ def command(mode: str, stem: Path, threshold: float, clicks: list[tuple[float, f
 
 
 def launch(matlab: str, mode: str, stem: Path, threshold: float,
-           clicks: list[tuple[float, float]] | None = None) -> None:
+           clicks: list[tuple[float, float]] | None = None, settings: Settings = DEFAULT) -> None:
     """Start MATLAB with its desktop, detached. The session writes its command
     window to <stem>_matlab.log (diary); MATLAB's own start-up output goes to
     <stem>_launch.log."""
-    cmd = command(mode, stem, threshold, clicks)
+    cmd = command(mode, stem, threshold, clicks, settings)
     if mode == "replay":
-        (stem.parent / "ais_auto_replay.m").write_text(replay_source())
+        (stem.parent / "ais_auto_replay.m").write_text(replay_source(settings))
         (stem.parent / "ais_replay_click.m").write_text(REPLAY_CLICK)
+    elif settings.patches():
+        (stem.parent / "ais_auto_settings.m").write_text(settings_source(settings))
     with open(str(stem) + "_launch.log", "wb") as log:
         subprocess.Popen([matlab, "-desktop", "-r", cmd], cwd=str(stem.parent),
                          stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)

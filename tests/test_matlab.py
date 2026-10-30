@@ -9,6 +9,7 @@ import pytest
 import tifffile
 
 from app.analysis import matlab
+from app.analysis.ais_auto import Settings
 from app.analysis.images import ImageError
 
 
@@ -106,3 +107,33 @@ def test_find_matlab_respects_the_config(tmp_path):
     exe = tmp_path / "matlab"
     exe.write_text("")
     assert matlab.find_matlab(str(exe)) == str(exe)
+
+
+def test_changed_constants_run_a_patched_copy(tmp_path, popen):
+    stem = tmp_path / "cell"
+    settings = Settings(pixconv=0.2, strel=5, smooth="log")
+    matlab.launch("/x/matlab", "run", stem, 0.01, None, settings)
+    assert "ais_auto_settings('" in popen["args"][3] and ", 0.01, 'log', 0)" in popen["args"][3]
+    copy = (tmp_path / "ais_auto_settings.m").read_text()
+    assert "pixconv=0.2;" in copy and copy.count("strel('square',5)") == 2
+    assert "%   pixconv = 0.2 (original 0.161)" in copy
+    assert "function [out] = ais_auto_settings(cell," in copy
+
+
+def test_open_with_changed_constants_opens_the_copy(tmp_path, popen):
+    stem = tmp_path / "cell"
+    matlab.launch("/x/matlab", "open", stem, 0.01, None, Settings(f=0.5))
+    assert f"edit('{tmp_path / 'ais_auto_settings.m'}')" in popen["args"][3]
+
+
+def test_smooth_alone_needs_no_copy(tmp_path, popen):
+    stem = tmp_path / "cell"
+    matlab.launch("/x/matlab", "run", stem, 0.01, None, Settings(smooth="log"))
+    assert "ais_auto('" in popen["args"][3] and not (tmp_path / "ais_auto_settings.m").exists()
+
+
+def test_replay_with_changed_constants(tmp_path, popen):
+    stem = tmp_path / "cell"
+    matlab.launch("/x/matlab", "replay", stem, 0.01, [(5.0, 6.0)], Settings(max_path=150))
+    replay = (tmp_path / "ais_auto_replay.m").read_text()
+    assert "length(Xais)>150" in replay and "ais_replay_click()" in replay
