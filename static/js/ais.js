@@ -504,6 +504,7 @@ const Ais = {
     this.firstClick = null;
     this.editing = null;
     this.hover = null;
+    AisAuto.shown( index );
     this.renderResult();
     this.renderTable();
     Dom.get( "ais-image" ).value = String( index );

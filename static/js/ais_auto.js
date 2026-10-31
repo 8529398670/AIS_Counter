@@ -233,7 +233,8 @@ const AisAuto = {
     Ais.draw();
   },
 
-  // end / all: save everything found, image after image.
+  // end / all: save everything found, image after image, in the background:
+  // the image on screen stays the user's to open, trace, edit and delete on.
   async saveAll() {
     const run = this.run;
     this.phase = "finding";
@@ -241,7 +242,6 @@ const AisAuto = {
       const index = run.queue[ run.at ];
       const entry = Ais.images[ index ];
       this.render();
-      if ( Ais.index !== index ) Ais.show( index );
       const found = this.find( index );
       this.ahead();
       try {
@@ -265,9 +265,11 @@ const AisAuto = {
     }
     if ( this.run !== run ) return;
     if ( run.mode === "end" ) {
+      // Wait for Enter before moving the view to the first image.
       run.at = 0;
       run.reviewing = true;
-      this.reviewAt();
+      this.phase = "saved";
+      this.render();
     } else {
       this.finish();
     }
@@ -291,10 +293,15 @@ const AisAuto = {
   // Enter, or the panel's main button.
   async next() {
     const run = this.run;
-    if ( !run || this.busy || this.phase === "finding" ) return;
+    if ( !run || this.busy ) return;
     // A hand trace or an edit is waiting: this keeps it, like Enter.
     if ( Ais.pending() ) {
       Ais.accept();
+      return;
+    }
+    if ( this.phase === "finding" ) return;
+    if ( this.phase === "saved" ) {
+      this.reviewAt();
       return;
     }
     const index = this.current();
@@ -338,6 +345,29 @@ const AisAuto = {
     run.at += 1;
     if ( this.phase === "review" ) this.reviewAt();
     else this.confirmAt();
+  },
+
+  // Another image was opened while candidates are checked: like Skip, the
+  // one being checked keeps nothing unsaved, and the run goes on from there.
+  shown( index ) {
+    const run = this.run;
+    if ( !run || this.busy || run.mode !== "each" ) return;
+    if ( this.phase !== "confirm" && this.phase !== "finding" ) return;
+    const old = this.current();
+    if ( index === old ) return;
+    if ( this.phase === "confirm" ) {
+      run.found -= this.candidates.length;   // this image's count is redone if it comes back
+      run.hidden -= this.pool.length - this.candidates.length;
+    }
+    run.pending.delete( old );
+    const at = run.queue.indexOf( index );
+    if ( at >= 0 ) {
+      run.at = at;
+    } else {
+      run.queue.splice( run.at + 1 , 0 , index );
+      run.at += 1;
+    }
+    this.confirmAt();
   },
 
   // --- the candidates, for the Edit and Delete tools --------------------------
@@ -421,8 +451,11 @@ const AisAuto = {
     Dom.show( Dom.get( "ais-auto-panel" ) , Boolean( run ) );
     if ( !run ) return;
     const total = run.queue.length;
-    const k = Math.min( run.at + 1 , total );
+    const saved = this.phase === "saved";
+    const k = saved ? total : Math.min( run.at + 1 , total );
     const reviewing = this.phase === "review";
+    // Saving in the background (end / all): the user works on as they like.
+    const background = this.phase === "finding" && run.mode !== "each";
     Dom.text( Dom.get( "ais-auto-progress" ) , ( reviewing
       ? I18n.get( "ais.auto_progress_review" )
       : I18n.get( "ais.auto_progress" ).replace( "{found}" , run.found ).replace( "{saved}" , run.saved )
@@ -430,8 +463,9 @@ const AisAuto = {
     ).replace( "{k}" , k ).replace( "{n}" , total ) );
     Dom.show( Dom.get( "ais-auto-busy" ) , this.phase === "finding" );
     Dom.text( Dom.get( "ais-auto-busy-text" ) , I18n.get( run.mode === "each" ? "ais.auto_finding" : "ais.auto_saving" ) );
-    Dom.text( Dom.get( "ais-auto-help" ) , reviewing ? I18n.get( "ais.auto_help_review" ) : "" );
-    Dom.show( Dom.get( "ais-auto-help" ) , reviewing );
+    const help = reviewing ? "ais.auto_help_review" : background ? "ais.auto_help_saving" : saved ? "ais.auto_help_saved" : "";
+    Dom.text( Dom.get( "ais-auto-help" ) , help ? I18n.get( help ) : "" );
+    Dom.show( Dom.get( "ais-auto-help" ) , Boolean( help ) );
     const quick = run.mode === "each" && ( this.phase === "confirm" || this.phase === "finding" );
     Dom.show( Dom.get( "ais-auto-quick" ) , quick );
     if ( quick ) {
@@ -440,11 +474,12 @@ const AisAuto = {
         if ( document.activeElement !== control ) control.value = Settings.values[ field ];
       } );
     }
-    Dom.show( Dom.get( "ais-auto-actions" ) , this.phase === "confirm" || reviewing );
+    Dom.show( Dom.get( "ais-auto-actions" ) , this.phase === "confirm" || reviewing || saved );
+    Dom.show( Dom.get( "ais-auto-skip" ) , !saved );
     const ticked = this.candidates.filter( ( c ) => c.on ).length;
     Dom.text( Dom.get( "ais-auto-next-text" ) , this.phase === "confirm"
       ? I18n.get( ticked ? "ais.auto_save_next" : "ais.auto_none_next" ).replace( "{n}" , ticked )
-      : I18n.get( "ais.auto_review_next" ) );
+      : I18n.get( saved ? "ais.auto_start_review" : "ais.auto_review_next" ) );
     const list = Dom.get( "ais-auto-list" );
     Dom.clear( list );
     if ( this.phase === "confirm" ) this.renderCandidates( list );
@@ -553,6 +588,8 @@ const AisAuto = {
       return true;
     }
     if ( Ais.pending() ) return false;
+    // Saving in the background: Enter and N are the hand tracing's.
+    if ( this.phase === "finding" && this.run.mode !== "each" ) return false;
     if ( key === "Enter" ) {
       event.preventDefault();
       this.next();
