@@ -55,8 +55,10 @@ def test_results_are_numbered_per_image_and_count_as_progress(store):
     other = ais.add_result(store, batch["id"], "b", row(), 1)
     assert (first["n"], second["n"], other["n"]) == (1, 2, 1)
     assert second["created_by"] == 2 and second["cell"] == "a"
-    ais.delete_result(store, first["id"])
-    assert ais.add_result(store, batch["id"], "a", row(), 1)["n"] == 3
+    # Deleting renumbers the rest of that image (only): "a" is 1..k again.
+    assert ais.delete_result(store, first["id"]) == [{"id": second["id"], "n": 1}]
+    assert ais.add_result(store, batch["id"], "a", row(), 1)["n"] == 2
+    assert ais.get_result(store, other["id"])["n"] == 1
     listed = ais.list_batches(store)[0]
     assert (listed["images"], listed["completed"]) == (2, 2)
 
@@ -94,3 +96,21 @@ def test_browser_rows_import_as_their_own_batch(store):
     results = ais.list_results(store, batch["id"])
     assert [(r["image"], r["n"]) for r in results] == [("a", 1), ("a", 2), ("b", 1)]
     assert all("dup_of" not in im for im in batch["images"])
+
+
+def test_origin_is_kept(store):
+    batch = ais.create_batch(store, "f", "upload", files(("f/a" + P, "a")), 1)
+    auto = ais.add_result(store, batch["id"], "a", row() | {"origin": "auto"}, 1)
+    clicked = ais.add_result(store, batch["id"], "a", row(), 1)
+    assert (auto["origin"], clicked["origin"]) == ("auto", "")
+
+
+def test_delete_closes_the_gap_and_update_keeps_the_number(store):
+    batch = ais.create_batch(store, "f", "upload", files(("f/a" + P, "a")), 1)
+    rows = [ais.add_result(store, batch["id"], "a", row(float(k)) | {"origin": "auto"}, 1) for k in range(4)]
+    ais.delete_result(store, rows[1]["id"])
+    assert [r["n"] for r in ais.list_results(store, batch["id"])] == [1, 2, 3]
+    edited = ais.update_result(store, rows[3]["id"], row(9.0), 2)
+    assert (edited["n"], edited["origin"], edited["created_by"], edited["length_um"]) == (3, "auto", 1, 9.0)
+    assert edited["edited_by"] == 2 and edited["edited_at"]
+    assert ais.update_result(store, 999, row(), 1) is None

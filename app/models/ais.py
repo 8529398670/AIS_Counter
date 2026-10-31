@@ -11,7 +11,8 @@ marked dup_of that image.
 
 A result is one accepted AIS: the measures, clicks and trace the trace route
 returned, numbered n per image here (max + 1) so two people accepting on the
-same image at once cannot both get the same number.
+same image at once cannot both get the same number. Deleting one renumbers
+the rest of that image 1..k; editing one keeps its number.
 
 Records are plain dicts in the store, returned as they are; the routes decide
 what reaches the browser.
@@ -37,8 +38,11 @@ RESULT_NUMBERS = ("length_um", "start_um", "end_um", "mid_um", "max_um", "arc_um
                   "threshold", "click_x", "click_y", "click2_x", "click2_y", "profile_points",
                   # the method settings it was measured with (app/analysis/ais_auto.Settings)
                   "pixconv", "f", "kernel", "sigma", "strel", "min_pixels", "max_path", "max_passes",
-                  "spline_p", "window_um")
-RESULT_TEXTS = ("length_str", "source", "notes", "file", "sha", "smooth")
+                  "spline_p", "window_um",
+                  # how wide and bright the measured AIS is (app/analysis/service.shape)
+                  "width_um", "brightness")
+# origin: "auto" for one auto mode found, empty for a click.
+RESULT_TEXTS = ("length_str", "source", "notes", "file", "sha", "smooth", "origin")
 
 
 class BatchError(ValueError):
@@ -245,8 +249,38 @@ def get_result(store: Store, result_id: int) -> Record | None:
     return store.get(BUCKET_AIS_RESULTS, result_id)
 
 
-def delete_result(store: Store, result_id: int) -> None:
-    store.delete(BUCKET_AIS_RESULTS, result_id)
+def update_result(store: Store, result_id: int, row: Any, user_id: int) -> Record | None:
+    """Replace an accepted AIS's measures and trace (an edit), keeping which
+    image it is on, its number, origin and who accepted it. None when it is
+    gone."""
+    clean = clean_row(row)
+    with store.transaction() as tx:
+        record = tx.get(BUCKET_AIS_RESULTS, result_id)
+        if record is None:
+            return None
+        kept = {k: record[k] for k in ("id", "batch_id", "batch_name", "image", "cell", "n", "created_by", "accepted_at")}
+        record = clean | kept | {"origin": record.get("origin", ""), "edited_at": to_iso(utc_now()), "edited_by": user_id}
+        tx.put(BUCKET_AIS_RESULTS, result_id, record)
+    return record
+
+
+def delete_result(store: Store, result_id: int) -> list[dict[str, int]]:
+    """Delete one, and renumber the rest of its image 1..k in their order.
+    Returns the new numbers, [{id, n}], of the rows that changed."""
+    changed = []
+    with store.transaction() as tx:
+        record = tx.get(BUCKET_AIS_RESULTS, result_id)
+        if record is None:
+            return []
+        tx.delete(BUCKET_AIS_RESULTS, result_id)
+        rest = sorted((r for _, r in tx.all(BUCKET_AIS_RESULTS)
+                       if r["batch_id"] == record["batch_id"] and r["image"] == record["image"]),
+                      key=lambda r: (r["n"], r["id"]))
+        for n, r in enumerate(rest, 1):
+            if r["n"] != n:
+                tx.put(BUCKET_AIS_RESULTS, r["id"], r | {"n": n})
+                changed.append({"id": r["id"], "n": n})
+    return changed
 
 
 def import_rows(store: Store, rows: Any, user_id: int, name: str) -> Record:

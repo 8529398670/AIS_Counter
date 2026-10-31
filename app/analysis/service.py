@@ -21,8 +21,10 @@ from pathlib import Path
 from typing import Any, Callable
 
 import numpy as np
+from scipy import ndimage as ndi
 
 from app.analysis import ais_auto as aa
+from app.analysis import detect as auto
 from app.analysis import mlcompat as ml
 from app.analysis.images import ImageError, preview_png, read_tiff, thumbnail_png
 
@@ -40,6 +42,7 @@ class Library:
         self._lock = threading.Lock()
         self._prepared: OrderedDict[tuple, aa.PreparedImage] = OrderedDict()
         self._arrays: OrderedDict[str, np.ndarray] = OrderedDict()
+        self._bright: dict[str, float] = {}
 
     def _path(self, sha: str) -> Path:
         if not isinstance(sha, str) or not SHA_RE.match(sha):
@@ -110,6 +113,16 @@ class Library:
                 self._prepared.popitem(last=False)
         return prep
 
+    def bright_ref(self, sha: str) -> float:
+        """The image's bright level (see bright_level), kept per image."""
+        with self._lock:
+            if sha in self._bright:
+                return self._bright[sha]
+        level = bright_level(self.array(sha))
+        with self._lock:
+            self._bright[sha] = level
+        return level
+
     def preview(self, sha: str) -> bytes:
         return preview_png(self.array(sha))
 
@@ -122,13 +135,58 @@ class Library:
         prep = self.prepared(processed, settings)
         if not raw:
             # Only one file for this cell: profile the image that was traced.
-            out = run_click(prep, prep.pic, click, click2, threshold, settings)
+            out = run_click(prep, prep.pic, click, click2, threshold, settings, bright_ref=self.bright_ref(processed))
             out.setdefault("notes", []).insert(0, SINGLE_NOTE)
             return out
         raw_arr = self.array(raw)
         if raw_arr.shape[:2] != prep.pic.shape:
             raise ImageError("raw and processed images differ in size")
-        return run_click(prep, raw_arr, click, click2, threshold, settings)
+        return run_click(prep, raw_arr, click, click2, threshold, settings, bright_ref=self.bright_ref(raw))
+
+    def detect(self, processed: str, raw: str | None, threshold: float,
+               settings: aa.Settings = aa.DEFAULT, start: str = "both",
+               exclude: list[list[list[int]]] | None = None) -> dict[str, Any]:
+        """Auto mode: every AIS on the image (app/analysis/detect.py)."""
+        prep = self.prepared(processed, settings)
+        if not raw:
+            out = auto.detect(prep, prep.pic, threshold, settings, start, exclude)
+            for candidate in out["candidates"]:
+                candidate.setdefault("notes", []).insert(0, SINGLE_NOTE)
+            return out
+        raw_arr = self.array(raw)
+        if raw_arr.shape[:2] != prep.pic.shape:
+            raise ImageError("raw and processed images differ in size")
+        return auto.detect(prep, raw_arr, threshold, settings, start, exclude)
+
+
+def bright_level(raw: np.ndarray) -> float:
+    """What a trace's brightness is a fraction of: the profile image's 99.9th
+    percentile, a bright AIS rather than one hot pixel."""
+    if raw.ndim == 3:
+        raw = raw[:, :, 0]
+    return float(np.percentile(raw, 99.9)) or 1.0
+
+
+def shape(sel: np.ndarray, raw: np.ndarray, pixels: list[list[int]], ais_start: float, ais_end: float,
+          pixconv: float, bright_ref: float) -> dict[str, float]:
+    """How wide and bright the measured AIS (profile points ais_start..ais_end)
+    is, which auto mode filters specks by. width_um: the median of twice the
+    distance to the blob's edge (from the 3x3 around each point, as the spline
+    can run beside the blob); brightness: the mean raw intensity there over
+    bright_ref."""
+    n = len(pixels)
+    a, b = max(int(ais_start), 1), min(int(ais_end), n)
+    section = np.array(pixels[a - 1:b] if b - a >= 1 else pixels)
+    rows, cols = np.flatnonzero(sel.any(axis=1)), np.flatnonzero(sel.any(axis=0))
+    r0, c0 = rows[0], cols[0]
+    crop = np.pad(sel[r0:rows[-1] + 1, c0:cols[-1] + 1], 1)
+    near = ndi.maximum_filter(ndi.distance_transform_edt(crop), size=3)
+    r = np.clip(section[:, 1] - 1 - r0 + 1, 0, crop.shape[0] - 1)
+    c = np.clip(section[:, 0] - 1 - c0 + 1, 0, crop.shape[1] - 1)
+    if raw.ndim == 3:
+        raw = raw[:, :, 0]
+    level = raw[section[:, 1] - 1, section[:, 0] - 1].astype(np.float64).mean()
+    return {"width_um": float(np.median(2 * near[r, c]) * pixconv), "brightness": float(level / bright_ref)}
 
 
 def _xy(points) -> list[list[int]]:
@@ -138,18 +196,21 @@ def _xy(points) -> list[list[int]]:
 
 def run_click(prep: aa.PreparedImage, raw: np.ndarray | None,
               click: tuple[float, float], click2: tuple[float, float] | None,
-              threshold: float, settings: aa.Settings = aa.DEFAULT) -> dict[str, Any]:
+              threshold: float, settings: aa.Settings = aa.DEFAULT,
+              cache: dict | None = None, outline: bool = True, bright_ref: float | None = None) -> dict[str, Any]:
     """The JSON for one click. Coordinates in and out are MATLAB axes
-    coordinates: x = column, y = row, pixel centres at 1..n."""
+    coordinates: x = column, y = row, pixel centres at 1..n. cache: see
+    ais_auto.trace. outline=False leaves out the component's edge and the
+    skeleton, which auto mode does not draw. bright_ref: raw's bright_level,
+    when the caller already has it."""
     out: dict[str, Any] = {"ok": False, "stage": "trace", "error": None,
                            "settings": settings.to_dict(), "settings_changed": settings.changed()}
     try:
-        tr = aa.trace(prep, click, click2, threshold, settings)
+        tr = aa.trace(prep, click, click2, threshold, settings, cache)
     except ml.MatlabError as exc:
         out["error"] = str(exc)
         return out
     sel = tr.selected
-    edge = sel & ~ml.imerode_square3(sel)
     rows, cols = np.nonzero(sel)
     out.update({
         "threshold_initial": tr.threshold_initial,
@@ -157,15 +218,16 @@ def run_click(prep: aa.PreparedImage, raw: np.ndarray | None,
         "rethresholded": tr.rethresholded,
         "clicks": [list(c) for c in tr.clicks],
         "component": {
-            "pixels": int(sel.sum()),
+            "pixels": int(rows.size),
             "bbox": [int(cols.min()) + 1, int(rows.min()) + 1, int(cols.max()) + 1, int(rows.max()) + 1],
-            "edge": _xy(np.argwhere(edge) + 1),
         },
-        "skeleton": _xy(np.argwhere(tr.skeleton) + 1),
         "start": [tr.start[1], tr.start[0]],
         "passes": len(tr.passes),
         "path": _xy(tr.path),
     })
+    if outline:
+        out["component"]["edge"] = _xy(np.argwhere(sel & ~ml.imerode_square3(sel)) + 1)
+        out["skeleton"] = _xy(np.argwhere(tr.skeleton) + 1)
     if raw is None:
         out.update({"stage": "measure", "error": "no raw image: the original reads the profile from <cell>.tif"})
         return out
@@ -186,4 +248,6 @@ def run_click(prep: aa.PreparedImage, raw: np.ndarray | None,
                      "length_um": ms.lngth, "length_str": ms.lngth_str, "arc_um": ms.arc_um},
         "notes": ms.notes,
     })
+    out["shape"] = shape(sel, raw, out["pixels"], ms.ais_start, ms.ais_end, settings.pixconv,
+                         bright_ref if bright_ref is not None else bright_level(raw))
     return out

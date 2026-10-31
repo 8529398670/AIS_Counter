@@ -18,6 +18,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 from app.analysis import ais_auto as aa
+from app.analysis import detect as auto
 from app.analysis import local, matlab
 from app.analysis.images import ImageError
 from app.analysis.service import Library
@@ -126,6 +127,50 @@ async def trace(request: Request) -> Response:
         return bad_request(why)
     try:
         result = await run(_library(request).trace, processed, raw, click, click2, threshold, settings)
+    except ImageError as exc:
+        return bad_request(str(exc))
+    return JSONResponse(result)
+
+
+def _traces(value: Any) -> list[list[list[int]]] | None:
+    """A list of traces, each a list of [x, y] whole-number pixels."""
+    if value is None:
+        return []
+    if not isinstance(value, list) or len(value) > 1000:
+        return None
+    for trace in value:
+        if (not isinstance(trace, list) or len(trace) > 20000
+                or not all(isinstance(p, list) and len(p) == 2
+                           and all(isinstance(c, int) and not isinstance(c, bool) for c in p) for p in trace)):
+            return None
+    return value
+
+
+async def detect(request: Request) -> Response:
+    """Auto mode. Body: {processed, raw?, threshold?, settings?, start?,
+    exclude?: [[[x, y], ...], ...]}. Every AIS found on the image without a
+    click (app/analysis/detect.py); start is both | brighter | dimmer, exclude
+    the traces already accepted on it."""
+    body, refused = await _body(request)
+    if refused:
+        return refused
+    processed, raw = body.get("processed"), body.get("raw")
+    threshold = _threshold(body.get("threshold", 0.01))
+    start = body.get("start", "both")
+    exclude = _traces(body.get("exclude"))
+    if not isinstance(processed, str) or (raw is not None and not isinstance(raw, str)):
+        return bad_request("processed (and raw) must be image ids")
+    if threshold is None:
+        return bad_request("threshold must be between 0 and 1")
+    if start not in auto.STARTS:
+        return bad_request("start must be one of " + ", ".join(auto.STARTS))
+    if exclude is None:
+        return bad_request("exclude must be lists of [x, y] pixels")
+    settings, why = _settings(body.get("settings"))
+    if settings is None:
+        return bad_request(why)
+    try:
+        result = await run(_library(request).detect, processed, raw, threshold, settings, start, exclude)
     except ImageError as exc:
         return bad_request(str(exc))
     return JSONResponse(result)
@@ -245,8 +290,31 @@ async def result_delete(request: Request) -> Response:
     actor = actor_from(request)
     if row["created_by"] != actor.user.id and not actor.is_admin:
         return forbidden("only whoever accepted it, or an admin, can delete it")
-    await run(batches.delete_result, store, result_id)
-    return JSONResponse({"ok": True})
+    renumbered = await run(batches.delete_result, store, result_id)
+    return JSONResponse({"ok": True, "renumbered": renumbered})
+
+
+async def result_update(request: Request) -> Response:
+    """Body: {row}: an accepted AIS traced again (the Edit tool). It keeps its
+    number and origin."""
+    body, refused = await _body(request)
+    if refused:
+        return refused
+    store = get_store(request)
+    result_id = parse_id(request.path_params["result_id"])
+    row = await run(batches.get_result, store, result_id) if result_id else None
+    if row is None:
+        return not_found("no such result")
+    actor = actor_from(request)
+    if row["created_by"] != actor.user.id and not actor.is_admin:
+        return forbidden("only whoever accepted it, or an admin, can change it")
+    try:
+        updated = await run(batches.update_result, store, result_id, body.get("row"), actor.user.id)
+    except batches.BatchError as exc:
+        return bad_request(str(exc))
+    if updated is None:
+        return not_found("no such result")
+    return JSONResponse(updated)
 
 
 async def result_import(request: Request) -> Response:

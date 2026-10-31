@@ -99,6 +99,7 @@ def build_routes(static_server: StaticServer, cfg: Config) -> list[BaseRoute]:
         signed_in("/api/ais/files/{sha}/view.png", ais.view),
         signed_in("/api/ais/files/{sha}/thumb.png", ais.thumb),
         signed_in("/api/ais/trace", ais.trace, ["POST"]),
+        signed_in("/api/ais/detect", ais.detect, ["POST"]),
         signed_in("/api/ais/batches", ais.batch_list),
         signed_in("/api/ais/batches/upload", ais.batch_upload, ["POST"]),
         signed_in("/api/ais/batches/{batch_id}", ais.batch_get),
@@ -108,6 +109,7 @@ def build_routes(static_server: StaticServer, cfg: Config) -> list[BaseRoute]:
         signed_in("/api/ais/results", ais.result_add, ["POST"]),
         signed_in("/api/ais/results/import", ais.result_import, ["POST"], max_body_size=ais.UPLOAD_LIMIT_BYTES),
         signed_in("/api/ais/results/{result_id}/delete", ais.result_delete, ["POST"]),
+        signed_in("/api/ais/results/{result_id}/update", ais.result_update, ["POST"]),
         # Folders on this machine (Open path) and MATLAB: admins with a
         # session, and only when cfg.local_folders_enabled -- each handler
         # checks that too.

@@ -256,8 +256,24 @@ def bwlookup3(bw: np.ndarray, lut: np.ndarray) -> np.ndarray:
 
 
 def bwmorph_thin(bw: np.ndarray, n: float = math.inf) -> np.ndarray:
-    """bwmorph(BW, 'thin', n): both sub-iterations per pass, until no change."""
-    out = bw.astype(bool)
+    """bwmorph(BW, 'thin', n): both sub-iterations per pass, until no change.
+
+    Thinning never sets a pixel (the LUTs keep a false centre false), so only
+    the bounding box of the true pixels, plus a pixel of margin, is worked
+    on; the result is the same as thinning the whole image."""
+    full = bw.astype(bool)
+    rows, cols = np.flatnonzero(full.any(axis=1)), np.flatnonzero(full.any(axis=0))
+    if rows.size == 0:
+        return full
+    r0, r1 = max(rows[0] - 1, 0), min(rows[-1] + 2, full.shape[0])
+    c0, c1 = max(cols[0] - 1, 0), min(cols[-1] + 2, full.shape[1])
+    result = np.zeros_like(full)
+    result[r0:r1, c0:c1] = _thin(full[r0:r1, c0:c1], n)
+    return result
+
+
+def _thin(bw: np.ndarray, n: float) -> np.ndarray:
+    out = bw
     it = 0
     while it < n:
         last = out

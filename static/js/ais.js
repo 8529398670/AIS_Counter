@@ -6,7 +6,7 @@
 // user: its images, which are done, and the accepted AIS. The URL names the
 // batch and image (#ais/<id>-<folder>/<image>), so a link opens the same
 // image for anyone. ais_images.js holds the Images, Open path and Batches
-// dialogs, ais_export.js the CSV and ZIP exports.
+// dialogs, ais_export.js the CSV and ZIP exports, ais_auto.js auto mode.
 //
 // A folder picked in the browser is hashed here first (sha-256, the id the
 // server stores files under), so the batch, its duplicates and its link exist
@@ -43,6 +43,12 @@ const Ais = {
   queuedBody: null,      // a nudge that arrived while a trace was running
   firstClick: null,      // two-click mode: waiting for the second click
   batchRows: [],         // accepted AIS of the open batch
+  // What a click on the image does: "trace" a new AIS, "edit" one (its start
+  // walked or clicked anew, Enter keeps it) or "delete" one. A target is an
+  // auto candidate or a saved row: { kind: "candidate" | "row", item }.
+  tool: "trace",
+  editing: null,         // the target being edited
+  hover: null,           // the target under the pointer (Edit / Delete)
   allRows: null,         // every batch's, loaded when the table shows all
   busy: false,
 
@@ -60,6 +66,7 @@ const Ais = {
     Dom.get( "ais-gamma" ).addEventListener( "input" , () => { this.buildBitmap(); this.draw(); } );
     Dom.all( "[data-layer]" ).forEach( ( box ) => box.addEventListener( "change" , () => this.draw() ) );
     Dom.get( "ais-accept" ).addEventListener( "click" , () => this.accept() );
+    Dom.all( "[data-tool]" ).forEach( ( button ) => button.addEventListener( "click" , () => this.setTool( button.dataset.tool ) ) );
     Dom.get( "ais-reject" ).addEventListener( "click" , () => this.reject() );
     Dom.get( "ais-replay" ).addEventListener( "click" , () => this.replayInMatlab() );
     Dom.get( "ais-table-scope" ).addEventListener( "change" , () => this.loadTable() );
@@ -111,9 +118,11 @@ const Ais = {
     window.addEventListener( "popstate" , () => this.followUrl() );
     AisImages.init();
     AisExport.init();
+    AisAuto.init();
     this.renderPicker();
     this.renderTable();
     this.renderViewTools();
+    this.renderTools();
     this.loadFocus();
     this.loadHint();
     this.resize();
@@ -284,6 +293,7 @@ const Ais = {
   // options.key opens that image; options.fresh opens the Images dialog.
   async loadBatch( batch , byRel , options ) {
     const opts = options || {};
+    AisAuto.reset();
     this.batch = batch;
     // A newly opened set of images shows the single-image note again.
     if ( opts.fresh ) {
@@ -305,7 +315,7 @@ const Ais = {
     this.source = null;
     this.bitmap = null;
     this.reject();
-    Dom.get( "ais-table-scope" ).value = "batch";
+    Dom.get( "ais-table-scope" ).value = "image";
     this.allRows = null;
     await this.loadBatchRows();
     this.renderPicker();
@@ -327,6 +337,7 @@ const Ais = {
 
   // Back to no batch (the open one was deleted).
   closeBatch() {
+    AisAuto.reset();
     this.uploadToken = null;
     this.batch = null;
     this.images = [];
@@ -426,6 +437,7 @@ const Ais = {
   },
 
   renderPicker() {
+    AisAuto.refresh();
     const select = Dom.get( "ais-image" );
     Dom.clear( select );
     const shown = this.included();
@@ -490,7 +502,10 @@ const Ais = {
     this.result = null;
     this.lastBody = null;
     this.firstClick = null;
+    this.editing = null;
+    this.hover = null;
     this.renderResult();
+    this.renderTable();
     Dom.get( "ais-image" ).value = String( index );
     this.renderCurrent();
     this.setUrl( push );
@@ -914,7 +929,10 @@ const Ais = {
       try { this.canvas.setPointerCapture( e.pointerId ); } catch ( error ) { /* pointer already gone */ }
     } );
     this.canvas.addEventListener( "pointermove" , ( e ) => {
-      if ( !down ) return;
+      if ( !down ) {
+        this.hoverAt( this.toImage( e ) );
+        return;
+      }
       const dx = e.clientX - down.x;
       const dy = e.clientY - down.y;
       if ( Math.abs( dx ) + Math.abs( dy ) > 4 ) down.moved = true;
@@ -929,6 +947,7 @@ const Ais = {
       down = null;
       if ( wasClick && e.button === 0 ) this.onClick( this.toImage( e ) );
     } );
+    this.canvas.addEventListener( "pointerleave" , () => this.hoverAt( null ) );
     this.canvas.addEventListener( "auxclick" , ( e ) => e.preventDefault() );
     this.canvas.addEventListener( "wheel" , ( e ) => {
       if ( !this.bitmap ) return;
@@ -951,6 +970,14 @@ const Ais = {
     if ( tag === "input" || tag === "select" || tag === "textarea" ) return;
     if ( event.ctrlKey || event.metaKey || event.altKey ) return;
     const key = event.key;
+    // Esc: drop an edit, then the Edit / Delete tool, then (auto) the run.
+    if ( key === "Escape" && ( this.editing || this.tool !== "trace" ) ) {
+      event.preventDefault();
+      if ( this.editing ) this.reject();
+      else this.setTool( "trace" );
+      return;
+    }
+    if ( AisAuto.onKey( event ) ) return;
     const arrows = { ArrowLeft: [ -1 , 0 ] , ArrowRight: [ 1 , 0 ] , ArrowUp: [ 0 , -1 ] , ArrowDown: [ 0 , 1 ] };
     if ( arrows[ key ] && this.pending() ) {
       event.preventDefault();
@@ -960,7 +987,6 @@ const Ais = {
     }
     if ( key === "Enter" ) { event.preventDefault(); this.accept(); }
     else if ( key === "n" || key === "N" ) this.reject();
-    else if ( key === "d" || key === "D" ) this.toggleDone();
     else if ( key === "ArrowRight" || key === "PageDown" ) { event.preventDefault(); this.step( 1 ); }
     else if ( key === "ArrowLeft" || key === "PageUp" ) { event.preventDefault(); this.step( -1 ); }
     else if ( key === "+" || key === "=" ) this.zoomBy( 1.25 );
@@ -969,6 +995,9 @@ const Ais = {
     else if ( key === "1" ) this.zoomTo( 1 );
     else if ( key === "l" || key === "L" ) this.setLocked( !this.locked );
     else if ( key === "f" || key === "F" ) this.setFocus( !this.focus );
+    else if ( key === "t" || key === "T" ) this.setTool( "trace" );
+    else if ( key === "e" || key === "E" ) this.setTool( "edit" );
+    else if ( key === "d" || key === "D" ) this.setTool( "delete" );
   },
 
   // --- tracing -------------------------------------------------------------
@@ -977,6 +1006,23 @@ const Ais = {
     const entry = this.images[ this.index ];
     if ( !entry || !this.bitmap ) return;
     if ( point.x < 0 || point.y < 0 || point.x >= this.bitmap.width || point.y >= this.bitmap.height ) return;
+    if ( this.tool === "delete" ) {
+      const target = this.nearestTrace( point );
+      if ( target ) this.deleteTrace( target );
+      return;
+    }
+    if ( this.tool === "edit" ) {
+      // A trace (other than the one being edited) is picked; anywhere else,
+      // or on the edited trace itself, moves its start there.
+      const target = this.nearestTrace( point );
+      if ( target && !( this.editing && target.item === this.editing.item ) ) {
+        this.startEdit( target );
+        return;
+      }
+      if ( !this.editing ) return;
+    } else if ( AisAuto.onClick( point ) ) {
+      return;
+    }
     // Canvas pixel j spans [j, j+1); in MATLAB axes its centre is j+1.
     const click = [ point.x + 0.5 , point.y + 0.5 ];
     const body = this.firstClick ? { click: this.firstClick , click2: click } : { click: click };
@@ -1122,6 +1168,7 @@ const Ais = {
     ( r.notes || [] ).forEach( ( note ) => notes.appendChild( Dom.el( "li" , { text: note } ) ) );
     this.renderProfile( r.profile );
     Dom.get( "ais-accept" ).disabled = !( r.ok && !waitingForSecond );
+    Dom.text( Dom.get( "ais-accept" ).querySelector( "span" ) , I18n.get( this.editing ? "ais.update" : "ais.accept" ) );
     Dom.get( "ais-replay" ).disabled = !( r.path && !waitingForSecond );
   },
 
@@ -1163,10 +1210,31 @@ const Ais = {
     box.appendChild( svg );
   },
 
+  // Enter / Accept: a new row, or (Edit tool) the edited trace replaced.
   async accept() {
     const r = this.result;
     const entry = this.images[ this.index ];
     if ( !r || !r.ok || !entry || !this.batch || this.busy ) return;
+    try {
+      if ( this.editing ) await this.commitEdit( entry , r );
+      else await this.saveRow( entry , this.rowFor( entry , r , "" ) );
+    } catch ( error ) {
+      App.showError( error.message );
+      return;
+    }
+    this.result = null;
+    this.lastBody = null;
+    this.editing = null;
+    this.status( "" );
+    this.renderResult();
+    this.renderTable();
+    this.renderPicker();
+    this.draw();
+  },
+
+  // The row the server keeps for an accepted trace r on entry. origin is
+  // "auto" for one auto mode found, empty for a click.
+  rowFor( entry , r , origin ) {
     const m = r.measures;
     const traced = entry.files[ this.traced( entry ) ];
     const row = {
@@ -1190,23 +1258,28 @@ const Ais = {
       smooth: r.settings.smooth,
       notes: ( r.notes || [] ).join( "; " ),
       pixels: r.pixels,
+      origin: origin,
+      width_um: r.shape ? r.shape.width_um : null,
+      brightness: r.shape ? r.shape.brightness : null,
     };
     // The constants it was measured with (app/analysis/ais_auto.py Settings).
     AisExport.settingCols.forEach( ( key ) => { if ( key !== "smooth" ) row[ key ] = r.settings[ key ]; } );
-    try {
-      const saved = await Api.post( "/api/ais/results" , { batch_id: this.batch.id , image: entry.key , row: row } );
-      this.batchRows.push( saved );
-      if ( this.allRows ) this.allRows.push( saved );
-    } catch ( error ) {
-      App.showError( error.message );
-      return;
-    }
-    this.result = null;
-    this.lastBody = null;
-    this.renderResult();
-    this.renderTable();
-    this.renderPicker();
-    this.draw();
+    return row;
+  },
+
+  // Store a row for entry; throws what the server said. The caller redraws.
+  async saveRow( entry , row ) {
+    const saved = await Api.post( "/api/ais/results" , { batch_id: this.batch.id , image: entry.key , row: row } );
+    this.batchRows.push( saved );
+    if ( this.allRows ) this.allRows.push( saved );
+    return saved;
+  },
+
+  // Mark entry done (shared progress), unless it is already.
+  async markDone( entry ) {
+    if ( this.isMarkedDone( entry ) ) return;
+    const out = await Api.post( "/api/ais/batches/" + this.batch.id + "/done" , { image: entry.key , done: true } );
+    this.batch.skipped = out.skipped;
   },
 
   reject() {
@@ -1214,9 +1287,107 @@ const Ais = {
     this.lastBody = null;
     this.queuedBody = null;
     this.firstClick = null;
+    this.editing = null;
     this.status( "" );
     this.renderResult();
     this.draw();
+  },
+
+  // --- the Trace / Edit / Delete tools ---------------------------------------------
+
+  setTool( tool ) {
+    const next = tool === this.tool && tool !== "trace" ? "trace" : tool;
+    if ( this.editing && next !== "edit" ) this.reject();
+    this.tool = next;
+    this.hover = null;
+    this.renderTools();
+    this.draw();
+  },
+
+  renderTools() {
+    Dom.all( "[data-tool]" ).forEach( ( button ) => {
+      const on = button.dataset.tool === this.tool;
+      button.classList.toggle( "active" , on );
+      button.setAttribute( "aria-pressed" , String( on ) );
+    } );
+    this.canvas.classList.toggle( "ais-tool-delete" , this.tool === "delete" );
+    this.canvas.classList.toggle( "ais-hit" , Boolean( this.hover ) );
+  },
+
+  // Every trace on the image a tool can act on: auto's candidates, then the
+  // saved rows. Each { kind, item, pixels }.
+  traces() {
+    const entry = this.images[ this.index ];
+    if ( !entry ) return [];
+    return AisAuto.shownCandidates().map( ( c ) => ( { kind: "candidate" , item: c , pixels: c.result.pixels } ) )
+      .concat( this.savedRows( entry ).map( ( row ) => ( { kind: "row" , item: row , pixels: row.pixels } ) ) );
+  },
+
+  // The trace within a few screen pixels of point (image units), or null.
+  nearestTrace( point ) {
+    const reach = Math.max( 2 , 8 / this.view.scale );
+    let best = null;
+    let bestD = reach * reach;
+    this.traces().forEach( ( target ) => {
+      ( target.pixels || [] ).forEach( ( p ) => {
+        const dx = p[ 0 ] - 0.5 - point.x;
+        const dy = p[ 1 ] - 0.5 - point.y;
+        const d = dx * dx + dy * dy;
+        if ( d <= bestD ) {
+          bestD = d;
+          best = target;
+        }
+      } );
+    } );
+    return best;
+  },
+
+  // Edit and Delete lock on to the trace under the pointer.
+  hoverAt( point ) {
+    const target = point && this.tool !== "trace" ? this.nearestTrace( point ) : null;
+    if ( ( target && target.item ) === ( this.hover && this.hover.item ) ) return;
+    this.hover = target;
+    this.renderTools();
+    this.draw();
+  },
+
+  // Edit: trace the target again from its start, which the arrow keys then
+  // walk and a click moves; Enter keeps the new trace (commitEdit).
+  startEdit( target ) {
+    const item = target.item;
+    let body;
+    if ( target.kind === "candidate" ) {
+      body = { click: ( item.result.seed || item.result.clicks[ 0 ] ).slice() };
+    } else {
+      body = { click: [ item.click_x , item.click_y ] };
+      if ( item.click2_x != null && ( item.click2_x !== item.click_x || item.click2_y !== item.click_y ) ) {
+        body.click2 = [ item.click2_x , item.click2_y ];
+      }
+    }
+    this.editing = target;
+    this.firstClick = null;
+    this.traceBody( body );
+  },
+
+  async commitEdit( entry , r ) {
+    const target = this.editing;
+    if ( target.kind === "candidate" ) {
+      AisAuto.replaceCandidate( target.item , Object.assign( r , { seed: r.clicks[ 0 ] } ) );
+      return;
+    }
+    const old = target.item;
+    const saved = await Api.post( "/api/ais/results/" + old.id + "/update" , { row: this.rowFor( entry , r , old.origin || "" ) } );
+    const swap = ( list ) => list && list.forEach( ( row , i ) => { if ( row.id === saved.id ) list[ i ] = saved; } );
+    swap( this.batchRows );
+    swap( this.allRows );
+  },
+
+  deleteTrace( target ) {
+    this.hover = null;
+    if ( this.editing && this.editing.item === target.item ) this.reject();
+    if ( target.kind === "candidate" ) AisAuto.removeCandidate( target.item );
+    else this.deleteRow( target.item );
+    this.renderTools();
   },
 
   // --- results (on the server) -------------------------------------------------
@@ -1246,10 +1417,16 @@ const Ais = {
     this.renderTable();
   },
 
-  // The rows the table shows and the exports write: this batch's, or all.
+  // The rows the table shows and the exports write: the image on screen's,
+  // this batch's, or all.
   shownRows() {
-    const all = Dom.get( "ais-table-scope" ).value === "all" || !this.batch;
-    return all ? ( this.allRows || [] ) : this.batchRows;
+    const scope = Dom.get( "ais-table-scope" ).value;
+    if ( scope === "all" || !this.batch ) return this.allRows || [];
+    if ( scope === "image" ) {
+      const entry = this.images[ this.index ];
+      return entry ? this.savedRows( entry ) : [];
+    }
+    return this.batchRows;
   },
 
   // Newest first.
@@ -1276,7 +1453,7 @@ const Ais = {
         Dom.el( "td" , { text: this.fmt( row.max_um ) } ),
         Dom.el( "td" , { text: this.fmt( row.threshold ) } ),
         Dom.el( "td" , { text: "(" + row.click_x + ", " + row.click_y + ")" } ),
-        Dom.el( "td" , { text: row.source || "pair" } ),
+        Dom.el( "td" , { text: ( row.source || "pair" ) + ( row.origin === "auto" ? " · " + I18n.get( "ais.auto_origin" ) : "" ) } ),
         Dom.el( "td" , { text: row.batch_name || "" , class: "text-truncate ais-batch-name" } ),
         Dom.el( "td" , { children: [ del ] } ),
       ] } ) );
@@ -1284,15 +1461,21 @@ const Ais = {
     Dom.get( "ais-export" ).disabled = !this.shownRows().length;
   },
 
+  // Delete a saved row; the server renumbers the rest of its image 1..k.
   async deleteRow( row ) {
+    let out;
     try {
-      await Api.post( "/api/ais/results/" + row.id + "/delete" , {} );
+      out = await Api.post( "/api/ais/results/" + row.id + "/delete" , {} );
     } catch ( error ) {
       App.showError( error.message );
       return;
     }
-    this.batchRows = this.batchRows.filter( ( r ) => r.id !== row.id );
-    if ( this.allRows ) this.allRows = this.allRows.filter( ( r ) => r.id !== row.id );
+    if ( this.editing && this.editing.item === row ) this.reject();
+    const renumbered = new Map( ( out.renumbered || [] ).map( ( r ) => [ r.id , r.n ] ) );
+    const keep = ( list ) => list.filter( ( r ) => r.id !== row.id ).map( ( r ) => renumbered.has( r.id ) ? Object.assign( r , { n: renumbered.get( r.id ) } ) : r );
+    this.batchRows = keep( this.batchRows );
+    if ( this.allRows ) this.allRows = keep( this.allRows );
+    AisAuto.rowDeleted();
     this.renderTable();
     this.renderPicker();
     this.draw();
@@ -1334,6 +1517,19 @@ const Ais = {
           ctx.fillText( String( row.n ) , p[ 0 ] + 3 / s , p[ 1 ] - 3 / s );
         }
       } );
+    }
+
+    AisAuto.draw( ctx , s , lw );
+
+    // Edit / Delete: the trace under the pointer, thick; the one being edited,
+    // dashed white under its new trace.
+    if ( this.hover ) {
+      this.polyline( this.hover.pixels , this.tool === "delete" ? "rgba(255, 50, 50, 1)" : "rgba(255, 190, 0, 1)" , lw * 3 );
+    }
+    if ( this.editing ) {
+      ctx.setLineDash( [ 4 / s , 3 / s ] );
+      this.polyline( this.editing.pixels , "rgba(255, 255, 255, 0.9)" , lw * 1.5 );
+      ctx.setLineDash( [] );
     }
 
     const r = this.result;

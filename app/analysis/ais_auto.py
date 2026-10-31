@@ -204,8 +204,9 @@ def _click_to_pixel(x: float, y: float, shape: tuple[int, int]) -> tuple[int, in
     return X, Y
 
 
-def _select(L: np.ndarray, X: int, Y: int) -> np.ndarray:
-    """Lines 105-115: the clicked component, or the one nearest the click."""
+def _select(L: np.ndarray, X: int, Y: int) -> int:
+    """Lines 105-115: the label of the clicked component, or of the one
+    nearest the click."""
     I = L[Y - 1, X - 1]
     if I == 0:
         bw = L > 0
@@ -213,7 +214,15 @@ def _select(L: np.ndarray, X: int, Y: int) -> np.ndarray:
             raise MatlabError("Index in position 1 is invalid (no components above 70 px)")
         r, c = ml.bwdist_nearest(bw, Y - 1, X - 1)
         I = L[r, c]
-    return L == I
+    return int(I)
+
+
+def _cached(cache: dict | None, key: tuple, make):
+    if cache is None:
+        return make()
+    if key not in cache:
+        cache[key] = make()
+    return cache[key]
 
 
 def segment(prep: PreparedImage, threshold: float, settings: Settings = DEFAULT) -> np.ndarray:
@@ -226,9 +235,12 @@ def segment(prep: PreparedImage, threshold: float, settings: Settings = DEFAULT)
 
 def trace(prep: PreparedImage, click: tuple[float, float],
           click2: tuple[float, float] | None = None,
-          threshold: float = 0.01, settings: Settings = DEFAULT) -> Trace:
+          threshold: float = 0.01, settings: Settings = DEFAULT, cache: dict | None = None) -> Trace:
     """Lines 47-246. click is (x, y) in MATLAB axes coordinates. click2 is the
-    click the original asks for after re-thresholding; None repeats click."""
+    click the original asks for after re-thresholding; None repeats click.
+    cache: auto mode (detect.py) clicks one image many times with the same
+    prep and settings, and passes a dict that keeps each threshold's labels
+    and each component's skeleton across those clicks."""
     threshold_initial = threshold
     if threshold == 0:
         threshold = ml.graythresh(prep.smooth)                        # line 48
@@ -238,10 +250,11 @@ def trace(prep: PreparedImage, click: tuple[float, float],
     loop = 0
     max_ais = prep.max_all
     while True:                                                       # line 55
-        L = segment(prep, threshold, settings)
+        L = _cached(cache, ("L", threshold), lambda: segment(prep, threshold, settings))
         X, Y = _click_to_pixel(*queue[loop], prep.pic.shape)
         clicks.append((X, Y))
-        sel = _select(L, X, Y)
+        label = _select(L, X, Y)
+        sel = L == label
         if loop == 0:                                                 # line 124
             max_ais = float((sel * prep.D).max())
             if prep.max_all == max_ais:
@@ -251,7 +264,7 @@ def trace(prep: PreparedImage, click: tuple[float, float],
         else:
             break
 
-    skel = ml.bwmorph_thin(sel)                                       # line 142
+    skel = _cached(cache, ("skel", threshold, label), lambda: ml.bwmorph_thin(sel))   # line 142
     X, Y = clicks[-1]
     r0, c0 = ml.bwdist_nearest(skel, Y - 1, X - 1)                    # lines 166-168
     H, W = skel.shape

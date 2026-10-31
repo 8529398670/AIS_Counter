@@ -7,7 +7,7 @@ const AisExport = {
   cols: [ "batch_name" , "batch_id" , "image" , "n" , "file" , "source" , "length_um" , "start_um" , "end_um" , "mid_um" , "max_um" , "arc_um" ,
     "threshold_initial" , "threshold" , "click_x" , "click_y" , "click2_x" , "click2_y" , "profile_points" ,
     "smooth" , "pixconv" , "f" , "kernel" , "sigma" , "strel" , "min_pixels" , "max_path" , "max_passes" , "spline_p" , "window_um" ,
-    "accepted_at" , "notes" ],
+    "width_um" , "brightness" , "origin" , "accepted_at" , "edited_at" , "notes" ],
   // The method settings each row was measured with; rows from before these
   // were saved leave them blank.
   settingCols: [ "smooth" , "pixconv" , "f" , "kernel" , "sigma" , "strel" , "min_pixels" , "max_path" , "max_passes" , "spline_p" , "window_um" ],
@@ -25,10 +25,13 @@ const AisExport = {
     return [ this.cols.join( "," ) ].concat( rows.map( ( row ) => this.cols.map( ( c ) => quote( row[ c ] ) ).join( "," ) ) ).join( "\n" ) + "\n";
   },
 
-  // "ais_<batch>_<yyyy-mm-dd>" for the current batch, "ais_all_<date>" otherwise.
+  // "ais_<batch>_<yyyy-mm-dd>" for the current batch, "ais_<batch>_<image>_<date>"
+  // for the image on screen, "ais_all_<date>" otherwise.
   baseName() {
-    const all = Dom.get( "ais-table-scope" ).value === "all" || !Ais.batch;
-    const label = all ? "all" : Ais.batch.name;
+    const scope = Dom.get( "ais-table-scope" ).value;
+    const all = scope === "all" || !Ais.batch;
+    const entry = Ais.images[ Ais.index ];
+    const label = all ? "all" : scope === "image" && entry ? Ais.batch.name + "_" + entry.key : Ais.batch.name;
     return "ais_" + this.safe( label ) + "_" + new Date().toISOString().slice( 0 , 10 );
   },
 

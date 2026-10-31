@@ -168,6 +168,13 @@
               <button id="ais-images-open" class="btn btn-outline-secondary ais-focus-hide" type="button" disabled>
                 <i class="bi bi-grid-3x3-gap" aria-hidden="true"></i> <span data-i18n="ais.images"></span> <span id="ais-images-count" class="badge text-bg-secondary"></span>
               </button>
+              <!-- Auto mode (static/js/ais_auto.js): every AIS on every image, as Settings > Auto mode says. -->
+              <button id="ais-auto-start" class="btn btn-outline-primary ais-focus-hide" type="button" disabled data-i18n-attr="title:ais.auto_start_help">
+                <i class="bi bi-magic" aria-hidden="true"></i> <span data-i18n="ais.auto"></span>
+              </button>
+              <button id="ais-auto-review" class="btn btn-outline-secondary ais-focus-hide" type="button" hidden data-i18n-attr="title:ais.auto_review_help">
+                <i class="bi bi-list-check" aria-hidden="true"></i> <span data-i18n="ais.auto_review"></span> <span id="ais-auto-review-count" class="badge text-bg-secondary"></span>
+              </button>
               <div class="input-group ais-picker">
                 <button id="ais-prev" class="btn btn-outline-secondary" type="button" data-i18n-attr="title:ais.prev"><i class="bi bi-chevron-left" aria-hidden="true"></i></button>
                 <select id="ais-image" class="form-select" data-i18n-attr="aria-label:ais.image_label"></select>
@@ -218,6 +225,12 @@
                   <button id="ais-view-reset" class="btn btn-dark" type="button" data-i18n-attr="title:ais.view_reset,aria-label:ais.view_reset"><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i></button>
                   <button id="ais-focus" class="btn btn-dark" type="button" data-i18n-attr="title:ais.focus,aria-label:ais.focus" aria-pressed="false"><i class="bi bi-arrows-fullscreen" aria-hidden="true"></i></button>
                 </div>
+                <!-- What a click on the image does (Ais.setTool): trace a new AIS, edit one, or delete one. -->
+                <div class="ais-tools btn-group btn-group-sm" role="group" data-i18n-attr="aria-label:ais.tools">
+                  <button class="btn btn-dark" type="button" data-tool="trace" data-i18n-attr="title:ais.tool_trace,aria-label:ais.tool_trace" aria-pressed="true"><i class="bi bi-crosshair" aria-hidden="true"></i></button>
+                  <button class="btn btn-dark" type="button" data-tool="edit" data-i18n-attr="title:ais.tool_edit,aria-label:ais.tool_edit" aria-pressed="false"><i class="bi bi-pencil" aria-hidden="true"></i></button>
+                  <button class="btn btn-dark" type="button" data-tool="delete" data-i18n-attr="title:ais.tool_delete,aria-label:ais.tool_delete" aria-pressed="false"><i class="bi bi-eraser" aria-hidden="true"></i></button>
+                </div>
               </div>
               <div class="card-footer ais-layers small">
                 <span id="ais-hint" class="ais-hint text-body-secondary"><span data-i18n="ais.hint"></span><button id="ais-hint-close" class="btn-close" type="button" data-i18n-attr="title:ais.hint_close,aria-label:ais.hint_close"></button></span>
@@ -235,6 +248,41 @@
 
             <div class="card ais-result-card">
               <div class="card-body">
+                <!-- Auto mode: progress, then this image's candidates (to tick) or auto rows (to clean up). -->
+                <div id="ais-auto-panel" class="ais-auto-panel mb-3" hidden>
+                  <div class="d-flex align-items-center gap-2 mb-2">
+                    <h2 class="h5 card-title mb-0 me-auto"><i class="bi bi-magic me-1" aria-hidden="true"></i><span data-i18n="ais.auto"></span></h2>
+                    <button id="ais-auto-stop" class="btn btn-outline-danger btn-sm" type="button" data-i18n-attr="title:ais.auto_stop_help"><i class="bi bi-stop-fill" aria-hidden="true"></i> <span data-i18n="ais.auto_stop"></span></button>
+                  </div>
+                  <p id="ais-auto-progress" class="small text-body-secondary mb-2"></p>
+                  <div id="ais-auto-busy" class="small text-body-secondary mb-2" hidden><span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span><span id="ais-auto-busy-text"></span></div>
+                  <p id="ais-auto-help" class="small mb-2"></p>
+                  <!-- Confirm: Settings > Auto mode's start and filters, to tune on the spot (ais_auto.js). -->
+                  <div id="ais-auto-quick" class="ais-auto-quick small mb-2" hidden>
+                    <label class="ais-auto-quick-start"><span data-i18n="ais.auto_quick_start"></span>
+                      <select id="ais-auto-quick-start" class="form-select form-select-sm" data-i18n-attr="title:settings.auto_start_label">
+                        <option value="both" data-i18n="settings.auto_start_both"></option>
+                        <option value="brighter" data-i18n="settings.auto_start_brighter"></option>
+                        <option value="dimmer" data-i18n="settings.auto_start_dimmer"></option>
+                      </select>
+                    </label>
+                    <label><span data-i18n="ais.auto_quick_length"></span>
+                      <span class="input-group input-group-sm"><input id="ais-auto-quick-length" class="form-control" type="number" min="0" max="1000" step="0.1" data-i18n-attr="title:settings.auto_min_length_label" /><span class="input-group-text">µm</span></span>
+                    </label>
+                    <label><span data-i18n="ais.auto_quick_brightness"></span>
+                      <span class="input-group input-group-sm"><input id="ais-auto-quick-brightness" class="form-control" type="number" min="0" max="100" step="1" data-i18n-attr="title:settings.auto_min_brightness_label" /><span class="input-group-text">%</span></span>
+                    </label>
+                    <label><span data-i18n="ais.auto_quick_width"></span>
+                      <span class="input-group input-group-sm"><input id="ais-auto-quick-width" class="form-control" type="number" min="0" max="20" step="0.1" data-i18n-attr="title:settings.auto_min_width_label" /><span class="input-group-text">µm</span></span>
+                    </label>
+                  </div>
+                  <ul id="ais-auto-list" class="list-group list-group-flush small ais-auto-list"></ul>
+                  <div class="row-actions mt-2" id="ais-auto-actions" hidden>
+                    <button id="ais-auto-next" class="btn btn-primary btn-sm" type="button"><i class="bi bi-check-lg" aria-hidden="true"></i> <span id="ais-auto-next-text"></span></button>
+                    <button id="ais-auto-skip" class="btn btn-outline-secondary btn-sm" type="button"><i class="bi bi-skip-forward" aria-hidden="true"></i> <span data-i18n="ais.auto_skip"></span></button>
+                  </div>
+                  <hr />
+                </div>
                 <h2 class="h5 card-title" data-i18n="ais.result_heading"></h2>
                 <p id="ais-result-none" class="text-body-secondary small" data-i18n="ais.result_none"></p>
                 <div id="ais-result" hidden>
@@ -258,6 +306,7 @@
               <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
                 <h2 class="h5 card-title mb-0 me-auto" data-i18n="ais.results_heading"></h2>
                 <select id="ais-table-scope" class="form-select form-select-sm w-auto" data-i18n-attr="aria-label:ais.scope_label">
+                  <option value="image" data-i18n="ais.scope_image"></option>
                   <option value="batch" data-i18n="ais.scope_batch"></option>
                   <option value="all" data-i18n="ais.scope_all"></option>
                 </select>
@@ -424,6 +473,59 @@
                 <label for="settings-line-width" class="form-label"><span data-i18n="settings.line_width_label"></span> <span id="settings-line-width-value" class="text-body-secondary"></span></label>
                 <input id="settings-line-width" class="form-range" type="range" min="0.5" max="6" step="0.5" value="1.5" aria-describedby="settings-line-width-help" />
                 <div id="settings-line-width-help" class="form-text" data-i18n="settings.line_width_help"></div>
+              </div>
+            </fieldset>
+            <!-- Auto mode on the Process screen (static/js/ais_auto.js): it runs
+                 the method chosen below, whatever it is. -->
+            <fieldset class="mb-3">
+              <legend class="h6" data-i18n="settings.auto"></legend>
+              <p class="form-text mt-0" data-i18n="settings.auto_help"></p>
+              <div class="mb-3 settings-field">
+                <label for="settings-auto-review" class="form-label" data-i18n="settings.auto_review_label"></label>
+                <select id="settings-auto-review" class="form-select" aria-describedby="settings-auto-review-help">
+                  <option value="each" data-i18n="settings.auto_review_each"></option>
+                  <option value="end" data-i18n="settings.auto_review_end"></option>
+                  <option value="all" data-i18n="settings.auto_review_all"></option>
+                </select>
+                <div id="settings-auto-review-help" class="form-text" data-i18n="settings.auto_review_help"></div>
+              </div>
+              <div class="mb-3 settings-field">
+                <label for="settings-auto-start" class="form-label" data-i18n="settings.auto_start_label"></label>
+                <select id="settings-auto-start" class="form-select" aria-describedby="settings-auto-start-help">
+                  <option value="both" data-i18n="settings.auto_start_both"></option>
+                  <option value="brighter" data-i18n="settings.auto_start_brighter"></option>
+                  <option value="dimmer" data-i18n="settings.auto_start_dimmer"></option>
+                </select>
+                <div id="settings-auto-start-help" class="form-text" data-i18n="settings.auto_start_help"></div>
+              </div>
+              <div class="mb-3 settings-field">
+                <label for="settings-auto-min-length" class="form-label" data-i18n="settings.auto_min_length_label"></label>
+                <div class="input-group">
+                  <input id="settings-auto-min-length" class="form-control" type="number" min="0" max="1000" step="0.1" value="5" aria-describedby="settings-auto-min-length-help" />
+                  <span class="input-group-text">µm</span>
+                </div>
+                <div id="settings-auto-min-length-help" class="form-text" data-i18n="settings.auto_min_length_help"></div>
+              </div>
+              <div class="mb-3 settings-field">
+                <label for="settings-auto-min-brightness" class="form-label" data-i18n="settings.auto_min_brightness_label"></label>
+                <div class="input-group">
+                  <input id="settings-auto-min-brightness" class="form-control" type="number" min="0" max="100" step="1" value="30" aria-describedby="settings-auto-min-brightness-help" />
+                  <span class="input-group-text">%</span>
+                </div>
+                <div id="settings-auto-min-brightness-help" class="form-text" data-i18n="settings.auto_min_brightness_help"></div>
+              </div>
+              <div class="mb-3 settings-field">
+                <label for="settings-auto-min-width" class="form-label" data-i18n="settings.auto_min_width_label"></label>
+                <div class="input-group">
+                  <input id="settings-auto-min-width" class="form-control" type="number" min="0" max="20" step="0.1" value="2.4" aria-describedby="settings-auto-min-width-help" />
+                  <span class="input-group-text">µm</span>
+                </div>
+                <div id="settings-auto-min-width-help" class="form-text" data-i18n="settings.auto_min_width_help"></div>
+              </div>
+              <div class="form-check settings-field">
+                <input id="settings-auto-skip-done" class="form-check-input" type="checkbox" checked aria-describedby="settings-auto-skip-done-help" />
+                <label for="settings-auto-skip-done" class="form-check-label" data-i18n="settings.auto_skip_done_label"></label>
+                <div id="settings-auto-skip-done-help" class="form-text" data-i18n="settings.auto_skip_done_help"></div>
               </div>
             </fieldset>
             <div class="mb-3 settings-field">
@@ -848,6 +950,7 @@
   <script src="/js/ais.js"></script>
   <script src="/js/ais_images.js"></script>
   <script src="/js/ais_export.js"></script>
+  <script src="/js/ais_auto.js"></script>
   <script src="/js/app.js"></script>
 </body>
 </html>

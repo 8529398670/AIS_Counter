@@ -63,6 +63,41 @@ the start of an AIS gives the original's trace and length. **Enter** accepts,
   and re-trace each time; Enter keeps the latest. PageUp/PageDown (and ←/→
   when nothing is pending) switch images. An image is complete once an AIS on
   it is accepted or it is marked done (D).
+- **Auto.** Finds every AIS on every image of the batch without clicks,
+  with the method and settings on the Settings screen
+  (`app/analysis/detect.py`, `static/js/ais_auto.js`). Every blob the
+  threshold leaves is traced from one end of its skeleton, so a found AIS is
+  exactly what a click at that point gives. *Settings > Auto mode* picks:
+  - **Confirm each image.** Stops on every image with the candidates in
+    pink, numbered as they will be saved. Click one to untick it, Enter
+    saves the ticked ones and marks the image done, N skips it.
+  - **Review at the end.** Saves everything found, then goes back over the
+    images to delete wrong ones and add missed ones; Enter marks the image
+    done. The **Review** button picks this up later.
+  - **Accept everything.** Saves it all without stopping.
+
+  In every mode, a click away from the candidates traces one by hand as
+  usual, and Esc stops. Other settings:
+  - **Where a trace starts:** both ends (keep the better trace), the
+    brighter end, or the dimmer end.
+  - **Shortest, dimmest and thinnest AIS auto keeps:** 5 µm, 30 % and
+    2.4 µm by default. Brightness is the measured AIS's mean raw intensity as
+    a % of the image's 99.9th percentile. Width is the median of twice the
+    distance to the blob's edge. Background specks are dim and thin, so
+    these drop most of them; each candidate shows both numbers.
+  - **Skip images already done.**
+
+  Rows have `origin` = `auto` in the table and CSV, which also has
+  `width_um` and `brightness` for every row. AIS already accepted on
+  an image are not found again. An image takes about 9 s, and the next
+  image is worked on while you check the current one.
+- **Edit and Delete.** Tools at the top of the image (T / E / X) act on
+  any trace, saved or pink.
+  - **Delete:** locks on to the trace under the pointer, and a click
+    removes it. Deleting renumbers the rest of the image 1..k.
+  - **Edit:** click a trace, then walk its start with the arrow keys or
+    click a new start. Enter updates it (a saved AIS keeps its number) and
+    Esc cancels.
 - **Verify in MATLAB** (admins on this machine). Per image: *Open original*
   (MATLAB with `ais_auto.m` in the Editor and the exact call on the
   clipboard — run it yourself) or *Run original*. After a web click, *Replay in

@@ -31,6 +31,7 @@ def test_click_returns_trace_and_length():
     assert out["ok"], out["error"]
     assert len(out["path"]) > 20
     assert out["measures"]["length_str"] == f"{out['measures']['length_um']:.6g}"
+    assert out["shape"]["width_um"] > 0 and out["shape"]["brightness"] > 0
     assert out["clicks"] == [[38, 101], [38, 101]]
 
 

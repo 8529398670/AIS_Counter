@@ -249,6 +249,13 @@ th { color: var(--bs-secondary-color); font-size: 0.8rem; text-transform: upperc
 .ais-status #ais-status-close { position: absolute; top: 0.45rem; right: 0.45rem; font-size: 0.55rem; pointer-events: auto; }
 .ais-hint { position: relative; flex: 1 1 20rem; padding-right: 1.5rem; }
 .ais-hint .btn-close { position: absolute; top: 0; right: 0; font-size: 0.6rem; }
+/* Auto mode's candidates or saved AIS for the image on screen. */
+.ais-auto-list { max-height: 16rem; overflow-y: auto; }
+.ais-auto-quick { display: grid; grid-template-columns: repeat( 3 , minmax( 0 , 1fr ) ); gap: 0.35rem 0.5rem; }
+.ais-auto-quick[hidden] { display: none; }
+.ais-auto-quick label { display: flex; flex-direction: column; gap: 0.15rem; margin: 0; }
+.ais-auto-quick .ais-auto-quick-start { grid-column: 1 / -1; }
+.ais-auto-n { min-width: 2.2rem; font-variant-numeric: tabular-nums; }
 .ais-length { font-size: 2.25rem; font-weight: 600; line-height: 1.1; margin-bottom: 0.75rem; font-variant-numeric: tabular-nums; }
 .ais-measures { display: grid; grid-template-columns: auto 1fr; gap: 0.15rem 0.75rem; margin-bottom: 0.75rem; }
 .ais-measures dt { font-weight: 500; color: var(--bs-secondary-color); }
@@ -273,6 +280,14 @@ th { color: var(--bs-secondary-color); font-size: 0.8rem; text-transform: upperc
 /* Pan and zoom tools, floating on the (always dark) stage. */
 .ais-viewtools { position: absolute; top: 0.75rem; right: 0.75rem; opacity: 0.85; }
 .ais-viewtools:hover { opacity: 1; }
+/* Trace / Edit / Delete (Ais.setTool), a row left of the view tools. */
+.ais-tools { position: absolute; top: 0.75rem; right: 4.6rem; opacity: 0.85; }
+.ais-tools:hover { opacity: 1; }
+.ais-tools .btn[data-tool="trace"].active { background: var(--bs-primary); border-color: var(--bs-primary); }
+.ais-tools .btn[data-tool="edit"].active { background: var(--bs-warning); border-color: var(--bs-warning); color: #000; }
+.ais-tools .btn[data-tool="delete"].active { background: var(--bs-danger); border-color: var(--bs-danger); }
+.ais-stage canvas.ais-tool-delete { cursor: default; }
+.ais-stage canvas.ais-hit { cursor: pointer; }
 .ais-zoom-level { font-size: 0.7rem; font-variant-numeric: tabular-nums; min-width: 3.2rem; padding-left: 0.25rem; padding-right: 0.25rem; }
 /* Focus mode (Ais.setFocus): only the image, the picker and the result. */
 .ais-focus .app-navbar, .ais-focus .app-sidebar, .ais-focus .ais-focus-hide { display: none !important; }

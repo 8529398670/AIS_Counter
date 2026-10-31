@@ -5,8 +5,8 @@
 // one is an entry in methods below plus a <fieldset data-method="key"> of its
 // controls in index.html; only the chosen method's fieldset shows.
 //
-// General settings (minimum length, trace thickness) apply whatever the
-// method, and are kept apart from any one method's.
+// General settings (minimum length, trace thickness, and how auto mode runs)
+// apply whatever the method, and are kept apart from any one method's.
 //
 // Like the theme, the choice is remembered in this browser (localStorage)
 // only. Move it onto the account if it should follow a person to every
@@ -36,11 +36,19 @@ const Settings = {
       constants: [ "pixconv" , "f" , "kernel" , "sigma" , "strel" , "min_pixels" , "max_path" , "max_passes" , "spline_p" , "window_um" ] },
   ],
 
-  // Settings for every method: field -> default, control id and allowed range.
+  // Settings for every method: field -> default, control id and allowed range
+  // (numbers) or choices (text). A true/false default is a checkbox.
   general: {
-    defaults: { min_length: 0 , line_width: 1.5 },
-    controls: { min_length: "settings-min-length" , line_width: "settings-line-width" },
-    ranges: { min_length: [ 0 , 1000 ] , line_width: [ 0.5 , 6 ] },
+    defaults: { min_length: 0 , line_width: 1.5 ,
+      auto_review: "each" , auto_start: "both" , auto_min_length: 5 , auto_min_brightness: 30 , auto_min_width: 2.4 ,
+      auto_skip_done: true },
+    controls: { min_length: "settings-min-length" , line_width: "settings-line-width" ,
+      auto_review: "settings-auto-review" , auto_start: "settings-auto-start" ,
+      auto_min_length: "settings-auto-min-length" , auto_min_brightness: "settings-auto-min-brightness" ,
+      auto_min_width: "settings-auto-min-width" , auto_skip_done: "settings-auto-skip-done" },
+    ranges: { min_length: [ 0 , 1000 ] , line_width: [ 0.5 , 6 ] , auto_min_length: [ 0 , 1000 ] ,
+      auto_min_brightness: [ 0 , 100 ] , auto_min_width: [ 0 , 20 ] },
+    choices: { auto_review: [ "each" , "end" , "all" ] , auto_start: [ "both" , "brighter" , "dimmer" ] },
   },
 
   values: null,
@@ -74,9 +82,9 @@ const Settings = {
     Object.keys( this.general.controls ).forEach( ( field ) => {
       const control = Dom.get( this.general.controls[ field ] );
       control.addEventListener( control.type === "range" ? "input" : "change" , ( e ) => {
-        const value = this.clean( this.general , field , e.target.value );
+        const value = this.clean( this.general , field , control.type === "checkbox" ? e.target.checked : e.target.value );
         this.values[ field ] = value;
-        if ( control.type !== "range" ) e.target.value = value;
+        if ( control.type !== "range" && control.type !== "checkbox" ) e.target.value = value;
         this.renderGeneral();
         this.save();
       } );
@@ -97,9 +105,13 @@ const Settings = {
 
   // A number field out of range, empty or (for a whole-number field) not
   // whole goes back to its default. The range is the group's own
-  // (group.ranges), else 0..1.
+  // (group.ranges), else 0..1. So does a choice not in group.choices, or a
+  // checkbox that is not true or false.
   clean( group , field , value ) {
     const fallback = group.defaults[ field ];
+    if ( typeof fallback === "boolean" ) return typeof value === "boolean" ? value : fallback;
+    const choices = group.choices && group.choices[ field ];
+    if ( choices ) return choices.includes( value ) ? value : fallback;
     if ( typeof fallback !== "number" ) return value;
     const range = ( group.ranges && group.ranges[ field ] ) || [ 0 , 1 ];
     const number = Number( value );
@@ -167,13 +179,28 @@ const Settings = {
       Dom.get( method.controls[ field ] ).value = this.values[ field ];
     } );
     Object.keys( this.general.controls ).forEach( ( field ) => {
-      Dom.get( this.general.controls[ field ] ).value = this.values[ field ];
+      const control = Dom.get( this.general.controls[ field ] );
+      if ( control.type === "checkbox" ) control.checked = this.values[ field ];
+      else control.value = this.values[ field ];
     } );
     this.renderGeneral();
   },
 
   renderGeneral() {
     Dom.text( Dom.get( "settings-line-width-value" ) , this.values.line_width + " px" );
+  },
+
+  // A general setting changed elsewhere (the Auto panel): cleaned, shown
+  // here too, saved. Returns the value kept.
+  setGeneral( field , value ) {
+    const kept = this.clean( this.general , field , value );
+    this.values[ field ] = kept;
+    const control = Dom.get( this.general.controls[ field ] );
+    if ( control.type === "checkbox" ) control.checked = kept;
+    else control.value = kept;
+    this.renderGeneral();
+    this.save();
+    return kept;
   },
 
   // Called with the values after every change.
@@ -201,4 +228,13 @@ const Settings = {
   minLength() { return this.values.min_length; },
   // Screen pixels, whatever the zoom.
   lineWidth() { return this.values.line_width; },
+  // Auto mode (ais_auto.js): each | end | all, both | brighter | dimmer, the
+  // filters (µm, % of the image's bright level, µm; 0 is off), and whether
+  // complete images are left alone.
+  autoReview() { return this.values.auto_review; },
+  autoStart() { return this.values.auto_start; },
+  autoMinLength() { return this.values.auto_min_length; },
+  autoMinBrightness() { return this.values.auto_min_brightness; },
+  autoMinWidth() { return this.values.auto_min_width; },
+  autoSkipDone() { return this.values.auto_skip_done; },
 };
