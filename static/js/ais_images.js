@@ -1,6 +1,7 @@
 // The Process screen's dialogs: Images (which of the batch to step through,
 // with previews and duplicates), Open path (a folder on this machine, read by
-// the server) and Batches (every shared batch, to open or delete). Ais
+// the server) and Batches (every shared batch, to open, assign or delete,
+// with each assignee's progress, refreshed while the dialog is open). Ais
 // (ais.js) owns the images; this file only edits their `included` flag, and
 // only when the selection is confirmed.
 const AisImages = {
@@ -23,6 +24,7 @@ const AisImages = {
     Dom.get( "ais-images-open" ).addEventListener( "click" , () => this.open() );
     Dom.get( "ais-images-all" ).addEventListener( "click" , () => this.setVisible( true ) );
     Dom.get( "ais-images-none" ).addEventListener( "click" , () => this.setVisible( false ) );
+    Dom.get( "ais-images-mine" ).addEventListener( "click" , () => this.selectMine() );
     Dom.get( "ais-images-use" ).addEventListener( "click" , () => this.confirm() );
     Dom.get( "ais-images-filter" ).addEventListener( "input" , () => this.applyFilter() );
     Dom.get( "ais-images-hide-dups" ).addEventListener( "change" , ( e ) => this.setHideDuplicates( e.target.checked ) );
@@ -50,6 +52,7 @@ const AisImages = {
     Dom.show( Dom.get( "ais-images-dups" ) , dups > 0 );
     Dom.text( Dom.get( "ais-images-dups-count" ) , I18n.get( "ais.n_duplicates" ).replace( "{n}" , dups ) );
     // Hidden by default when the batch has duplicates nobody has included.
+    Dom.show( Dom.get( "ais-images-mine" ) , Boolean( Ais.myKeys() ) );
     this.hideDuplicates = dups > 0 && Ais.images.every( ( entry ) => entry.dup_of == null || !entry.included );
     Dom.get( "ais-images-hide-dups" ).checked = this.hideDuplicates;
     this.render();
@@ -81,6 +84,12 @@ const AisImages = {
       }
       if ( count ) badges.push( Dom.el( "span" , { class: "badge text-bg-success" , text: count + " AIS" } ) );
       if ( Ais.isComplete( entry ) ) badges.push( Dom.el( "i" , { class: "bi bi-check-circle-fill text-success" , attrs: { title: I18n.get( "ais.complete" ) } } ) );
+      const owner = Ais.assigneeOf( entry );
+      if ( owner != null ) {
+        const me = Ais.me && owner === Ais.me.id;
+        badges.push( Dom.el( "span" , { class: "ais-card-assignee " + ( me ? "text-primary fw-semibold" : "text-body-secondary" ) , children: [
+          Dom.el( "i" , { class: "bi bi-person me-1" } ) , Dom.el( "span" , { text: Ais.assigneeName( owner ) } ) ] } ) );
+      }
       if ( Ais.local.matlab ) badges.push( this.matlabMenu( entry , main.name ) );
       const card = Dom.el( "div" , {
         class: "ais-image-card" + ( i === Ais.index ? " ais-current" : "" ),
@@ -226,6 +235,14 @@ const AisImages = {
     this.refresh();
   },
 
+  // Exactly the images assigned to whoever is signed in.
+  selectMine() {
+    const mine = Ais.myKeys();
+    if ( !mine ) return;
+    Ais.images.forEach( ( entry , i ) => { this.staged[ i ] = mine.has( entry.key ); } );
+    this.refresh();
+  },
+
   setVisible( on ) {
     this.visible().forEach( ( k ) => { this.staged[ k ] = on; } );
     this.refresh();
@@ -336,23 +353,75 @@ const AisImages = {
   initBatches() {
     this.batchesModalEl = Dom.get( "ais-batches-modal" );
     this.batchesModal = bootstrap.Modal.getOrCreateInstance( this.batchesModalEl );
+    this.mineOnly = null;    // the "Assigned to me" switch, once someone sets it
     Dom.get( "ais-batches-open" ).addEventListener( "click" , () => this.openBatches() );
+    Dom.get( "ais-batches-mine" ).addEventListener( "change" , ( e ) => { this.mineOnly = e.target.checked; this.renderBatches(); } );
+    // The monitor: while the list is open (and the tab is visible), fetch it
+    // again every few seconds, so each person's progress follows along.
+    this.batchesModalEl.addEventListener( "hidden.bs.modal" , () => window.clearInterval( this.batchesTimer ) );
   },
 
   async openBatches() {
     this.batchesModal.show();
-    const body = Dom.get( "ais-batches-list" );
-    Dom.clear( body );
-    let list = [];
+    this.batchList = null;
+    Dom.clear( Dom.get( "ais-batches-list" ) );
+    await this.refreshBatches();
+    window.clearInterval( this.batchesTimer );
+    this.batchesTimer = window.setInterval( () => {
+      if ( document.visibilityState === "visible" ) this.refreshBatches( true );
+    } , 5000 );
+  },
+
+  async refreshBatches( quiet ) {
     try {
-      list = ( await Api.request( "/api/ais/batches" ) ).batches;
+      this.batchList = ( await Api.request( "/api/ais/batches" ) ).batches;
     } catch ( error ) {
-      App.showError( error.message );
+      if ( !quiet ) App.showError( error.message );
       return;
     }
+    this.renderBatches();
+  },
+
+  // "5 min ago" for an ISO time.
+  ago( iso ) {
+    const seconds = Math.max( 0 , ( Date.now() - new Date( iso ).getTime() ) / 1000 );
+    const [ n , unit ] = seconds < 60 ? [ 0 , "now" ] : seconds < 3600 ? [ Math.floor( seconds / 60 ) , "min" ]
+      : seconds < 86400 ? [ Math.floor( seconds / 3600 ) , "h" ] : [ Math.floor( seconds / 86400 ) , "d" ];
+    return I18n.get( "ais.ago_" + unit ).replace( "{n}" , n );
+  },
+
+  // One line per assignee: name, bar, completed / images, AIS, last activity.
+  assigneeLines( b ) {
+    return b.assignees.map( ( a ) => {
+      const me = Ais.me && a.user_id === Ais.me.id;
+      const share = a.images ? 100 * a.completed / a.images : 0;
+      const bar = Dom.el( "div" , { class: "progress ais-assignee-bar" , attrs: {
+        role: "progressbar" , "aria-label": a.name , "aria-valuenow": String( a.completed ) , "aria-valuemin": "0" , "aria-valuemax": String( a.images ) ,
+      } , children: [ Dom.el( "div" , { class: "progress-bar" + ( a.images && a.completed === a.images ? " bg-success" : "" ) } ) ] } );
+      bar.firstChild.style.width = share + "%";
+      const details = [ a.completed + " / " + a.images , I18n.get( "ais.n_ais" ).replace( "{n}" , a.ais ) ];
+      if ( a.last_at ) details.push( this.ago( a.last_at ) );
+      return Dom.el( "div" , { class: "ais-assignee" + ( me ? " ais-assignee-me" : "" ) , children: [
+        Dom.el( "span" , { class: "ais-assignee-name text-truncate" , text: a.name , attrs: { title: a.name + " · " + Math.round( a.percent ) + " %" } } ),
+        bar,
+        Dom.el( "span" , { class: "text-body-secondary text-nowrap" , text: details.join( " · " ) } ),
+      ] } );
+    } );
+  },
+
+  renderBatches() {
+    const list = this.batchList || [];
+    const admin = Boolean( Ais.me && Ais.me.role === "admin" );
+    const anyMine = list.some( ( b ) => b.mine );
+    if ( this.mineOnly === null ) Dom.get( "ais-batches-mine" ).checked = anyMine;
+    Dom.show( Dom.get( "ais-batches-mine-wrap" ) , anyMine );
+    const mineOnly = anyMine && Dom.get( "ais-batches-mine" ).checked;
+    const shown = list.filter( ( b ) => !mineOnly || b.mine );
+    const body = Dom.get( "ais-batches-list" );
+    Dom.clear( body );
     Dom.show( Dom.get( "ais-batches-none" ) , !list.length );
-    list.forEach( ( b ) => {
-      const mine = Ais.me && ( b.created_by === Ais.me.id || Ais.me.role === "admin" );
+    shown.forEach( ( b ) => {
+      const mine = Ais.me && ( b.created_by === Ais.me.id || admin );
       const open = Dom.el( "a" , {
         class: "fw-semibold",
         text: b.name,
@@ -365,13 +434,22 @@ const AisImages = {
         children: [ Dom.el( "i" , { class: "bi bi-trash" } ) ],
         on: { click: () => this.deleteBatch( b ) },
       } );
+      const assign = Dom.el( "button" , {
+        class: "btn btn-sm btn-link p-0 me-2",
+        attrs: { type: "button" , title: I18n.get( "ais.assign" ) , "aria-label": I18n.get( "ais.assign" ) + ": " + b.name },
+        children: [ Dom.el( "i" , { class: "bi bi-people" } ) ],
+        on: { click: () => AisAssign.open( b ) },
+      } );
+      const assigned = b.assignees.length ? this.assigneeLines( b )
+        : [ Dom.el( "span" , { class: "text-body-secondary" , text: I18n.get( "ais.unassigned" ) } ) ];
       body.appendChild( Dom.el( "tr" , { children: [
         Dom.el( "td" , { children: [ open , Dom.el( "div" , { class: "small text-body-secondary text-truncate ais-batch-path" , text: b.path || I18n.get( "ais.uploaded" ) } ) ] } ),
-        Dom.el( "td" , { text: b.completed + " / " + b.images } ),
+        Dom.el( "td" , { class: "text-nowrap" , text: b.completed + " / " + b.images } ),
         Dom.el( "td" , { text: b.duplicates ? String( b.duplicates ) : "" } ),
+        Dom.el( "td" , { class: "ais-assignees" , children: assigned } ),
         Dom.el( "td" , { text: b.created_by_name } ),
         Dom.el( "td" , { text: new Date( b.created_at ).toLocaleString() } ),
-        Dom.el( "td" , { children: mine ? [ del ] : [] } ),
+        Dom.el( "td" , { class: "text-nowrap" , children: ( admin ? [ assign ] : [] ).concat( mine ? [ del ] : [] ) } ),
       ] } ) );
     } );
   },

@@ -9,6 +9,12 @@ also records where each file lives, so the server can fetch one nobody has
 opened yet. Images whose files are byte-identical to an earlier image's are
 marked dup_of that image.
 
+An admin can split a batch among people by share (assign): each gets a
+contiguous run of its images, duplicates left out, recorded per image in
+the batch's assignment. Changing the split leaves finished images with
+whoever had them and deals out only the rest. Progress is then counted per
+person as well as for the whole batch.
+
 A result is one accepted AIS: the measures, clicks and trace the trace route
 returned, numbered n per image here (max + 1) so two people accepting on the
 same image at once cannot both get the same number. Deleting one renumbers
@@ -20,6 +26,7 @@ what reaches the browser.
 from __future__ import annotations
 
 import hashlib
+import math
 import re
 from typing import Any
 
@@ -32,6 +39,7 @@ TIFF_RE = re.compile(r"\.tiff?$", re.IGNORECASE)
 MAX_FILES = 5000
 MAX_TEXT = 1000
 SOURCES = ("upload", "path")
+MAX_SHARES = 100
 
 # What an accepted row may carry, and the type each value must have.
 RESULT_NUMBERS = ("length_um", "start_um", "end_um", "mid_um", "max_um", "arc_um", "threshold_initial",
@@ -145,18 +153,32 @@ def get_batch(store: Store, batch_id: int) -> Record | None:
     return store.get(BUCKET_AIS_BATCHES, batch_id)
 
 
-def list_batches(store: Store) -> list[Record]:
-    """Newest first, without the image lists: name, counts and progress."""
-    done_by_batch: dict[int, set[str]] = {}
+def _rows_by_image(store: Store) -> dict[int, dict[str, list[Record]]]:
+    """Every accepted AIS, grouped by batch and then image."""
+    out: dict[int, dict[str, list[Record]]] = {}
     for _, row in store.all(BUCKET_AIS_RESULTS):
-        done_by_batch.setdefault(row["batch_id"], set()).add(row["image"])
+        out.setdefault(row["batch_id"], {}).setdefault(row["image"], []).append(row)
+    return out
+
+
+def _complete(batch: Record, by_image: dict[str, Any]) -> set[str]:
+    """Images with an accepted AIS or a done mark."""
+    return (set(by_image) | set(batch["skipped"])) & {im["key"] for im in batch["images"]}
+
+
+def list_batches(store: Store, viewer_id: int | None = None) -> list[Record]:
+    """Newest first, without the image lists: name, counts and progress, per
+    assignee too, and the viewer's own part (mine) when they have one."""
+    rows = _rows_by_image(store)
     out = []
     for _, batch in store.all(BUCKET_AIS_BATCHES):
-        keys = {im["key"] for im in batch["images"]}
-        done = (done_by_batch.get(batch["id"], set()) | set(batch["skipped"])) & keys
+        by_image = rows.get(batch["id"], {})
+        assignees = progress(batch, by_image)
+        mine = next((a for a in assignees if a["user_id"] == viewer_id), None)
         out.append({k: batch[k] for k in ("id", "name", "source", "path", "created_by", "created_at")}
-                   | {"images": len(keys), "completed": len(done),
-                      "duplicates": sum(1 for im in batch["images"] if "dup_of" in im)})
+                   | {"images": len(batch["images"]), "completed": len(_complete(batch, by_image)),
+                      "duplicates": sum(1 for im in batch["images"] if "dup_of" in im),
+                      "assignees": assignees, "mine": mine})
     return sorted(out, key=lambda b: b["id"], reverse=True)
 
 
@@ -177,6 +199,108 @@ def delete_batch(store: Store, batch_id: int) -> None:
     with store.transaction() as tx:
         tx.delete(BUCKET_AIS_BATCHES, batch_id)
         tx.delete_where(BUCKET_AIS_RESULTS, lambda _key, row: row["batch_id"] == batch_id)
+
+
+# --- assignments ---------------------------------------------------------------
+
+
+def split_counts(n: int, weights: list[float]) -> list[int]:
+    """n split in proportion to weights, rounded by largest remainder so the
+    parts sum to exactly n (ties go to the earlier one)."""
+    total = sum(weights)
+    if n <= 0 or total <= 0:
+        return [0] * len(weights)
+    exact = [n * w / total for w in weights]
+    counts = [math.floor(x) for x in exact]
+    by_remainder = sorted(range(len(weights)), key=lambda i: (-(exact[i] - counts[i]), i))
+    for i in by_remainder[: n - sum(counts)]:
+        counts[i] += 1
+    return counts
+
+
+def clean_shares(shares: Any) -> list[dict[str, Any]]:
+    """[{user_id, percent}], each person once, percents scaled to sum 100."""
+    if not isinstance(shares, list) or len(shares) > MAX_SHARES:
+        raise BatchError(f"shares must be a list of up to {MAX_SHARES}")
+    out, seen = [], set()
+    for share in shares:
+        if not isinstance(share, dict):
+            raise BatchError("each share must be an object")
+        user_id, percent = share.get("user_id"), share.get("percent")
+        if not isinstance(user_id, int) or isinstance(user_id, bool) or user_id in seen:
+            raise BatchError("each share needs a different user_id")
+        if (not isinstance(percent, (int, float)) or isinstance(percent, bool)
+                or not math.isfinite(percent) or percent <= 0):
+            raise BatchError("percent must be a number above 0")
+        seen.add(user_id)
+        out.append({"user_id": user_id, "percent": float(percent)})
+    total = sum(s["percent"] for s in out)
+    return [s | {"percent": round(100 * s["percent"] / total, 2)} for s in out]
+
+
+def deal(batch: Record, shares: list[dict[str, Any]], complete: set[str]) -> dict[str, int]:
+    """Image key -> user id for a new split. Finished images keep an assignee
+    who is still in it; finished ones nobody (left) holds stay out of it. The
+    unfinished are dealt in batch order, a contiguous run each, so that every
+    share ends up as close to its percent as the finished ones allow."""
+    ids = [s["user_id"] for s in shares]
+    current = (batch.get("assignment") or {}).get("images", {})
+    eligible = [im["key"] for im in batch["images"] if "dup_of" not in im]
+    kept = {k: current[k] for k in eligible if k in complete and current.get(k) in ids}
+    unfinished = [k for k in eligible if k not in complete]
+    targets = split_counts(len(kept) + len(unfinished), [s["percent"] for s in shares])
+    held = [sum(1 for u in kept.values() if u == user_id) for user_id in ids]
+    # Someone already past their share takes no more, so the rest is rescaled.
+    counts = split_counts(len(unfinished), [max(0, t - h) for t, h in zip(targets, held)])
+    out = dict(kept)
+    it = iter(unfinished)
+    for user_id, count in zip(ids, counts):
+        for _ in range(count):
+            out[next(it)] = user_id
+    return out
+
+
+def assign(store: Store, batch_id: int, shares: Any, user_id: int) -> Record | None:
+    """Split the batch among people by share; an empty list clears the
+    assignment. None when the batch is gone."""
+    clean = clean_shares(shares)
+    with store.transaction() as tx:
+        batch = tx.get(BUCKET_AIS_BATCHES, batch_id)
+        if batch is None:
+            return None
+        if clean:
+            by_image: dict[str, Any] = {}
+            for _, row in tx.all(BUCKET_AIS_RESULTS):
+                if row["batch_id"] == batch_id:
+                    by_image[row["image"]] = True
+            batch["assignment"] = {"shares": clean, "images": deal(batch, clean, _complete(batch, by_image)),
+                                   "by": user_id, "at": to_iso(utc_now())}
+        else:
+            batch.pop("assignment", None)
+        tx.put(BUCKET_AIS_BATCHES, batch_id, batch)
+    return batch
+
+
+def assignee_of(batch: Record, key: str) -> int | None:
+    return (batch.get("assignment") or {}).get("images", {}).get(key)
+
+
+def progress(batch: Record, by_image: dict[str, list[Record]]) -> list[dict[str, Any]]:
+    """Per share: images assigned, how many are complete, AIS accepted on them
+    (by anyone), and when one was last accepted or edited."""
+    assignment = batch.get("assignment")
+    if not assignment:
+        return []
+    complete = _complete(batch, by_image)
+    out = []
+    for share in assignment["shares"]:
+        keys = [k for k, u in assignment["images"].items() if u == share["user_id"]]
+        rows = [r for k in keys for r in by_image.get(k, [])]
+        stamps = [t for r in rows for t in (r["accepted_at"], r.get("edited_at")) if t]
+        out.append({"user_id": share["user_id"], "percent": share["percent"], "images": len(keys),
+                    "completed": sum(1 for k in keys if k in complete), "ais": len(rows),
+                    "last_at": max(stamps, default=None)})
+    return out
 
 
 def local_path_for(store: Store, sha: str) -> str | None:

@@ -56,6 +56,16 @@ the start of an AIS gives the original's trace and length. **Enter** accepts,
   traces, for anyone; **Batches** lists them all. A browser-picked folder is
   hashed first (sha-256) and uploads in the background; files live once, by
   content, in `<app dir>/storage/ais/files/`.
+- **Assignments.** Admins can split a batch among people (the people
+  button in **Batches**): one slider per person, reset to an even split
+  whenever someone is added or removed, always totalling 100 %. Each person
+  gets a contiguous run of the images, duplicates left out. Their batch then
+  opens on just their images (the Images dialog's *Mine*; the rest stay
+  reachable), and they can edit or delete any AIS on those images. Changing
+  the split later leaves finished images with whoever had them and deals
+  out only the unfinished ones. **Batches** shows each person's progress
+  (images complete, AIS, last activity) and refreshes every 5 s while open;
+  *Assigned to me* filters it to your own.
 - **Images dialog.** Opens after every import; previews, All / None, click,
   Ctrl/⌘-click, Shift-click, double-click to open. Byte-identical files are
   flagged *duplicate of #k* and hidden (and left out) by default.

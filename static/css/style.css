@@ -320,6 +320,16 @@ th { color: var(--bs-secondary-color); font-size: 0.8rem; text-transform: upperc
 .ais-path-list { max-height: 50vh; overflow-y: auto; }
 .ais-recent { max-width: 14rem; }
 .ais-batch-path { max-width: 28rem; }
+
+/* Batches: each assignee's progress. Assign: one slider per person. */
+.ais-assignees { min-width: 18rem; }
+.ais-assignee { display: grid; grid-template-columns: 7rem 5rem auto; align-items: center; gap: 0.5rem; padding: 0.1rem 0.25rem; border-radius: 0.25rem; }
+.ais-assignee-me { background: var(--bs-primary-bg-subtle); }
+.ais-assignee-name { min-width: 0; }
+.ais-assignee-bar { height: 0.4rem; }
+.ais-assign-rows { display: flex; flex-direction: column; gap: 0.75rem; }
+.ais-assign-percent { min-width: 3rem; text-align: right; font-variant-numeric: tabular-nums; }
+.ais-card-assignee { font-size: 0.75rem; }
 .ais-card-matlab::after { display: none; }
 /* The tracing screen needs the full width the account screens do not. */
 .app-main:has(.ais-view.view-active) { max-width: none; }

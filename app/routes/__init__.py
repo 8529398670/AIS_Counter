@@ -105,6 +105,8 @@ def build_routes(static_server: StaticServer, cfg: Config) -> list[BaseRoute]:
         signed_in("/api/ais/batches/{batch_id}", ais.batch_get),
         signed_in("/api/ais/batches/{batch_id}/done", ais.batch_done, ["POST"]),
         signed_in("/api/ais/batches/{batch_id}/delete", ais.batch_delete, ["POST"]),
+        # Splitting a batch among people: admins.
+        admins("/api/ais/batches/{batch_id}/assign", ais.batch_assign, ["POST"]),
         signed_in("/api/ais/results", ais.result_list),
         signed_in("/api/ais/results", ais.result_add, ["POST"]),
         signed_in("/api/ais/results/import", ais.result_import, ["POST"], max_body_size=ais.UPLOAD_LIMIT_BYTES),

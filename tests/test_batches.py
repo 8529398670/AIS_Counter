@@ -114,3 +114,67 @@ def test_delete_closes_the_gap_and_update_keeps_the_number(store):
     assert (edited["n"], edited["origin"], edited["created_by"], edited["length_um"]) == (3, "auto", 1, 9.0)
     assert edited["edited_by"] == 2 and edited["edited_at"]
     assert ais.update_result(store, 999, row(), 1) is None
+
+
+def test_split_counts_sum_to_n():
+    assert ais.split_counts(10, [1, 1, 1]) == [4, 3, 3]
+    assert ais.split_counts(30, [66.67, 33.33]) == [20, 10]
+    assert ais.split_counts(0, [50, 50]) == [0, 0]
+    for n in range(40):
+        assert sum(ais.split_counts(n, [17, 33, 50])) == n
+
+
+def cells(n):
+    return files(*[(f"f/c{i:02d}" + P, f"c{i}") for i in range(n)])
+
+
+def owners(batch):
+    images = batch["assignment"]["images"]
+    return [images.get(im["key"]) for im in batch["images"]]
+
+
+def test_assign_deals_contiguous_runs_and_skips_duplicates(store):
+    batch = ais.create_batch(store, "f", "upload", cells(6) + files(("f/zz" + P, "c0")), 1)
+    batch = ais.assign(store, batch["id"], [{"user_id": 7, "percent": 2}, {"user_id": 8, "percent": 1}], 1)
+    assert [s["percent"] for s in batch["assignment"]["shares"]] == [66.67, 33.33]
+    assert owners(batch) == [7, 7, 7, 7, 8, 8, None]     # zz is a duplicate of c00
+    assert ais.assignee_of(batch, "c04") == 8 and ais.assignee_of(batch, "zz") is None
+
+
+def test_resplit_keeps_finished_images_with_their_assignee(store):
+    batch = ais.create_batch(store, "f", "upload", cells(10), 1)
+    ais.assign(store, batch["id"], [{"user_id": 7, "percent": 50}, {"user_id": 8, "percent": 50}], 1)
+    for key in ("c05", "c06", "c07"):                     # 8 finishes three of theirs
+        ais.add_result(store, batch["id"], key, row(), 8)
+    ais.set_done(store, batch["id"], "c00", True)         # and 7 one
+    batch = ais.assign(store, batch["id"], [{"user_id": 7, "percent": 20}, {"user_id": 8, "percent": 80}], 1)
+    assert owners(batch)[0] == 7 and owners(batch)[5:8] == [8, 8, 8]
+    assert owners(batch).count(7) == 2 and owners(batch).count(8) == 8
+    # Someone removed: their finished images are left unassigned.
+    batch = ais.assign(store, batch["id"], [{"user_id": 7, "percent": 1}], 1)
+    assert owners(batch)[5:8] == [None, None, None] and owners(batch).count(7) == 7
+    assert ais.assign(store, batch["id"], [], 1).get("assignment") is None
+
+
+def test_progress_per_assignee(store):
+    batch = ais.create_batch(store, "f", "upload", cells(4), 1)
+    ais.assign(store, batch["id"], [{"user_id": 7, "percent": 1}, {"user_id": 8, "percent": 1}], 1)
+    ais.add_result(store, batch["id"], "c00", row(), 7)
+    ais.add_result(store, batch["id"], "c00", row(), 7)
+    ais.set_done(store, batch["id"], "c03", True)
+    listed = ais.list_batches(store, viewer_id=7)[0]
+    by_user = {a["user_id"]: a for a in listed["assignees"]}
+    assert (by_user[7]["images"], by_user[7]["completed"], by_user[7]["ais"]) == (2, 1, 2)
+    assert (by_user[8]["images"], by_user[8]["completed"], by_user[8]["ais"]) == (2, 1, 0)
+    assert by_user[7]["last_at"] and by_user[8]["last_at"] is None
+    assert listed["mine"] == by_user[7] and ais.list_batches(store, viewer_id=9)[0]["mine"] is None
+    assert listed["completed"] == 2
+
+
+def test_bad_shares_are_refused(store):
+    batch = ais.create_batch(store, "f", "upload", cells(2), 1)
+    for shares in ("x", [{"user_id": 7, "percent": 0}], [{"user_id": 7, "percent": 1}, {"user_id": 7, "percent": 1}],
+                   [{"user_id": "7", "percent": 1}]):
+        with pytest.raises(ais.BatchError):
+            ais.assign(store, batch["id"], shares, 1)
+    assert ais.assign(store, 999, [], 1) is None

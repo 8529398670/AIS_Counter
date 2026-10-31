@@ -117,6 +117,7 @@ const Ais = {
     window.addEventListener( "hashchange" , () => this.followUrl() );
     window.addEventListener( "popstate" , () => this.followUrl() );
     AisImages.init();
+    AisAssign.init();
     AisExport.init();
     AisAuto.init();
     this.renderPicker();
@@ -302,13 +303,16 @@ const Ais = {
       } catch ( error ) { /* storage blocked */ }
     }
     const excluded = this.savedExclusions( batch.id );
+    // Someone with images assigned starts on exactly those (theirs first).
+    const mine = this.myKeys();
     this.images = batch.images.map( ( image ) => {
       const files = {};
       Object.entries( image.files ).forEach( ( [ role , f ] ) => {
         files[ role ] = Object.assign( {} , f , { file: byRel ? byRel.get( f.rel ) || null : null } );
       } );
       // A new import leaves duplicates out until they are shown again.
-      const out = excluded ? excluded.has( image.key ) : ( opts.fresh && image.dup_of != null );
+      const out = mine ? !mine.has( image.key )
+        : excluded ? excluded.has( image.key ) : ( opts.fresh && image.dup_of != null );
       return { key: image.key , cell: image.cell , dir: image.dir , dup_of: image.dup_of , files: files , included: !out };
     } );
     this.index = -1;
@@ -333,6 +337,37 @@ const Ais = {
     else this.renderCurrent();
     if ( opts.fresh ) AisImages.open();
     this.uploadAll();
+  },
+
+  // --- assignments (an admin's split of the batch, app/models/ais.py) ------
+
+  assigneeOf( entry ) {
+    const assignment = this.batch && this.batch.assignment;
+    const id = assignment ? assignment.images[ entry.key ] : null;
+    return id == null ? null : id;
+  },
+
+  assigneeName( id ) {
+    return ( this.batch && this.batch.assignee_names && this.batch.assignee_names[ String( id ) ] ) || "";
+  },
+
+  // The keys of the images assigned to whoever is signed in, or null.
+  myKeys() {
+    const assignment = this.batch && this.batch.assignment;
+    if ( !assignment || !this.me ) return null;
+    const keys = Object.keys( assignment.images ).filter( ( k ) => assignment.images[ k ] === this.me.id );
+    return keys.length ? new Set( keys ) : null;
+  },
+
+  // The open batch was (re)assigned: take the new split, and if it gives
+  // this person images, step through exactly those.
+  applyAssignment( batch ) {
+    this.batch.assignment = batch.assignment || null;
+    this.batch.assignee_names = batch.assignee_names || {};
+    const mine = this.myKeys();
+    if ( mine ) this.images.forEach( ( entry ) => { entry.included = mine.has( entry.key ); } );
+    this.inclusionChanged( this.index );
+    this.renderCurrent();
   },
 
   // Back to no batch (the open one was deleted).
@@ -614,6 +649,10 @@ const Ais = {
     Dom.show( bar , Boolean( this.batch && this.images.length ) );
     const { done , total } = this.progress();
     Dom.text( Dom.get( "ais-batch-name" ) , this.batch ? this.batch.name : "" );
+    const owner = entry ? this.assigneeOf( entry ) : null;
+    Dom.text( Dom.get( "ais-current-assignee" ) , owner == null ? ""
+      : owner === ( this.me && this.me.id ) ? I18n.get( "ais.assigned_you" )
+      : I18n.get( "ais.assigned_to" ).replace( "{name}" , this.assigneeName( owner ) ) );
     Dom.text( Dom.get( "ais-progress-text" ) , I18n.get( "ais.completed" ).replace( "{done}" , done ).replace( "{total}" , total ) );
     Dom.get( "ais-progress-bar" ).style.width = ( total ? ( 100 * done / total ) : 0 ) + "%";
     Dom.get( "ais-progress-bar-wrap" ).setAttribute( "aria-valuenow" , String( done ) );

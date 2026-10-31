@@ -191,13 +191,22 @@ def _batch_json(request: Request, batch: dict[str, Any]) -> dict[str, Any]:
     for image in batch["images"]:
         files = {role: f | {"stored": by_path or library.has(f["sha"])} for role, f in image["files"].items()}
         images.append(image | {"files": files})
-    return batch | {"images": images, "created_by_name": _names(request).get(batch["created_by"], "")}
+    names = _names(request)
+    assigned = {share["user_id"] for share in (batch.get("assignment") or {}).get("shares", [])}
+    return batch | {"images": images, "created_by_name": names.get(batch["created_by"], ""),
+                    "assignee_names": {str(u): names.get(u, "") for u in assigned}}
 
 
 async def batch_list(request: Request) -> Response:
-    rows = await run(batches.list_batches, get_store(request))
+    """Every batch with its progress, per assignee too (the Batches dialog
+    polls this while open, as the live monitor)."""
+    rows = await run(batches.list_batches, get_store(request), _user_id(request))
     names = await run(_names, request)
-    return JSONResponse({"batches": [row | {"created_by_name": names.get(row["created_by"], "")} for row in rows]})
+    for row in rows:
+        row["created_by_name"] = names.get(row["created_by"], "")
+        for a in row["assignees"]:
+            a["name"] = names.get(a["user_id"], "")
+    return JSONResponse({"batches": rows})
 
 
 async def batch_get(request: Request) -> Response:
@@ -255,6 +264,38 @@ async def batch_done(request: Request) -> Response:
     return JSONResponse({"skipped": batch["skipped"]})
 
 
+async def batch_assign(request: Request) -> Response:
+    """Body: {shares: [{user_id, percent}]}: split the batch among these
+    people (admins). An empty list clears the assignment."""
+    body, refused = await _body(request)
+    if refused:
+        return refused
+    store = get_store(request)
+    batch_id = parse_id(request.path_params["batch_id"])
+    if not batch_id:
+        return not_found("no such batch")
+    shares = body.get("shares")
+    enabled = {u.id for u in await run(users.list_users, store) if not u.disabled}
+    if isinstance(shares, list) and any(isinstance(s, dict) and s.get("user_id") not in enabled for s in shares):
+        return bad_request("every share must be an enabled user")
+    try:
+        batch = await run(batches.assign, store, batch_id, shares, _user_id(request))
+    except batches.BatchError as exc:
+        return bad_request(str(exc))
+    if batch is None:
+        return not_found("no such batch")
+    return JSONResponse(await run(_batch_json, request, batch))
+
+
+async def _may_change(request: Request, row: dict[str, Any]) -> bool:
+    """Whoever accepted it, the image's assignee, or an admin."""
+    actor = actor_from(request)
+    if row["created_by"] == actor.user.id or actor.is_admin:
+        return True
+    batch = await run(batches.get_batch, get_store(request), row["batch_id"])
+    return batch is not None and batches.assignee_of(batch, row["image"]) == actor.user.id
+
+
 async def result_list(request: Request) -> Response:
     """?batch=<id> for one batch, anything else for all."""
     batch_id = parse_id(request.query_params.get("batch", ""))
@@ -287,9 +328,8 @@ async def result_delete(request: Request) -> Response:
     row = await run(batches.get_result, store, result_id) if result_id else None
     if row is None:
         return not_found("no such result")
-    actor = actor_from(request)
-    if row["created_by"] != actor.user.id and not actor.is_admin:
-        return forbidden("only whoever accepted it, or an admin, can delete it")
+    if not await _may_change(request, row):
+        return forbidden("only whoever accepted it, the image's assignee, or an admin, can delete it")
     renumbered = await run(batches.delete_result, store, result_id)
     return JSONResponse({"ok": True, "renumbered": renumbered})
 
@@ -305,11 +345,10 @@ async def result_update(request: Request) -> Response:
     row = await run(batches.get_result, store, result_id) if result_id else None
     if row is None:
         return not_found("no such result")
-    actor = actor_from(request)
-    if row["created_by"] != actor.user.id and not actor.is_admin:
-        return forbidden("only whoever accepted it, or an admin, can change it")
+    if not await _may_change(request, row):
+        return forbidden("only whoever accepted it, the image's assignee, or an admin, can change it")
     try:
-        updated = await run(batches.update_result, store, result_id, body.get("row"), actor.user.id)
+        updated = await run(batches.update_result, store, result_id, body.get("row"), _user_id(request))
     except batches.BatchError as exc:
         return bad_request(str(exc))
     if updated is None:

@@ -188,7 +188,7 @@
               <!-- The image being traced: its file, where it is, and the batch's progress. -->
               <div class="card-header ais-current" id="ais-current" hidden>
                 <div class="ais-current-name">
-                  <div class="small text-body-secondary"><i class="bi bi-collection me-1" aria-hidden="true"></i><span id="ais-batch-name"></span></div>
+                  <div class="small text-body-secondary"><i class="bi bi-collection me-1" aria-hidden="true"></i><span id="ais-batch-name"></span><span id="ais-current-assignee" class="ms-2"></span></div>
                   <div class="ais-current-file"><span id="ais-current-pos" class="text-body-secondary me-2"></span><span id="ais-current-stem" class="fw-semibold"></span><span id="ais-current-ext" class="text-body-secondary"></span></div>
                   <div id="ais-current-partner" class="small text-body-secondary ais-current-file"></div>
                 </div>
@@ -348,6 +348,7 @@
                     <label class="form-check-label" for="ais-images-hide-dups"><span data-i18n="ais.hide_duplicates"></span> (<span id="ais-images-dups-count"></span>)</label>
                   </div>
                   <span id="ais-images-selected" class="small text-body-secondary"></span>
+                  <button id="ais-images-mine" class="btn btn-outline-secondary btn-sm" type="button" data-i18n="ais.select_mine" hidden></button>
                   <button id="ais-images-all" class="btn btn-outline-secondary btn-sm" type="button" data-i18n="ais.select_all"></button>
                   <button id="ais-images-none" class="btn btn-outline-secondary btn-sm" type="button" data-i18n="ais.select_none"></button>
                   <button type="button" class="btn-close" data-bs-dismiss="modal" data-i18n-attr="aria-label:nav.close"></button>
@@ -369,8 +370,12 @@
           <div class="modal fade" id="ais-batches-modal" tabindex="-1" aria-labelledby="ais-batches-title" aria-hidden="true">
             <div class="modal-dialog modal-xl modal-dialog-scrollable">
               <div class="modal-content">
-                <div class="modal-header">
-                  <h2 class="modal-title h5" id="ais-batches-title" data-i18n="ais.batches"></h2>
+                <div class="modal-header gap-3">
+                  <h2 class="modal-title h5 me-auto" id="ais-batches-title" data-i18n="ais.batches"></h2>
+                  <div id="ais-batches-mine-wrap" class="form-check form-switch mb-0 small" hidden>
+                    <input id="ais-batches-mine" class="form-check-input" type="checkbox" />
+                    <label class="form-check-label" for="ais-batches-mine" data-i18n="ais.assigned_to_me"></label>
+                  </div>
                   <button type="button" class="btn-close" data-bs-dismiss="modal" data-i18n-attr="aria-label:nav.close"></button>
                 </div>
                 <div class="modal-body">
@@ -378,12 +383,42 @@
                   <div class="table-responsive">
                     <table class="table table-sm align-middle small mb-0">
                       <thead><tr>
-                        <th data-i18n="ais.batch_col_name"></th><th data-i18n="ais.batch_col_done"></th><th data-i18n="ais.batch_col_dups"></th>
+                        <th data-i18n="ais.batch_col_name"></th><th data-i18n="ais.batch_col_done"></th><th data-i18n="ais.batch_col_dups"></th><th data-i18n="ais.batch_col_assigned"></th>
                         <th data-i18n="ais.batch_col_by"></th><th data-i18n="ais.batch_col_when"></th><th></th>
                       </tr></thead>
                       <tbody id="ais-batches-list"></tbody>
                     </table>
                   </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Assign: split a batch among people by share, admins (static/js/ais_assign.js). -->
+          <div class="modal fade" id="ais-assign-modal" tabindex="-1" aria-labelledby="ais-assign-title" aria-hidden="true">
+            <div class="modal-dialog modal-dialog-scrollable">
+              <div class="modal-content">
+                <div class="modal-header">
+                  <div class="me-auto ais-images-heading">
+                    <h2 class="modal-title h5 mb-0" id="ais-assign-title" data-i18n="ais.assign_title"></h2>
+                    <div id="ais-assign-batch" class="small text-body-secondary text-truncate"></div>
+                  </div>
+                  <button type="button" class="btn-close" data-bs-dismiss="modal" data-i18n-attr="aria-label:nav.close"></button>
+                </div>
+                <div class="modal-body">
+                  <p class="small text-body-secondary" data-i18n="ais.assign_help"></p>
+                  <p id="ais-assign-none" class="small text-body-secondary fst-italic" data-i18n="ais.assign_none" hidden></p>
+                  <div id="ais-assign-rows" class="ais-assign-rows"></div>
+                  <div class="input-group input-group-sm mt-3">
+                    <select id="ais-assign-who" class="form-select" data-i18n-attr="aria-label:ais.assign_who"></select>
+                    <button id="ais-assign-add" class="btn btn-outline-secondary" type="button"><i class="bi bi-person-plus" aria-hidden="true"></i> <span data-i18n="ais.assign_add"></span></button>
+                  </div>
+                  <p class="small text-body-secondary mt-3 mb-0" data-i18n="ais.assign_kept"></p>
+                </div>
+                <div class="modal-footer">
+                  <button id="ais-assign-clear" type="button" class="btn btn-outline-danger me-auto" data-i18n="ais.assign_clear"></button>
+                  <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal" data-i18n="ais.cancel"></button>
+                  <button id="ais-assign-save" type="button" class="btn btn-primary" data-i18n="ais.assign_save"></button>
                 </div>
               </div>
             </div>
@@ -949,6 +984,7 @@
   <script src="/js/about.js"></script>
   <script src="/js/ais.js"></script>
   <script src="/js/ais_images.js"></script>
+  <script src="/js/ais_assign.js"></script>
   <script src="/js/ais_export.js"></script>
   <script src="/js/ais_auto.js"></script>
   <script src="/js/app.js"></script>
