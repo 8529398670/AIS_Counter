@@ -221,7 +221,7 @@ class Config:
     secret_key: str = field(repr=False)
     encrypt_at_rest: bool = True
 
-    rate_limit_max: int = 120
+    rate_limit_max: int = 600
     rate_limit_window_seconds: int = 60
     body_limit_bytes: int = 1048576
 

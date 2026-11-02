@@ -1,8 +1,11 @@
 """Reading the .czi files ZEN saves, for CZI mode.
 
-A CZI holds every channel of a cell: "Alexa Fluor 488" (the AIS, the same
-pixels as the exported `<cell>_ORG.tif`, which is the 12-bit camera data
-times 16) and "AMCA" (somata and dendrites, app/analysis/soma.py).
+A CZI holds every channel of a cell: usually "Alexa Fluor 488" (the AIS, the
+same pixels as the exported `<cell>_ORG.tif`, which is the 12-bit camera data
+times 16) and "AMCA" (somata and dendrites, app/analysis/soma.py). Other
+stainings are taken as they come: the soma channel is the blue stain
+(SOMA_STAINS), the AIS channel 488 if there is one, else the first other
+channel (Czi.ais_name).
 
 Only what ours are is read: uncompressed 8- or 16-bit greyscale, one scene,
 one Z and T, tiles (M) placed by their X/Y start. Anything else is refused
@@ -21,10 +24,10 @@ import numpy as np
 
 from app.analysis.images import ImageError
 
-# The channel the AIS is stained in and the one soma.py reads, by the names
-# ZEN records.
+# The channel the AIS is usually stained in, by the name ZEN records, and the
+# stains soma.py can read, in order of preference (matched within the name).
 AIS_CHANNEL = "Alexa Fluor 488"
-SOMA_CHANNEL = "AMCA"
+SOMA_STAINS = ("AMCA", "DAPI", "Hoechst")
 
 MAGIC = b"ZISRAWFILE"
 SEGMENT_HEADER = 32
@@ -45,6 +48,26 @@ class Czi:
         if name not in self.channels:
             raise ImageError(f"the .czi file has no {name!r} channel (it has {', '.join(map(repr, self.channels))})")
         return self.channels[name]
+
+    @property
+    def soma_name(self) -> str | None:
+        """The channel soma.py reads: the first SOMA_STAINS stain there is;
+        None when the cell has none."""
+        for stain in SOMA_STAINS:
+            for name in self.channels:
+                if stain.lower() in name.lower():
+                    return name
+        return None
+
+    @property
+    def ais_name(self) -> str:
+        """The channel the AIS is traced in: Alexa Fluor 488 when there is
+        one, else the first channel that is not the soma's (an AIS stained in
+        594, say), else the only channel."""
+        if AIS_CHANNEL in self.channels:
+            return AIS_CHANNEL
+        soma = self.soma_name
+        return next((n for n in self.channels if n != soma), next(iter(self.channels)))
 
     def as_tiff(self, name: str) -> np.ndarray:
         """The channel as ZEN exports it to TIFF: scaled up to fill 16 bits

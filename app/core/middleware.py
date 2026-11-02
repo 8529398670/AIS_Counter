@@ -81,6 +81,12 @@ class SecurityHeaders:
                 # login page's Referrer-Policy: no-referrer) keeps it.
                 for name, value in self.headers.items():
                     headers.setdefault(name, value)
+                # An API answer is never kept unless its route says so (an
+                # image's PNG is). Without this, Cloudflare caches a 404 for
+                # a URL ending .png and has the browser keep it for hours: an
+                # image once missing stays "not uploaded" after it is there.
+                if scope.get("path", "").startswith("/api/"):
+                    headers.setdefault("cache-control", "no-store")
             await send(message)
 
         await self.app(scope, receive, send_with_headers)
@@ -126,6 +132,15 @@ def _is_trusted(address: str, trusted: Sequence[IPNetwork]) -> bool:
     return any(parsed in network for network in trusted)
 
 
+def _counted(scope: Scope) -> bool:
+    """Whether the limiter counts a request: everything but reading the
+    static files (a page load alone is some thirty of them, and a refused
+    script leaves the page half working). Anything that does work -- /api/,
+    /mcp, every POST -- counts."""
+    path = scope.get("path", "")
+    return scope.get("method") not in ("GET", "HEAD") or path.startswith(("/api/", "/mcp"))
+
+
 class RateLimit:
     """A per-process, in-memory sliding-window limiter, keyed by client IP.
     That is exactly right for the single uvicorn process this template runs.
@@ -155,7 +170,7 @@ class RateLimit:
             del self._hits[key]
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http":
+        if scope["type"] != "http" or not _counted(scope):
             await self.app(scope, receive, send)
             return
         now = time.monotonic()

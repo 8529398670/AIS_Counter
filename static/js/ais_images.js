@@ -158,6 +158,15 @@ const AisImages = {
     const f = entry.files[ Ais.traced( entry ) ];
     // Picked on the Batches screen and still waiting to upload: read here too.
     const picked = f.file || Batches.fileFor( f.sha );
+    // A .czi only the server can draw: picked here and not up yet (a new
+    // batch's still queued), so upload it now rather than say nobody has.
+    if ( !entry.thumb && picked && !f.stored && Ais.kind( entry ) === "czi" ) {
+      holder.replaceChildren( Dom.el( "span" , { class: "small text-body-tertiary px-2 text-center" ,
+        text: I18n.get( "ais.uploading" ).replace( "{name}" , f.name ) } ) );
+      try {
+        await Ais.upload( entry );
+      } catch ( error ) { /* falls through to "not uploaded" */ }
+    }
     if ( !entry.thumb ) {
       if ( picked && Ais.kind( entry ) !== "czi" ) {
         try {
@@ -166,7 +175,7 @@ const AisImages = {
           entry.thumb = null;
         }
       } else if ( f.stored ) {
-        entry.thumb = Dom.el( "img" , { attrs: { alt: "" , src: "/api/ais/files/" + f.sha + "/thumb.png" } } );
+        entry.thumb = Dom.el( "img" , { attrs: { alt: "" , src: "/api/ais/files/" + f.sha + "/thumb.png?v=2" } } );   // v=2: see Ais.show
       }
       if ( !entry.thumb ) {
         holder.replaceChildren( Dom.el( "span" , { class: "small text-body-tertiary px-2 text-center" , text: I18n.get( "ais.not_uploaded" ) } ) );

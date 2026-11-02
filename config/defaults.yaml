@@ -92,7 +92,7 @@ server:
   proxy_header: X-Forwarded-For
 
   body_limit_bytes: 1048576        # 1 MiB
-  rate_limit_max: 120
+  rate_limit_max: 600              # per visitor; static files are not counted
   rate_limit_window_seconds: 60
 
   # POST /mcp: the Model Context Protocol, so an agent (Claude Code, any MCP

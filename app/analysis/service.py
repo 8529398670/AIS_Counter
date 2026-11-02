@@ -12,16 +12,19 @@ click-independent part of the pipeline (mat2gray and the smoothing) is cached
 in memory for the last few images and smoothing settings, which makes every
 click after the first on an image take a fraction of a second.
 
-A .czi is one whole cell (CZI mode): its "Alexa Fluor 488" channel is the raw
-image (the same pixels as the exported <cell>_ORG.tif), traced on a processed
-version of it (preprocess.py, a port of the "Processed method 2.5" Fiji
-macro) and profiled from the raw, like a TIFF pair; its "AMCA" channel gives
-the somata auto mode starts from (soma.py).
+A .czi is one whole cell (CZI mode): its AIS channel (Czi.ais_name, usually
+"Alexa Fluor 488") is the raw image (the same pixels as the exported
+<cell>_ORG.tif), traced on a processed version of it (preprocess.py, a port
+of the "Processed method 2.5" Fiji macro) and profiled from the raw, like a
+TIFF pair; its soma channel (Czi.soma_name, usually "AMCA") gives the somata
+auto mode starts from (soma.py), if it has one.
 """
 from __future__ import annotations
 
 import hashlib
+import os
 import re
+import tempfile
 import threading
 from collections import OrderedDict
 from pathlib import Path
@@ -35,8 +38,13 @@ from app.analysis import detect as auto
 from app.analysis import mlcompat as ml
 from app.analysis import preprocess
 from app.analysis import soma as somata
-from app.analysis.czi import AIS_CHANNEL, SOMA_CHANNEL, is_czi, read_czi
+from app.analysis.czi import is_czi, read_czi
 from app.analysis.images import ImageError, preview_png, read_tiff, thumbnail_png, tiff_bytes
+
+class NotStored(ImageError):
+    """The server does not have the file (yet), as opposed to having one it
+    cannot read."""
+
 
 SHA_RE = re.compile(r"^[0-9a-f]{64}$")
 CACHE_SIZE = 6
@@ -54,7 +62,7 @@ class Library:
         self._prepared: OrderedDict[tuple, aa.PreparedImage] = OrderedDict()
         self._arrays: OrderedDict[str, np.ndarray] = OrderedDict()
         self._bright: dict[str, float] = {}
-        self._somata: OrderedDict[str, somata.Somata] = OrderedDict()
+        self._somata: OrderedDict[str, somata.Somata | None] = OrderedDict()
 
     def _path(self, sha: str, czi: bool = False) -> Path:
         if not isinstance(sha, str) or not SHA_RE.match(sha):
@@ -63,9 +71,17 @@ class Library:
 
     def _store(self, path: Path, data: bytes) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".part")
-        tmp.write_bytes(data)
-        tmp.replace(path)
+        # A temp of its own: requests for an image not stored yet (its view,
+        # channels and thumbnail) all fetch it in at once, and with a shared
+        # temp one would rewrite the file another had just put in place.
+        fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f"{path.stem}.", suffix=".part")
+        try:
+            with os.fdopen(fd, "wb") as f:
+                f.write(data)
+            os.replace(tmp, path)
+        except BaseException:
+            Path(tmp).unlink(missing_ok=True)
+            raise
 
     def add(self, data: bytes) -> dict[str, Any]:
         czi = is_czi(data)
@@ -93,7 +109,12 @@ class Library:
         path = self._path(sha)
         for legacy in self.root.glob(f"[0-9]*/{sha}.tif"):
             path.parent.mkdir(parents=True, exist_ok=True)
-            legacy.replace(path)
+            try:
+                legacy.replace(path)
+            except FileNotFoundError:
+                # Another request moved it in first.
+                if not path.exists():
+                    raise
             return path
         source = self.resolver(sha) if self.resolver else None
         if source:
@@ -106,7 +127,7 @@ class Library:
                 path = self._path(sha, is_czi(data))
                 self._store(path, data)
                 return path
-        raise ImageError("image not uploaded yet")
+        raise NotStored("image not uploaded yet")
 
     def array(self, sha: str) -> np.ndarray:
         """The image itself: a TIFF's first page, a CZI's AIS channel."""
@@ -138,7 +159,8 @@ class Library:
         return prep
 
     def soma(self, sha: str) -> somata.Somata | None:
-        """A CZI's somata (soma.py), kept per image; None for a TIFF."""
+        """A CZI's somata (soma.py), kept per image; None for a TIFF or a
+        CZI with no soma channel."""
         if not self.is_czi(sha):
             return None
         with self._lock:
@@ -146,7 +168,8 @@ class Library:
                 self._somata.move_to_end(sha)
                 return self._somata[sha]
         image = read_czi(self.file_path(sha).read_bytes())
-        found = somata.find(image.channel(SOMA_CHANNEL), image.pixel_um or aa.DEFAULT.pixconv)
+        name = image.soma_name
+        found = somata.find(image.channel(name), image.pixel_um or aa.DEFAULT.pixconv) if name else None
         with self._lock:
             self._somata[sha] = found
             while len(self._somata) > CACHE_SIZE:
@@ -221,8 +244,10 @@ class Library:
         CZI, with the somata it found (start "soma" needs them)."""
         prep = self.prepared(processed, settings)
         if not raw and self.is_czi(processed):
-            return auto.detect(prep, self.array(processed), threshold, settings, start, exclude,
-                               soma=self.soma(processed))
+            soma = self.soma(processed)
+            if start == "soma" and soma is None:
+                raise ImageError("start \"soma\" needs a soma channel (AMCA, DAPI or Hoechst), and this .czi has none")
+            return auto.detect(prep, self.array(processed), threshold, settings, start, exclude, soma=soma)
         if start == "soma":
             raise ImageError("start \"soma\" needs a .czi image (its AMCA channel)")
         if not raw:
@@ -241,8 +266,7 @@ def _read(data: bytes) -> np.ndarray:
     ZEN exports it to TIFF."""
     if is_czi(data):
         image = read_czi(data)
-        image.channel(SOMA_CHANNEL)   # refuse a CZI auto mode could not use
-        return np.ascontiguousarray(image.as_tiff(AIS_CHANNEL))
+        return np.ascontiguousarray(image.as_tiff(image.ais_name))
     return read_tiff(data)
 
 

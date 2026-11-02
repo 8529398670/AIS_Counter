@@ -48,7 +48,9 @@ const Batches = {
       input.addEventListener( "change" , () => {
         const target = this.addTarget;
         const name = this.pendingNew;
-        const picked = input.files;
+        // A copy: input.files is live, and clearing the input below empties
+        // it before a new batch (created first) gets to read it.
+        const picked = Array.from( input.files || [] );
         this.pendingNew = null;
         if ( picked && picked.length ) {
           if ( target ) this.addPicked( target , picked );
@@ -517,7 +519,8 @@ const Batches = {
     try {
       while ( this.queue.length ) {
         const item = this.queue[ 0 ];
-        const file = this.files.get( item.sha );
+        // Not again if the Process screen has uploaded it meanwhile.
+        const file = Ais.isStored( item.sha ) ? null : this.files.get( item.sha );
         const progress = this.local.get( item.batchId ) || { reading: false , done: 0 , total: 0 };
         if ( !this.local.has( item.batchId ) ) {
           progress.total = this.queue.filter( ( q ) => q.batchId === item.batchId ).length;

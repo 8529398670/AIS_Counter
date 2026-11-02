@@ -43,7 +43,7 @@ from app.analysis import detect as auto  # noqa: E402
 from app.analysis import mlcompat as ml  # noqa: E402
 from app.analysis import preprocess  # noqa: E402
 from app.analysis import soma as somata  # noqa: E402
-from app.analysis.czi import AIS_CHANNEL, SOMA_CHANNEL, read_czi  # noqa: E402
+from app.analysis.czi import read_czi  # noqa: E402
 from app.analysis.service import bright_level, run_click  # noqa: E402
 
 DEFAULT_GT = ROOT / "tests" / "autodata" / "batch12.json"
@@ -68,8 +68,8 @@ def load(gt_path: Path) -> list[dict[str, Any]]:
     for image in images:
         path = Path(image["file"])
         czi = read_czi((path if path.is_absolute() else ROOT / path).read_bytes())
-        image["raw"] = np.ascontiguousarray(czi.as_tiff(AIS_CHANNEL))
-        image["amca"] = czi.channel(SOMA_CHANNEL)
+        image["raw"] = np.ascontiguousarray(czi.as_tiff(czi.ais_name))
+        image["amca"] = czi.channel(czi.soma_name or "AMCA")
         image["pixel_um"] = czi.pixel_um or aa.DEFAULT.pixconv
     return images
 

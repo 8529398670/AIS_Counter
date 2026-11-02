@@ -70,8 +70,7 @@ def _tiff_bytes(arr) -> bytes:
 def test_store_is_shared_and_finds_legacy_and_local_files(tmp_path):
     import hashlib
 
-    from app.analysis.images import ImageError
-    from app.analysis.service import Library
+    from app.analysis.service import Library, NotStored
 
     pic, _ = synthetic()
     data = _tiff_bytes(pic)
@@ -94,7 +93,7 @@ def test_store_is_shared_and_finds_legacy_and_local_files(tmp_path):
     try:
         lib3.file_path(other_sha)
         raise AssertionError("a changed file must not be accepted")
-    except ImageError:
+    except NotStored:
         pass
     assert lib.thumbnail(sha).startswith(b"\x89PNG")
 
@@ -148,6 +147,22 @@ def test_a_czi_is_traced_on_its_processed_ais_channel_and_finds_somata(tmp_path)
     assert library.channels(tiff) == []
     with pytest.raises(ImageError, match="czi"):
         library.detect(tiff, None, 0.01, start="soma")
+
+    # Another staining: the AIS in 594 is traced, and with no soma stain
+    # there are no somata, so only the Soma start is refused.
+    other = library.add(write_czi({"Alexa Fluor 594": ais_channel}))["sha256"]
+    assert np.array_equal(library.array(other), ais_channel * 16)
+    assert library.soma(other) is None
+    assert library.detect(other, None, 0.01)["candidates"]
+    with pytest.raises(ImageError, match="soma channel"):
+        library.detect(other, None, 0.01, start="soma")
+
+    # Only a file the server does not have is NotStored (the page calls it
+    # "not uploaded"); one it has but cannot read is a plain ImageError.
+    from app.analysis.service import NotStored
+
+    with pytest.raises(NotStored):
+        library.preview("0" * 64)
 
 
 def _tiff(arr: np.ndarray) -> bytes:

@@ -63,6 +63,16 @@ def test_not_a_czi_and_a_missing_channel_are_refused():
         read_czi(write_czi(planes())).channel("DAPI")
 
 
+def test_the_ais_and_soma_channels_are_whatever_the_cell_was_stained_in():
+    ais, soma = planes().values()
+    usual = read_czi(write_czi({"AMCA": soma, "Alexa Fluor 488": ais}))
+    assert (usual.ais_name, usual.soma_name) == ("Alexa Fluor 488", "AMCA")
+    other = read_czi(write_czi({"Alexa Fluor 594": ais, "DAPI": soma}))
+    assert (other.ais_name, other.soma_name) == ("Alexa Fluor 594", "DAPI")
+    alone = read_czi(write_czi({"Alexa Fluor 594": ais}))
+    assert (alone.ais_name, alone.soma_name) == ("Alexa Fluor 594", None)
+
+
 @pytest.mark.skipif(not (EXAMPLE.exists() and EXPORTED.exists()), reason="needs example-data/")
 def test_the_ais_channel_is_the_exported_raw_tiff():
     import tifffile

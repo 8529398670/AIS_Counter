@@ -21,11 +21,11 @@ from app.analysis import ais_auto as aa
 from app.analysis import detect as auto
 from app.analysis import local, matlab
 from app.analysis.images import ImageError
-from app.analysis.service import Library
+from app.analysis.service import Library, NotStored
 from app.core.security import actor_from, check_csrf
 from app.models import ais as batches
 from app.models import users
-from app.routes.helpers import bad_request, forbidden, get_config, get_store, not_found, parse_id, read_json, run
+from app.routes.helpers import bad_request, error, forbidden, get_config, get_store, not_found, parse_id, read_json, run
 
 UPLOAD_LIMIT_BYTES = 64 * 1024 * 1024
 
@@ -65,11 +65,19 @@ async def upload(request: Request) -> Response:
     return JSONResponse(info)
 
 
+def _unshown(exc: ImageError) -> Response:
+    """Why a file's view, channels or thumbnail is not there: 404 while the
+    server does not have the file, 422 when it has one it cannot read (a .czi
+    without the channels it needs, say), so the page does not call that file
+    "not uploaded"."""
+    return not_found(str(exc)) if isinstance(exc, NotStored) else error(422, str(exc))
+
+
 async def view(request: Request) -> Response:
     try:
         png = await run(_library(request).preview, request.path_params["sha"])
     except ImageError as exc:
-        return not_found(str(exc))
+        return _unshown(exc)
     return Response(png, media_type="image/png", headers={"Cache-Control": "private, max-age=86400"})
 
 
@@ -78,7 +86,7 @@ async def channels(request: Request) -> Response:
     try:
         found = await run(_library(request).channels, request.path_params["sha"])
     except ImageError as exc:
-        return not_found(str(exc))
+        return _unshown(exc)
     return JSONResponse({"channels": found}, headers={"Cache-Control": "private, max-age=86400"})
 
 
@@ -88,7 +96,7 @@ async def somata(request: Request) -> Response:
     try:
         found = await run(_library(request).soma, request.path_params["sha"])
     except ImageError as exc:
-        return not_found(str(exc))
+        return _unshown(exc)
     return JSONResponse({"somata": found.outlines if found else []}, headers={"Cache-Control": "private, max-age=86400"})
 
 
@@ -96,7 +104,9 @@ async def channel(request: Request) -> Response:
     try:
         index = int(request.path_params["index"])
         png = await run(_library(request).channel_png, request.path_params["sha"], index)
-    except (ImageError, ValueError) as exc:
+    except ImageError as exc:
+        return _unshown(exc)
+    except ValueError as exc:
         return not_found(str(exc))
     return Response(png, media_type="image/png", headers={"Cache-Control": "private, max-age=86400"})
 
@@ -105,7 +115,7 @@ async def thumb(request: Request) -> Response:
     try:
         png = await run(_library(request).thumbnail, request.path_params["sha"])
     except ImageError as exc:
-        return not_found(str(exc))
+        return _unshown(exc)
     return Response(png, media_type="image/png", headers={"Cache-Control": "private, max-age=86400"})
 
 

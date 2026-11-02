@@ -670,10 +670,37 @@ const Ais = {
       this.status( this.imageNote( entry ) , true );
       this.draw();
     };
-    img.onerror = () => { if ( this.index === index ) this.status( I18n.get( "ais.not_uploaded" ) ); };
+    // An <img> does not say why it failed: ask again to tell a file that is
+    // not there yet from a refusal (too many requests), which is retried.
+    let tries = 0;
+    img.onerror = async () => {
+      if ( this.index !== index ) return;
+      let code = 0;
+      let why = "";
+      try {
+        const response = await fetch( img.src , { credentials: "same-origin" } );
+        code = response.status;
+        // A file the server has but cannot read says why (a 422).
+        if ( code === 422 ) why = ( await response.json() ).error || "";
+      } catch ( error ) { /* offline: as before */ }
+      if ( this.index !== index ) return;
+      if ( code === 429 && tries < 6 ) {
+        tries += 1;
+        this.status( I18n.get( "ais.busy_retrying" ) );
+        window.setTimeout( () => {
+          if ( this.index === index ) img.src = src + ( src.includes( "?" ) ? "&" : "?" ) + "retry=" + tries;
+        } , 5000 * tries );
+        return;
+      }
+      if ( code === 404 || code === 0 ) this.status( I18n.get( "ais.not_uploaded" ) );
+      else this.status( I18n.get( "ais.view_failed" ) + ( why ? " (" + why + ")" : "" ) );
+    };
     // A .czi's view.png used to be its raw AIS channel and is now the processed
     // image: a URL of its own, so a copy cached under the old one is not reused.
-    img.src = "/api/ais/files/" + this.sha( entry ) + "/view.png" + ( this.kind( entry ) === "czi" ? "?processed=1" : "" );
+    // v=2: before 404s were sent uncached, Cloudflare had browsers keep the
+    // 404 of a .czi stained in other than 488 under the old URL for hours.
+    const src = "/api/ais/files/" + this.sha( entry ) + "/view.png" + ( this.kind( entry ) === "czi" ? "?processed=1&v=2" : "" );
+    img.src = src;
   },
 
   // Why a lone TIFF is handled the way it is -- until closed for this batch.
@@ -710,6 +737,10 @@ const Ais = {
     this.images.forEach( ( entry ) => Object.values( entry.files ).forEach( ( f ) => {
       if ( f.sha === sha ) f.stored = true;
     } ) );
+  },
+
+  isStored( sha ) {
+    return this.images.some( ( entry ) => Object.values( entry.files ).some( ( f ) => f.sha === sha && f.stored ) );
   },
 
   // After an import: upload every included image this browser picked,
