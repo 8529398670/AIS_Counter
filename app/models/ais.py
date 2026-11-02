@@ -2,7 +2,8 @@
 user so a link to a folder and image works for the whole team.
 
 A batch is one opened folder: its TIFFs grouped into images by cell (the
-original's "<cell>.tif" + "<cell>.tif - Processed method 2.5.tif"), each file
+original's "<cell>.tif" + "<cell>.tif - Processed method 2.5.tif"; a .czi is
+a cell on its own, role "czi", see app/analysis/service.py), each file
 known by the sha-256 of its bytes -- the id the shared file store
 (app/analysis/service.py) keeps it under. A batch opened by path (Open path)
 also records where each file lives, so the server can fetch one nobody has
@@ -28,7 +29,9 @@ from __future__ import annotations
 import hashlib
 import math
 import re
-from typing import Any
+import threading
+import time
+from typing import Any, Callable
 
 from app.core.db import BUCKET_AIS_BATCHES, BUCKET_AIS_RESULTS, Record, Store
 from app.models import to_iso, utc_now
@@ -36,9 +39,10 @@ from app.models import to_iso, utc_now
 PROCESSED_SUFFIX = ".tif - Processed method 2.5.tif"
 SHA_RE = re.compile(r"^[0-9a-f]{64}$")
 TIFF_RE = re.compile(r"\.tiff?$", re.IGNORECASE)
+CZI_RE = re.compile(r"\.czi$", re.IGNORECASE)
 MAX_FILES = 5000
 MAX_TEXT = 1000
-SOURCES = ("upload", "path")
+SOURCES = ("upload", "path")    # "mixed" once a batch has had both
 MAX_SHARES = 100
 
 # What an accepted row may carry, and the type each value must have.
@@ -105,6 +109,8 @@ def group(files: list[dict[str, Any]]) -> list[dict[str, Any]]:
             cell, role = re.sub(r"\.tif$", "", name[: -len(PROCESSED_SUFFIX)], flags=re.IGNORECASE), "processed"
         elif TIFF_RE.search(name):
             cell, role = TIFF_RE.sub("", name), "raw"
+        elif CZI_RE.search(name):
+            cell, role = CZI_RE.sub("", name), "czi"
         else:
             continue
         parts = f["rel"].replace("\\", "/").split("/")
@@ -116,7 +122,7 @@ def group(files: list[dict[str, Any]]) -> list[dict[str, Any]]:
     seen: dict[tuple[str, str], int] = {}
     for i, image in enumerate(ordered):
         files_ = image["files"]
-        signature = (files_.get("processed", {}).get("sha", ""), files_.get("raw", {}).get("sha", ""))
+        signature = tuple(files_.get(role, {}).get("sha", "") for role in ("processed", "raw", "czi"))
         if signature in seen:
             image["dup_of"] = seen[signature]
         else:
@@ -127,26 +133,154 @@ def group(files: list[dict[str, Any]]) -> list[dict[str, Any]]:
 # --- batches -------------------------------------------------------------------
 
 
-def create_batch(store: Store, name: str, source: str, files: list[dict[str, Any]], user_id: int,
-                 path: str | None = None) -> Record:
+def _stamp(record: Record) -> None:
+    record["updated_at"] = to_iso(utc_now())
+
+
+def new_batch(store: Store, name: str, source: str, user_id: int, path: str | None = None) -> Record:
+    """An empty batch; images come with add_files."""
+    if source not in SOURCES:
+        raise BatchError("unknown source")
+    batch_id = store.next_sequence(BUCKET_AIS_BATCHES)
+    now = to_iso(utc_now())
+    top = min((_position(b) for _, b in store.all(BUCKET_AIS_BATCHES)), default=0)
+    record = {
+        "id": batch_id,
+        "name": clean_name(name),
+        "source": source,
+        "path": path,
+        "created_by": user_id,
+        "created_at": now,
+        "updated_at": now,
+        "position": top - 1,
+        "archived_at": None,
+        "skipped": [],
+        "images": [],
+    }
+    store.put(BUCKET_AIS_BATCHES, batch_id, record)
+    return record
+
+
+def clean_name(name: Any) -> str:
+    name = _text(name.strip() if isinstance(name, str) else name, "name")
+    if len(name) > 200:
+        raise BatchError("name must be at most 200 characters")
+    return name
+
+
+def merge(existing: list[dict[str, Any]], added: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """added (from group) after existing: existing keys and indices stay put,
+    a key already taken gets " (2)", " (3)", ..., and dup_of points at the
+    first image, old or new, with the same bytes."""
+    taken = {im["key"] for im in existing}
+    out = list(existing)
+    seen: dict[tuple[str, ...], int] = {}
+    for i, image in enumerate(existing):
+        seen.setdefault(_signature(image), i)
+    for image in added:
+        image = {k: v for k, v in image.items() if k != "dup_of"}
+        key, n = image["key"], 2
+        while key in taken:
+            key, n = f"{image['key']} ({n})", n + 1
+        taken.add(key)
+        image["key"] = key
+        signature = _signature(image)
+        if signature in seen:
+            image["dup_of"] = seen[signature]
+        else:
+            seen[signature] = len(out)
+        out.append(image)
+    return out
+
+
+def _signature(image: dict[str, Any]) -> tuple[str, ...]:
+    return tuple(image["files"].get(role, {}).get("sha", "") for role in ("processed", "raw", "czi"))
+
+
+def add_files(store: Store, batch_id: int, source: str, files: Any, path: str | None = None) -> Record | None:
+    """More files into a batch: a folder or files picked later. None when the
+    batch is gone. A batch fed from both the browser and a server folder
+    becomes source "mixed"."""
     if source not in SOURCES:
         raise BatchError("unknown source")
     images = group(clean_files(files))
     if not images:
-        raise BatchError("no TIFF files")
-    batch_id = store.next_sequence(BUCKET_AIS_BATCHES)
-    record = {
-        "id": batch_id,
-        "name": _text(name, "name"),
-        "source": source,
-        "path": path,
-        "created_by": user_id,
-        "created_at": to_iso(utc_now()),
-        "skipped": [],
-        "images": images,
-    }
-    store.put(BUCKET_AIS_BATCHES, batch_id, record)
+        raise BatchError("no TIFF or CZI files")
+
+    def mutate(record: Record) -> None:
+        if record["images"] and record["source"] != source:
+            record["source"] = "mixed"
+        elif not record["images"]:
+            record["source"] = source
+        if path and not record.get("path"):
+            record["path"] = path
+        record["images"] = merge(record["images"], images)
+        _stamp(record)
+
+    return store.update_value(BUCKET_AIS_BATCHES, batch_id, mutate)
+
+
+def create_batch(store: Store, name: str, source: str, files: list[dict[str, Any]], user_id: int,
+                 path: str | None = None) -> Record:
+    """A batch with its files in one go (Open folder, Open path)."""
+    if source not in SOURCES:
+        raise BatchError("unknown source")
+    images = group(clean_files(files))
+    if not images:
+        raise BatchError("no TIFF or CZI files")
+    record = new_batch(store, name, source, user_id, path)
+    record["images"] = merge([], images)
+    store.put(BUCKET_AIS_BATCHES, record["id"], record)
     return record
+
+
+def rename_batch(store: Store, batch_id: int, name: Any) -> Record | None:
+    """New name for the batch and for its accepted rows' batch_name."""
+    clean = clean_name(name)
+    with store.transaction() as tx:
+        batch = tx.get(BUCKET_AIS_BATCHES, batch_id)
+        if batch is None:
+            return None
+        batch["name"] = clean
+        _stamp(batch)
+        tx.put(BUCKET_AIS_BATCHES, batch_id, batch)
+        for key, row in tx.all(BUCKET_AIS_RESULTS):
+            if row["batch_id"] == batch_id:
+                tx.put(BUCKET_AIS_RESULTS, key, row | {"batch_name": clean})
+    return batch
+
+
+def _position(batch: Record) -> int:
+    """Where the batch sits in the team's priority order, lowest first;
+    batches from before the order existed sit newest first."""
+    position = batch.get("position")
+    return position if isinstance(position, int) else -batch["id"]
+
+
+def archive_batch(store: Store, batch_id: int, archived: bool) -> Record | None:
+    """Archive (or bring back) a batch: kept with its results, only hidden."""
+    def mutate(record: Record) -> None:
+        record["archived_at"] = to_iso(utc_now()) if archived else None
+        _stamp(record)
+
+    return store.update_value(BUCKET_AIS_BATCHES, batch_id, mutate)
+
+
+def order_batches(store: Store, ids: Any) -> None:
+    """The team's priority order: ids first, in that order, then every batch
+    not listed, in the order it had."""
+    if (not isinstance(ids, list) or len(ids) > 10000
+            or not all(isinstance(i, int) and not isinstance(i, bool) for i in ids)):
+        raise BatchError("ids must be a list of batch ids")
+    if len(set(ids)) != len(ids):
+        raise BatchError("ids must not repeat")
+    with store.transaction() as tx:
+        current = sorted((b for _, b in tx.all(BUCKET_AIS_BATCHES)), key=lambda b: (_position(b), -b["id"]))
+        rank = {batch_id: n for n, batch_id in enumerate(ids)}
+        ordered = sorted(current, key=lambda b: (0, rank[b["id"]]) if b["id"] in rank else (1, 0))
+        for position, batch in enumerate(ordered):
+            if batch.get("position") != position:
+                tx.put(BUCKET_AIS_BATCHES, batch["id"], batch | {"position": position})
 
 
 def get_batch(store: Store, batch_id: int) -> Record | None:
@@ -166,20 +300,51 @@ def _complete(batch: Record, by_image: dict[str, Any]) -> set[str]:
     return (set(by_image) | set(batch["skipped"])) & {im["key"] for im in batch["images"]}
 
 
-def list_batches(store: Store, viewer_id: int | None = None) -> list[Record]:
-    """Newest first, without the image lists: name, counts and progress, per
-    assignee too, and the viewer's own part (mine) when they have one."""
+def list_batches(store: Store, viewer_id: int | None = None,
+                 has: Callable[[dict[str, Any]], bool] | None = None) -> list[Record]:
+    """In the team's priority order (new batches on top), without the image
+    lists, archived ones too (archived_at): name, counts and progress, per
+    assignee too, and the viewer's own part (mine) when they have one. With
+    has (can the server show this file?), stored counts the uploads."""
     rows = _rows_by_image(store)
     out = []
     for _, batch in store.all(BUCKET_AIS_BATCHES):
         by_image = rows.get(batch["id"], {})
         assignees = progress(batch, by_image)
         mine = next((a for a in assignees if a["user_id"] == viewer_id), None)
-        out.append({k: batch[k] for k in ("id", "name", "source", "path", "created_by", "created_at")}
-                   | {"images": len(batch["images"]), "completed": len(_complete(batch, by_image)),
-                      "duplicates": sum(1 for im in batch["images"] if "dup_of" in im),
-                      "assignees": assignees, "mine": mine})
-    return sorted(out, key=lambda b: b["id"], reverse=True)
+        files = [f for im in batch["images"] for f in im["files"].values()]
+        item = ({k: batch[k] for k in ("id", "name", "source", "path", "created_by", "created_at")}
+                | {"updated_at": batch.get("updated_at", batch["created_at"]),
+                   "archived_at": batch.get("archived_at"), "position": _position(batch),
+                   "images": len(batch["images"]), "completed": len(_complete(batch, by_image)),
+                   "duplicates": sum(1 for im in batch["images"] if "dup_of" in im),
+                   "ais": sum(len(v) for v in by_image.values()),
+                   "auto": sum(1 for v in by_image.values() for r in v if r.get("origin") == "auto"),
+                   "files": len(files),
+                   "assignees": assignees, "mine": mine})
+        if has is not None:
+            item["stored"] = sum(1 for f in files if has(f))
+        out.append(item)
+    return sorted(out, key=lambda b: (b["position"], -b["id"]))
+
+
+def image_status(batch: Record, rows: list[Record], has: Callable[[dict[str, Any]], bool]) -> list[dict[str, Any]]:
+    """Per image, for the Batches screen's detail list: files on the server,
+    accepted AIS, done mark, duplicate and assignee."""
+    by_image: dict[str, list[Record]] = {}
+    for row in rows:
+        by_image.setdefault(row["image"], []).append(row)
+    skipped = set(batch["skipped"])
+    out = []
+    for image in batch["images"]:
+        files = list(image["files"].values())
+        accepted = by_image.get(image["key"], [])
+        out.append({"key": image["key"], "cell": image["cell"], "dir": image["dir"],
+                    "files": len(files), "stored": sum(1 for f in files if has(f)),
+                    "ais": len(accepted), "auto": sum(1 for r in accepted if r.get("origin") == "auto"),
+                    "done": image["key"] in skipped, "dup_of": image.get("dup_of"),
+                    "assignee": assignee_of(batch, image["key"])})
+    return out
 
 
 def set_done(store: Store, batch_id: int, key: str, done: bool) -> Record | None:
@@ -191,8 +356,46 @@ def set_done(store: Store, batch_id: int, key: str, done: bool) -> Record | None
         if done:
             skipped.append(key)
         record["skipped"] = skipped
+        _stamp(record)
 
     return store.update_value(BUCKET_AIS_BATCHES, batch_id, mutate)
+
+
+RESET_SCOPES = ("all", "auto")
+
+
+def reset_batch(store: Store, batch_id: int, scope: str) -> tuple[Record, int] | None:
+    """An admin's fresh start on a batch, to run it again: scope "all" deletes
+    every accepted AIS and done mark, "auto" only the AIS auto mode saved (the
+    rest renumbered 1..k per image) and the done marks of the images they were
+    on. Images and the assignment stay. Returns (batch, AIS deleted)."""
+    if scope not in RESET_SCOPES:
+        raise BatchError("scope must be all or auto")
+    with store.transaction() as tx:
+        record = tx.get(BUCKET_AIS_BATCHES, batch_id)
+        if record is None:
+            return None
+        rows = [r for _, r in tx.all(BUCKET_AIS_RESULTS) if r["batch_id"] == batch_id]
+        gone = [r for r in rows if scope == "all" or r.get("origin") == "auto"]
+        for r in gone:
+            tx.delete(BUCKET_AIS_RESULTS, r["id"])
+        if scope == "all":
+            record["skipped"] = []
+        else:
+            touched = {r["image"] for r in gone}
+            record["skipped"] = [k for k in record["skipped"] if k not in touched]
+            gone_ids = {r["id"] for r in gone}
+            by_image: dict[str, list[Record]] = {}
+            for r in rows:
+                if r["id"] not in gone_ids:
+                    by_image.setdefault(r["image"], []).append(r)
+            for rest in by_image.values():
+                for n, r in enumerate(sorted(rest, key=lambda r: (r["n"], r["id"])), 1):
+                    if r["n"] != n:
+                        tx.put(BUCKET_AIS_RESULTS, r["id"], r | {"n": n})
+        _stamp(record)
+        tx.put(BUCKET_AIS_BATCHES, batch_id, record)
+    return record, len(gone)
 
 
 def delete_batch(store: Store, batch_id: int) -> None:
@@ -277,6 +480,7 @@ def assign(store: Store, batch_id: int, shares: Any, user_id: int) -> Record | N
                                    "by": user_id, "at": to_iso(utc_now())}
         else:
             batch.pop("assignment", None)
+        _stamp(batch)
         tx.put(BUCKET_AIS_BATCHES, batch_id, batch)
     return batch
 
@@ -429,3 +633,46 @@ def import_rows(store: Store, rows: Any, user_id: int, name: str) -> Record:
     for row in rows:
         add_result(store, batch["id"], by_cell[row["image"]], row, user_id)
     return batch
+
+
+# --- live activity -------------------------------------------------------------
+
+
+class Activity:
+    """What people are running on each batch right now (auto mode's progress,
+    which lives in their browser), as they last reported it. Kept in memory
+    only: a report older than ttl seconds has stopped, so it drops out."""
+
+    KINDS = ("auto",)
+    STATES = ("running", "paused", "finished", "stopped")
+
+    def __init__(self, ttl: float = 60.0, clock: Callable[[], float] | None = None) -> None:
+        self._ttl = ttl
+        self._clock = clock or time.monotonic
+        self._lock = threading.Lock()
+        self._reports: dict[tuple[int, int, str], dict[str, Any]] = {}
+
+    def report(self, batch_id: int, user_id: int, body: dict[str, Any]) -> dict[str, Any]:
+        kind, state, done, total = body.get("kind"), body.get("state"), body.get("done"), body.get("total")
+        if kind not in self.KINDS or state not in self.STATES:
+            raise BatchError("kind or state is not known")
+        if (not all(isinstance(n, int) and not isinstance(n, bool) for n in (done, total))
+                or not 0 <= done <= total <= MAX_FILES):
+            raise BatchError("done and total must be counts")
+        item = {"user_id": user_id, "kind": kind, "state": state, "done": done, "total": total,
+                "at": to_iso(utc_now())}
+        with self._lock:
+            self._reports[(batch_id, user_id, kind)] = item | {"_t": self._clock()}
+        return item
+
+    def current(self) -> dict[int, list[dict[str, Any]]]:
+        """batch id -> live reports."""
+        now = self._clock()
+        out: dict[int, list[dict[str, Any]]] = {}
+        with self._lock:
+            for key, item in list(self._reports.items()):
+                if now - item["_t"] > self._ttl:
+                    del self._reports[key]
+                    continue
+                out.setdefault(key[0], []).append({k: v for k, v in item.items() if k != "_t"})
+        return out

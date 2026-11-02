@@ -67,6 +67,18 @@ def test_hashed_files_gives_each_tiff_its_sha(tmp_path):
     assert files[0]["path"] == str(tmp_path.resolve() / "a.tif")
 
 
+def test_hashed_files_reads_subfolders_with_the_folder_name_first(tmp_path):
+    top = tmp_path / "exp"
+    (top / "s1").mkdir(parents=True)
+    (top / ".hidden").mkdir()
+    _tiff(top / "a.tif")
+    _tiff(top / "s1" / "b.tif")
+    _tiff(top / ".hidden" / "c.tif")
+    folder, files = local.hashed_files(str(top))
+    assert [(f["name"], f["rel"]) for f in files] == [("a.tif", "exp/a.tif"), ("b.tif", "exp/s1/b.tif")]
+    assert files[1]["path"] == str(top.resolve() / "s1" / "b.tif")
+
+
 def test_reveal_and_open_only_touch_tiffs(tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(local.subprocess, "run", lambda args, **kw: calls.append(args))
@@ -105,6 +117,6 @@ def _request(method: str, query: bytes = b"", body: dict | None = None) -> Reque
 
 def test_routes_refuse_when_switched_off(tmp_path):
     _tiff(tmp_path / "a.tif")
-    for handler in (ais.local_list, ais.batch_path, ais.local_reveal, ais.local_open, ais.local_choose, ais.local_matlab):
+    for handler in (ais.local_list, ais.batch_path, ais.batch_add_path, ais.local_reveal, ais.local_open, ais.local_choose, ais.local_matlab):
         response = asyncio.run(handler(_request("POST", body={"path": str(tmp_path / "a.tif")})))
         assert response.status_code == 403

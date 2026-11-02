@@ -4,6 +4,7 @@
     python -m app manage <cmd>       account administration
     python -m app config <cmd>       create, check, or read config.yaml
     python -m app health             exit 0 if the local server answers
+    python -m app view <image>       open .czi/.tif in napari (scripts/view.sh)
     python -m app version            build information
 
 One entry point for everything, so the server and the tools around it always
@@ -25,6 +26,7 @@ Usage:
   python -m app manage <cmd>    account administration
   python -m app config <cmd>    create, check, or read config.yaml
   python -m app health          exit 0 if the local server answers
+  python -m app view <image>    open .czi/.tif in napari (scripts/view.sh)
   python -m app version         build information
 """
 
@@ -80,6 +82,15 @@ def main(arguments: list[str]) -> None:
         except Exception as error:  # noqa: BLE001
             print(f"unhealthy: {error}", file=sys.stderr)
             sys.exit(1)
+    elif command == "view":
+        from app import view
+
+        try:
+            view.run(rest)
+        except ModuleNotFoundError as error:
+            fail(f"{error} -- scripts/view.sh installs app/requirements-view.txt")
+        except ValueError as error:
+            fail(error)
     elif command in ("version", "--version", "-version"):
         print(
             f"{PROJECT_NAME} {version} (commit {commit}, built {build_date}, "

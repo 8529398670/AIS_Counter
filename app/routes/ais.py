@@ -12,7 +12,7 @@ from __future__ import annotations
 import base64
 import binascii
 import math
-from typing import Any
+from typing import Any, Callable
 
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
@@ -69,6 +69,34 @@ async def view(request: Request) -> Response:
     try:
         png = await run(_library(request).preview, request.path_params["sha"])
     except ImageError as exc:
+        return not_found(str(exc))
+    return Response(png, media_type="image/png", headers={"Cache-Control": "private, max-age=86400"})
+
+
+async def channels(request: Request) -> Response:
+    """A .czi's channels [{index, name, color}] for the channel buttons; [] for a TIFF."""
+    try:
+        found = await run(_library(request).channels, request.path_params["sha"])
+    except ImageError as exc:
+        return not_found(str(exc))
+    return JSONResponse({"channels": found}, headers={"Cache-Control": "private, max-age=86400"})
+
+
+async def somata(request: Request) -> Response:
+    """A .czi's soma outlines (soma.py), each its edge pixels as 1-based [x, y],
+    for the Soma button; [] for a TIFF."""
+    try:
+        found = await run(_library(request).soma, request.path_params["sha"])
+    except ImageError as exc:
+        return not_found(str(exc))
+    return JSONResponse({"somata": found.outlines if found else []}, headers={"Cache-Control": "private, max-age=86400"})
+
+
+async def channel(request: Request) -> Response:
+    try:
+        index = int(request.path_params["index"])
+        png = await run(_library(request).channel_png, request.path_params["sha"], index)
+    except (ImageError, ValueError) as exc:
         return not_found(str(exc))
     return Response(png, media_type="image/png", headers={"Cache-Control": "private, max-age=86400"})
 
@@ -149,8 +177,8 @@ def _traces(value: Any) -> list[list[list[int]]] | None:
 async def detect(request: Request) -> Response:
     """Auto mode. Body: {processed, raw?, threshold?, settings?, start?,
     exclude?: [[[x, y], ...], ...]}. Every AIS found on the image without a
-    click (app/analysis/detect.py); start is both | brighter | dimmer, exclude
-    the traces already accepted on it."""
+    click (app/analysis/detect.py); start is both | brighter | dimmer | soma
+    (a .czi only) | fitted | fitted2, exclude the traces already accepted on it."""
     body, refused = await _body(request)
     if refused:
         return refused
@@ -183,13 +211,20 @@ def _names(request: Request) -> dict[int, str]:
     return {u.id: u.display_name for u in users.list_users(get_store(request))}
 
 
+def _has(request: Request) -> Callable[[dict[str, Any]], bool]:
+    """Whether the server can show a batch's file: it has the bytes, or (while
+    local folders are allowed) knows where on this machine it lives."""
+    library = _library(request)
+    by_path = get_config(request).local_folders_enabled
+    return lambda f: bool(by_path and f.get("path")) or library.has(f["sha"])
+
+
 def _batch_json(request: Request, batch: dict[str, Any]) -> dict[str, Any]:
     """The batch with, per file, whether the server can show it already."""
-    library = _library(request)
-    by_path = batch["source"] == "path" and get_config(request).local_folders_enabled
+    has = _has(request)
     images = []
     for image in batch["images"]:
-        files = {role: f | {"stored": by_path or library.has(f["sha"])} for role, f in image["files"].items()}
+        files = {role: f | {"stored": has(f)} for role, f in image["files"].items()}
         images.append(image | {"files": files})
     names = _names(request)
     assigned = {share["user_id"] for share in (batch.get("assignment") or {}).get("shares", [])}
@@ -197,16 +232,140 @@ def _batch_json(request: Request, batch: dict[str, Any]) -> dict[str, Any]:
                     "assignee_names": {str(u): names.get(u, "") for u in assigned}}
 
 
+def _activity(request: Request) -> batches.Activity:
+    return request.app.state.ais_activity
+
+
 async def batch_list(request: Request) -> Response:
-    """Every batch with its progress, per assignee too (the Batches dialog
-    polls this while open, as the live monitor)."""
-    rows = await run(batches.list_batches, get_store(request), _user_id(request))
+    """Every batch with its progress: uploads, completion, per assignee, and
+    any auto run going on (the Batches screen polls this as its monitor)."""
+    rows = await run(batches.list_batches, get_store(request), _user_id(request), _has(request))
     names = await run(_names, request)
+    live = _activity(request).current()
     for row in rows:
         row["created_by_name"] = names.get(row["created_by"], "")
         for a in row["assignees"]:
             a["name"] = names.get(a["user_id"], "")
+        row["activity"] = [a | {"name": names.get(a["user_id"], "")} for a in live.get(row["id"], [])]
     return JSONResponse({"batches": rows})
+
+
+async def batch_create(request: Request) -> Response:
+    """Body: {name}: an empty batch, its images added afterwards."""
+    body, refused = await _body(request)
+    if refused:
+        return refused
+    try:
+        batch = await run(batches.new_batch, get_store(request), body.get("name"), "upload", _user_id(request))
+    except batches.BatchError as exc:
+        return bad_request(str(exc))
+    return JSONResponse(await run(_batch_json, request, batch))
+
+
+async def _own_batch(request: Request) -> tuple[dict[str, Any] | None, Response | None]:
+    """The batch in the path, if whoever asks opened it or is an admin."""
+    batch_id = parse_id(request.path_params["batch_id"])
+    batch = await run(batches.get_batch, get_store(request), batch_id) if batch_id else None
+    if batch is None:
+        return None, not_found("no such batch")
+    actor = actor_from(request)
+    if batch["created_by"] != actor.user.id and not actor.is_admin:
+        return None, forbidden("only whoever opened the batch, or an admin, can change it")
+    return batch, None
+
+
+async def batch_rename(request: Request) -> Response:
+    """Body: {name}. Its accepted AIS carry the new name too."""
+    body, refused = await _body(request)
+    if refused:
+        return refused
+    batch, refused = await _own_batch(request)
+    if refused:
+        return refused
+    try:
+        renamed = await run(batches.rename_batch, get_store(request), batch["id"], body.get("name"))
+    except batches.BatchError as exc:
+        return bad_request(str(exc))
+    if renamed is None:
+        return not_found("no such batch")
+    return JSONResponse(await run(_batch_json, request, renamed))
+
+
+async def batch_archive(request: Request) -> Response:
+    """Body: {archived}: archive the batch (hidden, results kept) or bring it back."""
+    body, refused = await _body(request)
+    if refused:
+        return refused
+    if not isinstance(body.get("archived"), bool):
+        return bad_request("archived is required")
+    batch, refused = await _own_batch(request)
+    if refused:
+        return refused
+    archived = await run(batches.archive_batch, get_store(request), batch["id"], body["archived"])
+    if archived is None:
+        return not_found("no such batch")
+    return JSONResponse(await run(_batch_json, request, archived))
+
+
+async def batch_order(request: Request) -> Response:
+    """Body: {ids}: the team's priority order, first on top (admins)."""
+    body, refused = await _body(request)
+    if refused:
+        return refused
+    try:
+        await run(batches.order_batches, get_store(request), body.get("ids"))
+    except batches.BatchError as exc:
+        return bad_request(str(exc))
+    return JSONResponse({"ok": True})
+
+
+async def batch_add(request: Request) -> Response:
+    """Body: {files: [{name, rel, sha, size}]}: more files picked in the
+    browser for an existing batch. Upload them afterwards as for a new one."""
+    body, refused = await _body(request)
+    if refused:
+        return refused
+    batch_id = parse_id(request.path_params["batch_id"])
+    if not batch_id:
+        return not_found("no such batch")
+    try:
+        batch = await run(batches.add_files, get_store(request), batch_id, "upload", body.get("files"))
+    except batches.BatchError as exc:
+        return bad_request(str(exc))
+    if batch is None:
+        return not_found("no such batch")
+    return JSONResponse(await run(_batch_json, request, batch))
+
+
+async def batch_status(request: Request) -> Response:
+    """Per image: files on the server, accepted AIS, done, duplicate, assignee."""
+    store = get_store(request)
+    batch_id = parse_id(request.path_params["batch_id"])
+    batch = await run(batches.get_batch, store, batch_id) if batch_id else None
+    if batch is None:
+        return not_found("no such batch")
+    rows = await run(batches.list_results, store, batch_id)
+    images = await run(batches.image_status, batch, rows, _has(request))
+    names = await run(_names, request)
+    for image in images:
+        image["assignee_name"] = names.get(image["assignee"], "") if image["assignee"] else ""
+    return JSONResponse({"id": batch["id"], "images": images})
+
+
+async def batch_activity(request: Request) -> Response:
+    """Body: {kind: "auto", state, done, total}: how far this person's auto
+    run on the batch has got, so everyone's Batches screen can show it."""
+    body, refused = await _body(request)
+    if refused:
+        return refused
+    batch_id = parse_id(request.path_params["batch_id"])
+    if not batch_id:
+        return not_found("no such batch")
+    try:
+        item = _activity(request).report(batch_id, _user_id(request), body)
+    except batches.BatchError as exc:
+        return bad_request(str(exc))
+    return JSONResponse(item)
 
 
 async def batch_get(request: Request) -> Response:
@@ -262,6 +421,25 @@ async def batch_done(request: Request) -> Response:
     if batch is None:
         return not_found("no such batch")
     return JSONResponse({"skipped": batch["skipped"]})
+
+
+async def batch_reset(request: Request) -> Response:
+    """Body: {scope: all | auto}: delete the batch's results (admins), to run
+    it again. The Batches screen offers a backup export first."""
+    body, refused = await _body(request)
+    if refused:
+        return refused
+    batch_id = parse_id(request.path_params["batch_id"])
+    if not batch_id:
+        return not_found("no such batch")
+    try:
+        out = await run(batches.reset_batch, get_store(request), batch_id, body.get("scope"))
+    except batches.BatchError as exc:
+        return bad_request(str(exc))
+    if out is None:
+        return not_found("no such batch")
+    batch, deleted = out
+    return JSONResponse({"batch": await run(_batch_json, request, batch), "deleted": deleted})
 
 
 async def batch_assign(request: Request) -> Response:
@@ -414,6 +592,24 @@ async def batch_path(request: Request) -> Response:
     return JSONResponse(await run(_batch_json, request, batch))
 
 
+async def batch_add_path(request: Request) -> Response:
+    """Body: {path}: a folder on this machine added to an existing batch."""
+    body, refused = await _local_body(request)
+    if refused:
+        return refused
+    batch_id = parse_id(request.path_params["batch_id"])
+    if not batch_id:
+        return not_found("no such batch")
+    try:
+        folder, files = await run(local.hashed_files, body.get("path"))
+        batch = await run(batches.add_files, get_store(request), batch_id, "path", files, folder)
+    except (ImageError, batches.BatchError) as exc:
+        return bad_request(str(exc))
+    if batch is None:
+        return not_found("no such batch")
+    return JSONResponse(await run(_batch_json, request, batch))
+
+
 async def local_reveal(request: Request) -> Response:
     body, refused = await _local_body(request)
     if refused:
@@ -480,9 +676,8 @@ async def local_matlab(request: Request) -> Response:
     library = _library(request)
     user = _user_id(request)
     try:
-        processed_path = await run(library.file_path, processed)
-        raw_path = await run(library.file_path, raw) if raw else None
-        stem = await run(matlab.stage, cfg.storage_dir / "ais-matlab" / str(int(user)), cell, processed_path, raw_path)
+        processed_tiff, raw_tiff = await run(library.matlab_pair, processed, raw)
+        stem = await run(matlab.stage, cfg.storage_dir / "ais-matlab" / str(int(user)), cell, processed_tiff, raw_tiff)
         await run(matlab.launch, binary, mode, stem, threshold, clicks, settings)
     except ImageError as exc:
         return bad_request(str(exc))

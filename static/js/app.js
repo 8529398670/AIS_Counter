@@ -127,6 +127,7 @@ const App = {
     Settings.init();
     About.init();
     Ais.init( me );
+    Batches.init( me );
 
     if ( me.role === "admin" ) {
       Dom.show( Dom.get( "admin-panel" ) , true );

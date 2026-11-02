@@ -57,6 +57,7 @@
       <div class="offcanvas-body">
         <nav id="sidebar-nav" class="nav nav-pills flex-column w-100 gap-1">
           <a class="nav-link" href="#ais" data-nav="ais"><i class="bi bi-bezier2" aria-hidden="true"></i><span data-i18n="nav.ais"></span></a>
+          <a class="nav-link" href="#batches" data-nav="batches"><i class="bi bi-collection" aria-hidden="true"></i><span data-i18n="nav.batches"></span></a>
           <a class="nav-link" href="#settings" data-nav="settings"><i class="bi bi-sliders" aria-hidden="true"></i><span data-i18n="nav.settings"></span></a>
           <a class="nav-link" href="#about" data-nav="about"><i class="bi bi-info-circle" aria-hidden="true"></i><span data-i18n="nav.about"></span></a>
           <!-- Account: its second line names who is signed in (App.labelAccount). -->
@@ -157,14 +158,14 @@
               </label>
               <label class="btn btn-outline-primary mb-0 ais-focus-hide">
                 <i class="bi bi-images" aria-hidden="true"></i> <span data-i18n="ais.open_files"></span>
-                <input id="ais-files" type="file" accept=".tif,.tiff" multiple hidden />
+                <input id="ais-files" type="file" accept=".tif,.tiff,.czi" multiple hidden />
               </label>
               <button id="ais-open-path" class="btn btn-outline-primary ais-focus-hide" type="button" hidden>
                 <i class="bi bi-hdd" aria-hidden="true"></i> <span data-i18n="ais.open_path"></span>
               </button>
-              <button id="ais-batches-open" class="btn btn-outline-secondary ais-focus-hide" type="button">
+              <a id="ais-batches-open" class="btn btn-outline-secondary ais-focus-hide" href="#batches">
                 <i class="bi bi-collection" aria-hidden="true"></i> <span data-i18n="ais.batches"></span>
-              </button>
+              </a>
               <button id="ais-images-open" class="btn btn-outline-secondary ais-focus-hide" type="button" disabled>
                 <i class="bi bi-grid-3x3-gap" aria-hidden="true"></i> <span data-i18n="ais.images"></span> <span id="ais-images-count" class="badge text-bg-secondary"></span>
               </button>
@@ -216,15 +217,19 @@
                 <canvas id="ais-canvas"></canvas>
                 <p id="ais-empty" class="ais-empty" data-i18n="ais.empty"></p>
                 <p id="ais-status" class="ais-status small" hidden><span id="ais-status-text"></span><button id="ais-status-close" class="btn-close btn-close-white" type="button" data-i18n-attr="title:ais.note_close,aria-label:ais.note_close" hidden></button></p>
-                <!-- Pan and zoom: drag (or middle-drag) pans, the wheel zooms; lock freezes the view across images. -->
+                <!-- Pan and zoom: drag (or middle-drag) pans, the wheel zooms; lock freezes the view across images. Undo / redo take back accepted, edited and deleted AIS. -->
                 <div class="ais-viewtools btn-group-vertical btn-group-sm" role="group">
                   <button id="ais-zoom-in" class="btn btn-dark" type="button" data-i18n-attr="title:ais.zoom_in,aria-label:ais.zoom_in"><i class="bi bi-zoom-in" aria-hidden="true"></i></button>
                   <button id="ais-zoom-level" class="btn btn-dark ais-zoom-level" type="button" data-i18n-attr="title:ais.zoom_100"></button>
                   <button id="ais-zoom-out" class="btn btn-dark" type="button" data-i18n-attr="title:ais.zoom_out,aria-label:ais.zoom_out"><i class="bi bi-zoom-out" aria-hidden="true"></i></button>
                   <button id="ais-view-lock" class="btn btn-dark" type="button" data-i18n-attr="title:ais.view_lock,aria-label:ais.view_lock" aria-pressed="false"><i class="bi bi-unlock" aria-hidden="true"></i></button>
                   <button id="ais-view-reset" class="btn btn-dark" type="button" data-i18n-attr="title:ais.view_reset,aria-label:ais.view_reset"><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i></button>
+                  <button id="ais-undo" class="btn btn-dark" type="button" data-i18n-attr="title:ais.undo,aria-label:ais.undo" disabled><i class="bi bi-arrow-90deg-left" aria-hidden="true"></i></button>
+                  <button id="ais-redo" class="btn btn-dark" type="button" data-i18n-attr="title:ais.redo,aria-label:ais.redo" disabled><i class="bi bi-arrow-90deg-right" aria-hidden="true"></i></button>
                   <button id="ais-focus" class="btn btn-dark" type="button" data-i18n-attr="title:ais.focus,aria-label:ais.focus" aria-pressed="false"><i class="bi bi-arrows-fullscreen" aria-hidden="true"></i></button>
                 </div>
+                <!-- What the image shows (Ais.toggleView): the processed image, or a .czi's channels / a pair's raw file blended; on a .czi, Soma outlines the cell bodies over it. Hidden until hovered at the top left, folded into one button; open, they run along the top until the mouse leaves. -->
+                <div id="ais-channels" class="ais-channels" role="group" data-i18n-attr="aria-label:ais.views" hidden></div>
                 <!-- What a click on the image does (Ais.setTool): trace a new AIS, edit one, or delete one. -->
                 <div class="ais-tools btn-group btn-group-sm" role="group" data-i18n-attr="aria-label:ais.tools">
                   <button class="btn btn-dark" type="button" data-tool="trace" data-i18n-attr="title:ais.tool_trace,aria-label:ais.tool_trace" aria-pressed="true"><i class="bi bi-crosshair" aria-hidden="true"></i></button>
@@ -259,8 +264,9 @@
                   <p id="ais-auto-help" class="small mb-2"></p>
                   <!-- Confirm: Settings > Auto mode's start and filters, to tune on the spot (ais_auto.js). -->
                   <div id="ais-auto-quick" class="ais-auto-quick small mb-2" hidden>
-                    <label class="ais-auto-quick-start"><span data-i18n="ais.auto_quick_start"></span>
+                    <label id="ais-auto-quick-start-field" class="ais-auto-quick-start"><span data-i18n="ais.auto_quick_start"></span>
                       <select id="ais-auto-quick-start" class="form-select form-select-sm" data-i18n-attr="title:settings.auto_start_label">
+                        <option value="soma" data-i18n="settings.auto_start_soma"></option>
                         <option value="both" data-i18n="settings.auto_start_both"></option>
                         <option value="brighter" data-i18n="settings.auto_start_brighter"></option>
                         <option value="dimmer" data-i18n="settings.auto_start_dimmer"></option>
@@ -269,11 +275,20 @@
                     <label><span data-i18n="ais.auto_quick_length"></span>
                       <span class="input-group input-group-sm"><input id="ais-auto-quick-length" class="form-control" type="number" min="0" max="1000" step="0.1" data-i18n-attr="title:settings.auto_min_length_label" /><span class="input-group-text">µm</span></span>
                     </label>
+                    <label id="ais-auto-quick-contrast-field" hidden><span data-i18n="ais.auto_quick_contrast"></span>
+                      <span class="input-group input-group-sm"><input id="ais-auto-quick-contrast" class="form-control" type="number" min="0" max="100" step="1" data-i18n-attr="title:settings.fitted2_min_contrast_label" /><span class="input-group-text">%</span></span>
+                    </label>
                     <label><span data-i18n="ais.auto_quick_brightness"></span>
                       <span class="input-group input-group-sm"><input id="ais-auto-quick-brightness" class="form-control" type="number" min="0" max="100" step="1" data-i18n-attr="title:settings.auto_min_brightness_label" /><span class="input-group-text">%</span></span>
                     </label>
-                    <label><span data-i18n="ais.auto_quick_width"></span>
+                    <label id="ais-auto-quick-width-field"><span data-i18n="ais.auto_quick_width"></span>
                       <span class="input-group input-group-sm"><input id="ais-auto-quick-width" class="form-control" type="number" min="0" max="20" step="0.1" data-i18n-attr="title:settings.auto_min_width_label" /><span class="input-group-text">µm</span></span>
+                    </label>
+                    <label id="ais-auto-quick-soma-field" hidden><span data-i18n="ais.auto_quick_soma"></span>
+                      <span class="input-group input-group-sm"><input id="ais-auto-quick-soma" class="form-control" type="number" min="0" max="100" step="0.5" data-i18n-attr="title:settings.auto_max_soma_gap_label" /><span class="input-group-text">µm</span></span>
+                    </label>
+                    <label id="ais-auto-quick-branchiness-field" hidden><span data-i18n="ais.auto_quick_branchiness"></span>
+                      <input id="ais-auto-quick-branchiness" class="form-control form-control-sm" type="number" min="0" max="10" step="0.01" data-i18n-attr="title:settings.fitted_max_branchiness_label" />
                     </label>
                   </div>
                   <ul id="ais-auto-list" class="list-group list-group-flush small ais-auto-list"></ul>
@@ -366,34 +381,92 @@
             </div>
           </div>
 
-          <!-- Batches: every opened folder, shared by all signed-in users (app/models/ais.py). -->
-          <div class="modal fade" id="ais-batches-modal" tabindex="-1" aria-labelledby="ais-batches-title" aria-hidden="true">
-            <div class="modal-dialog modal-xl modal-dialog-scrollable">
+        </section>
+
+        <!-- Batches: every batch, shared by all signed-in users (app/models/ais.py),
+             with its uploads, progress and auto runs, refreshed while showing.
+             Driven by static/js/batches.js. -->
+        <section class="view" data-view="batches" id="batches-panel">
+          <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
+            <h2 class="h4 mb-0 me-auto" data-i18n="batches.heading"></h2>
+            <div class="form-check form-switch mb-0 small">
+              <input id="batches-mine" class="form-check-input" type="checkbox" />
+              <label class="form-check-label" for="batches-mine" data-i18n="batches.mine"></label>
+            </div>
+            <div class="form-check form-switch mb-0 small">
+              <input id="batches-archived" class="form-check-input" type="checkbox" />
+              <label class="form-check-label" for="batches-archived" data-i18n="batches.show_archived"></label>
+            </div>
+            <input id="batches-filter" class="form-control form-control-sm batches-filter" type="search" data-i18n-attr="placeholder:batches.filter,aria-label:batches.filter" />
+            <div class="btn-group">
+              <button id="batches-export-all" class="btn btn-outline-secondary btn-sm dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" data-i18n-attr="title:batches.export_all_help">
+                <i class="bi bi-download" aria-hidden="true"></i> <span data-i18n="batches.export_all"></span>
+              </button>
+              <ul class="dropdown-menu dropdown-menu-end">
+                <li><button class="dropdown-item" type="button" data-export-all="xlsx"><i class="bi bi-file-earmark-spreadsheet me-2" aria-hidden="true"></i><span data-i18n="batches.export_xlsx"></span></button></li>
+                <li><button class="dropdown-item" type="button" data-export-all="zip"><i class="bi bi-file-earmark-zip me-2" aria-hidden="true"></i><span data-i18n="batches.export_zip"></span></button></li>
+              </ul>
+            </div>
+            <button id="batches-new" class="btn btn-primary btn-sm" type="button"><i class="bi bi-plus-lg" aria-hidden="true"></i> <span data-i18n="batches.new"></span></button>
+          </div>
+          <form id="batches-new-form" class="card card-body mb-3" autocomplete="off" hidden>
+            <label for="batches-new-name" class="form-label small" data-i18n="batches.new_name"></label>
+            <input id="batches-new-name" class="form-control" maxlength="200" required />
+            <div class="d-flex flex-wrap gap-2 mt-2">
+              <button class="btn btn-primary" type="button" data-new-add="batches-add-folder"><i class="bi bi-folder2-open me-1" aria-hidden="true"></i><span data-i18n="batches.create_folder"></span></button>
+              <button class="btn btn-outline-primary" type="button" data-new-add="batches-add-files"><i class="bi bi-images me-1" aria-hidden="true"></i><span data-i18n="batches.create_files"></span></button>
+              <button id="batches-new-path" class="btn btn-outline-primary" type="button" data-new-add="path" hidden><i class="bi bi-hdd me-1" aria-hidden="true"></i><span data-i18n="batches.create_path"></span></button>
+              <button class="btn btn-outline-secondary" type="submit" data-i18n="batches.create_empty"></button>
+              <button id="batches-new-cancel" class="btn btn-outline-secondary" type="button" data-i18n="ais.cancel"></button>
+            </div>
+          </form>
+          <p id="batches-export-status" class="small text-primary" hidden></p>
+          <p id="batches-none" class="text-body-secondary" data-i18n="batches.none" hidden></p>
+          <div id="batches-list" class="batches-list"></div>
+          <!-- Pickers for Add images; batches.js remembers which batch asked. -->
+          <input id="batches-add-folder" type="file" webkitdirectory multiple hidden />
+          <input id="batches-add-files" type="file" accept=".tif,.tiff,.czi" multiple hidden />
+
+          <!-- Reset results: an admin deletes a batch's AIS to run it again, a backup first (static/js/batches.js). -->
+          <div class="modal fade" id="batches-reset-modal" tabindex="-1" aria-labelledby="batches-reset-title" aria-hidden="true">
+            <div class="modal-dialog">
               <div class="modal-content">
-                <div class="modal-header gap-3">
-                  <h2 class="modal-title h5 me-auto" id="ais-batches-title" data-i18n="ais.batches"></h2>
-                  <div id="ais-batches-mine-wrap" class="form-check form-switch mb-0 small" hidden>
-                    <input id="ais-batches-mine" class="form-check-input" type="checkbox" />
-                    <label class="form-check-label" for="ais-batches-mine" data-i18n="ais.assigned_to_me"></label>
+                <div class="modal-header">
+                  <div class="me-auto ais-images-heading">
+                    <h2 class="modal-title h5 mb-0" id="batches-reset-title" data-i18n="batches.reset_title"></h2>
+                    <div id="batches-reset-batch" class="small text-body-secondary text-truncate"></div>
                   </div>
                   <button type="button" class="btn-close" data-bs-dismiss="modal" data-i18n-attr="aria-label:nav.close"></button>
                 </div>
                 <div class="modal-body">
-                  <p id="ais-batches-none" class="text-body-secondary small" data-i18n="ais.batches_none" hidden></p>
-                  <div class="table-responsive">
-                    <table class="table table-sm align-middle small mb-0">
-                      <thead><tr>
-                        <th data-i18n="ais.batch_col_name"></th><th data-i18n="ais.batch_col_done"></th><th data-i18n="ais.batch_col_dups"></th><th data-i18n="ais.batch_col_assigned"></th>
-                        <th data-i18n="ais.batch_col_by"></th><th data-i18n="ais.batch_col_when"></th><th></th>
-                      </tr></thead>
-                      <tbody id="ais-batches-list"></tbody>
-                    </table>
+                  <div class="form-check">
+                    <input class="form-check-input" type="radio" name="batches-reset-scope" id="batches-reset-all" value="all" checked />
+                    <label class="form-check-label" for="batches-reset-all" id="batches-reset-all-label"></label>
                   </div>
+                  <div class="form-check mb-3">
+                    <input class="form-check-input" type="radio" name="batches-reset-scope" id="batches-reset-auto" value="auto" />
+                    <label class="form-check-label" for="batches-reset-auto" id="batches-reset-auto-label"></label>
+                  </div>
+                  <p class="small text-body-secondary" data-i18n="batches.reset_help"></p>
+                  <div class="d-flex align-items-center gap-2 flex-wrap">
+                    <button id="batches-reset-backup" type="button" class="btn btn-primary btn-sm"><i class="bi bi-file-earmark-zip me-1" aria-hidden="true"></i><span data-i18n="batches.reset_backup"></span></button>
+                    <span id="batches-reset-backup-status" class="small text-body-secondary"></span>
+                  </div>
+                  <div class="form-check mt-3">
+                    <input class="form-check-input" type="checkbox" id="batches-reset-skip" />
+                    <label class="form-check-label small" for="batches-reset-skip" data-i18n="batches.reset_no_backup"></label>
+                  </div>
+                </div>
+                <div class="modal-footer">
+                  <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal" data-i18n="ais.cancel"></button>
+                  <button id="batches-reset-go" type="button" class="btn btn-danger" data-i18n="batches.reset_go" disabled></button>
                 </div>
               </div>
             </div>
           </div>
+        </section>
 
+        <!-- Dialogs both the Process and Batches screens open. -->
           <!-- Assign: split a batch among people by share, admins (static/js/ais_assign.js). -->
           <div class="modal fade" id="ais-assign-modal" tabindex="-1" aria-labelledby="ais-assign-title" aria-hidden="true">
             <div class="modal-dialog modal-dialog-scrollable">
@@ -450,7 +523,6 @@
               </div>
             </div>
           </div>
-        </section>
 
         <section class="card view" data-view="account" id="account-panel">
           <div class="card-body">
@@ -525,8 +597,19 @@
                 <div id="settings-auto-review-help" class="form-text" data-i18n="settings.auto_review_help"></div>
               </div>
               <div class="mb-3 settings-field">
+                <label for="settings-auto-method" class="form-label" data-i18n="settings.auto_method_label"></label>
+                <select id="settings-auto-method" class="form-select" aria-describedby="settings-auto-method-help">
+                  <option value="classic" data-i18n="settings.auto_method_classic"></option>
+                  <option value="fitted" data-i18n="settings.auto_method_fitted" selected></option>
+                  <option value="fitted2" data-i18n="settings.auto_method_fitted2"></option>
+                </select>
+                <div id="settings-auto-method-help" class="form-text" data-i18n="settings.auto_method_help"></div>
+              </div>
+              <div id="settings-auto-classic" hidden>
+              <div class="mb-3 settings-field">
                 <label for="settings-auto-start" class="form-label" data-i18n="settings.auto_start_label"></label>
                 <select id="settings-auto-start" class="form-select" aria-describedby="settings-auto-start-help">
+                  <option value="soma" data-i18n="settings.auto_start_soma"></option>
                   <option value="both" data-i18n="settings.auto_start_both"></option>
                   <option value="brighter" data-i18n="settings.auto_start_brighter"></option>
                   <option value="dimmer" data-i18n="settings.auto_start_dimmer"></option>
@@ -556,6 +639,69 @@
                   <span class="input-group-text">µm</span>
                 </div>
                 <div id="settings-auto-min-width-help" class="form-text" data-i18n="settings.auto_min_width_help"></div>
+              </div>
+              <div class="mb-3 settings-field">
+                <label for="settings-auto-max-soma-gap" class="form-label" data-i18n="settings.auto_max_soma_gap_label"></label>
+                <div class="input-group">
+                  <input id="settings-auto-max-soma-gap" class="form-control" type="number" min="0" max="100" step="0.5" value="10" aria-describedby="settings-auto-max-soma-gap-help" />
+                  <span class="input-group-text">µm</span>
+                </div>
+                <div id="settings-auto-max-soma-gap-help" class="form-text" data-i18n="settings.auto_max_soma_gap_help"></div>
+              </div>
+              </div>
+              <div id="settings-auto-fitted">
+              <div class="mb-3 settings-field">
+                <label for="settings-fitted-min-length" class="form-label" data-i18n="settings.fitted_min_length_label"></label>
+                <div class="input-group">
+                  <input id="settings-fitted-min-length" class="form-control" type="number" min="0" max="1000" step="0.1" value="13" aria-describedby="settings-fitted-min-length-help" />
+                  <span class="input-group-text">µm</span>
+                </div>
+                <div id="settings-fitted-min-length-help" class="form-text" data-i18n="settings.fitted_min_length_help"></div>
+              </div>
+              <div class="mb-3 settings-field">
+                <label for="settings-fitted-min-brightness" class="form-label" data-i18n="settings.fitted_min_brightness_label"></label>
+                <div class="input-group">
+                  <input id="settings-fitted-min-brightness" class="form-control" type="number" min="0" max="100" step="1" value="55" aria-describedby="settings-fitted-min-brightness-help" />
+                  <span class="input-group-text">%</span>
+                </div>
+                <div id="settings-fitted-min-brightness-help" class="form-text" data-i18n="settings.fitted_min_brightness_help"></div>
+              </div>
+              <div class="mb-3 settings-field">
+                <label for="settings-fitted-max-branchiness" class="form-label" data-i18n="settings.fitted_max_branchiness_label"></label>
+                <input id="settings-fitted-max-branchiness" class="form-control" type="number" min="0" max="10" step="0.01" value="1.02" aria-describedby="settings-fitted-max-branchiness-help" />
+                <div id="settings-fitted-max-branchiness-help" class="form-text" data-i18n="settings.fitted_max_branchiness_help"></div>
+              </div>
+              </div>
+              <div id="settings-auto-fitted2" hidden>
+              <div class="mb-3 settings-field">
+                <label for="settings-fitted2-min-length" class="form-label" data-i18n="settings.fitted_min_length_label"></label>
+                <div class="input-group">
+                  <input id="settings-fitted2-min-length" class="form-control" type="number" min="0" max="1000" step="0.1" value="13" aria-describedby="settings-fitted2-min-length-help" />
+                  <span class="input-group-text">µm</span>
+                </div>
+                <div id="settings-fitted2-min-length-help" class="form-text" data-i18n="settings.fitted_min_length_help"></div>
+              </div>
+              <div class="mb-3 settings-field">
+                <label for="settings-fitted2-min-contrast" class="form-label" data-i18n="settings.fitted2_min_contrast_label"></label>
+                <div class="input-group">
+                  <input id="settings-fitted2-min-contrast" class="form-control" type="number" min="0" max="100" step="1" value="30" aria-describedby="settings-fitted2-min-contrast-help" />
+                  <span class="input-group-text">%</span>
+                </div>
+                <div id="settings-fitted2-min-contrast-help" class="form-text" data-i18n="settings.fitted2_min_contrast_help"></div>
+              </div>
+              <div class="mb-3 settings-field">
+                <label for="settings-fitted2-min-brightness" class="form-label" data-i18n="settings.fitted_min_brightness_label"></label>
+                <div class="input-group">
+                  <input id="settings-fitted2-min-brightness" class="form-control" type="number" min="0" max="100" step="1" value="0" aria-describedby="settings-fitted2-min-brightness-help" />
+                  <span class="input-group-text">%</span>
+                </div>
+                <div id="settings-fitted2-min-brightness-help" class="form-text" data-i18n="settings.fitted2_min_brightness_help"></div>
+              </div>
+              <div class="mb-3 settings-field">
+                <label for="settings-fitted2-max-branchiness" class="form-label" data-i18n="settings.fitted_max_branchiness_label"></label>
+                <input id="settings-fitted2-max-branchiness" class="form-control" type="number" min="0" max="10" step="0.01" value="1.02" aria-describedby="settings-fitted2-max-branchiness-help" />
+                <div id="settings-fitted2-max-branchiness-help" class="form-text" data-i18n="settings.fitted_max_branchiness_help"></div>
+              </div>
               </div>
               <div class="form-check settings-field">
                 <input id="settings-auto-skip-done" class="form-check-input" type="checkbox" checked aria-describedby="settings-auto-skip-done-help" />
@@ -979,6 +1125,7 @@
   <script src="/js/invites.js"></script>
   <script src="/js/tiff.js"></script>
   <script src="/js/zip.js"></script>
+  <script src="/js/xlsx.js"></script>
   <script src="/vendor/marked.min.js"></script>
   <script src="/js/settings.js"></script>
   <script src="/js/about.js"></script>
@@ -987,6 +1134,7 @@
   <script src="/js/ais_assign.js"></script>
   <script src="/js/ais_export.js"></script>
   <script src="/js/ais_auto.js"></script>
+  <script src="/js/batches.js"></script>
   <script src="/js/app.js"></script>
 </body>
 </html>

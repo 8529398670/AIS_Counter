@@ -1,0 +1,14 @@
+# The image viewer, `python -m app view` (app/view.py), on top of
+# app/requirements.txt. scripts/view.sh and view.bat install it into .venv.
+# Kept out of app/requirements.txt because the Dockerfile installs that on
+# Alpine with --only-binary, and PyQt6 has no musllinux wheels; the server
+# has no use for a desktop GUI anyway.
+#
+# bioio reads both formats into the same TCZYX layout, with the channel names
+# and pixel size; bioio-czi does .czi (through aicspylibczi), bioio-tifffile
+# does .tif.
+napari[pyqt6]==0.10.0
+PyQt6==6.12.0
+bioio==3.6.0
+bioio-czi==4.0.0
+bioio-tifffile==1.3.1

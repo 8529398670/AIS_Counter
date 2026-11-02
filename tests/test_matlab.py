@@ -22,7 +22,7 @@ def _tiff(path, value=0):
 def test_stage_copies_the_pair_under_the_original_names(tmp_path):
     _tiff(tmp_path / "p.tif", 1)
     _tiff(tmp_path / "r.tif", 2)
-    stem = matlab.stage(tmp_path / "runs", "cell A", tmp_path / "p.tif", tmp_path / "r.tif")
+    stem = matlab.stage(tmp_path / "runs", "cell A", (tmp_path / "p.tif").read_bytes(), (tmp_path / "r.tif").read_bytes())
     assert stem.name == "cell_A"
     assert (stem.parent / "cell_A.tif - Processed method 2.5.tif").read_bytes() == (tmp_path / "p.tif").read_bytes()
     assert (stem.parent / "cell_A.tif").read_bytes() == (tmp_path / "r.tif").read_bytes()
@@ -30,7 +30,7 @@ def test_stage_copies_the_pair_under_the_original_names(tmp_path):
 
 def test_stage_uses_a_single_file_for_both(tmp_path):
     _tiff(tmp_path / "p.tif")
-    stem = matlab.stage(tmp_path / "runs", "c", tmp_path / "p.tif", None)
+    stem = matlab.stage(tmp_path / "runs", "c", (tmp_path / "p.tif").read_bytes(), None)
     assert (stem.parent / "c.tif").read_bytes() == (tmp_path / "p.tif").read_bytes()
 
 
@@ -39,7 +39,7 @@ def test_stage_keeps_only_recent_runs(tmp_path):
     for k in range(25):
         (runs / f"20260101-0000{k:02d}-old").mkdir(parents=True)
     _tiff(tmp_path / "p.tif")
-    matlab.stage(runs, "c", tmp_path / "p.tif", None)
+    matlab.stage(runs, "c", (tmp_path / "p.tif").read_bytes(), None)
     left = sorted(p.name for p in runs.iterdir())
     assert len(left) == matlab.KEEP_RUNS and left[-1].endswith("-c")
 

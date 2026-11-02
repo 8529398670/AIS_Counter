@@ -1,7 +1,8 @@
-"""What the routes call: store uploaded TIFFs, and turn one click into the
-original's trace and measures as JSON.
+"""What the routes call: store uploaded TIFFs and CZIs, and turn one click
+into the original's trace and measures as JSON.
 
-Files are content-addressed under <storage>/ais/files/<sha256>.tif, one store
+Files are content-addressed under <storage>/ais/files/<sha256>.tif (or .czi),
+one store
 shared by every user: batches are shared (app/models/ais.py), so anyone who
 can open a batch can see its images, and a sha is only ever learnt from a
 batch. Re-uploading the same image is free. A file that is not there yet is
@@ -10,6 +11,12 @@ Open-path batch recorded for it (`resolver`), and copied in. The
 click-independent part of the pipeline (mat2gray and the smoothing) is cached
 in memory for the last few images and smoothing settings, which makes every
 click after the first on an image take a fraction of a second.
+
+A .czi is one whole cell (CZI mode): its "Alexa Fluor 488" channel is the raw
+image (the same pixels as the exported <cell>_ORG.tif), traced on a processed
+version of it (preprocess.py, a port of the "Processed method 2.5" Fiji
+macro) and profiled from the raw, like a TIFF pair; its "AMCA" channel gives
+the somata auto mode starts from (soma.py).
 """
 from __future__ import annotations
 
@@ -26,10 +33,14 @@ from scipy import ndimage as ndi
 from app.analysis import ais_auto as aa
 from app.analysis import detect as auto
 from app.analysis import mlcompat as ml
-from app.analysis.images import ImageError, preview_png, read_tiff, thumbnail_png
+from app.analysis import preprocess
+from app.analysis import soma as somata
+from app.analysis.czi import AIS_CHANNEL, SOMA_CHANNEL, is_czi, read_czi
+from app.analysis.images import ImageError, preview_png, read_tiff, thumbnail_png, tiff_bytes
 
 SHA_RE = re.compile(r"^[0-9a-f]{64}$")
 CACHE_SIZE = 6
+CHANNEL_PERCENTILES = (0.1, 99.9)
 SINGLE_NOTE = "single image: traced and profiled from the same file (the original profiles the raw <cell>.tif)"
 
 
@@ -43,11 +54,12 @@ class Library:
         self._prepared: OrderedDict[tuple, aa.PreparedImage] = OrderedDict()
         self._arrays: OrderedDict[str, np.ndarray] = OrderedDict()
         self._bright: dict[str, float] = {}
+        self._somata: OrderedDict[str, somata.Somata] = OrderedDict()
 
-    def _path(self, sha: str) -> Path:
+    def _path(self, sha: str, czi: bool = False) -> Path:
         if not isinstance(sha, str) or not SHA_RE.match(sha):
             raise ImageError("unknown image")
-        return self.files / f"{sha}.tif"
+        return self.files / f"{sha}.{'czi' if czi else 'tif'}"
 
     def _store(self, path: Path, data: bytes) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -56,22 +68,29 @@ class Library:
         tmp.replace(path)
 
     def add(self, data: bytes) -> dict[str, Any]:
-        arr = read_tiff(data)
+        czi = is_czi(data)
+        arr = _read(data)
         sha = hashlib.sha256(data).hexdigest()
-        path = self._path(sha)
+        path = self._path(sha, czi)
         if not path.exists():
             self._store(path, data)
-        return {"sha256": sha, "width": int(arr.shape[1]), "height": int(arr.shape[0]), "dtype": str(arr.dtype)}
+        return {"sha256": sha, "width": int(arr.shape[1]), "height": int(arr.shape[0]), "dtype": str(arr.dtype),
+                "czi": czi}
 
     def has(self, sha: str) -> bool:
-        return self._path(sha).exists()
+        return self._path(sha).exists() or self._path(sha, czi=True).exists()
+
+    def is_czi(self, sha: str) -> bool:
+        return self.file_path(sha).suffix == ".czi"
 
     def file_path(self, sha: str) -> Path:
-        """The stored TIFF, fetched in if it is known elsewhere (see the
+        """The stored file, fetched in if it is known elsewhere (see the
         module docstring); ImageError when it is nowhere."""
+        for czi in (False, True):
+            path = self._path(sha, czi)
+            if path.exists():
+                return path
         path = self._path(sha)
-        if path.exists():
-            return path
         for legacy in self.root.glob(f"[0-9]*/{sha}.tif"):
             path.parent.mkdir(parents=True, exist_ok=True)
             legacy.replace(path)
@@ -84,16 +103,18 @@ class Library:
                 data = b""
             # Only if the file there still has the same bytes.
             if data and hashlib.sha256(data).hexdigest() == sha:
+                path = self._path(sha, is_czi(data))
                 self._store(path, data)
                 return path
         raise ImageError("image not uploaded yet")
 
     def array(self, sha: str) -> np.ndarray:
+        """The image itself: a TIFF's first page, a CZI's AIS channel."""
         with self._lock:
             if sha in self._arrays:
                 self._arrays.move_to_end(sha)
                 return self._arrays[sha]
-        arr = read_tiff(self.file_path(sha).read_bytes())
+        arr = _read(self.file_path(sha).read_bytes())
         with self._lock:
             self._arrays[sha] = arr
             while len(self._arrays) > CACHE_SIZE * 2:
@@ -101,17 +122,36 @@ class Library:
         return arr
 
     def prepared(self, sha: str, settings: aa.Settings = aa.DEFAULT) -> aa.PreparedImage:
+        """The traced image, prepared: a CZI's processed version of its AIS
+        channel, else the file as it is."""
         key = (sha, settings.smooth, settings.kernel, settings.sigma)
         with self._lock:
             if key in self._prepared:
                 self._prepared.move_to_end(key)
                 return self._prepared[key]
-        prep = aa.PreparedImage.from_array(self.array(sha), settings)
+        arr = self.array(sha)
+        prep = aa.PreparedImage.from_array(preprocess.processed(arr) if self.is_czi(sha) else arr, settings)
         with self._lock:
             self._prepared[key] = prep
             while len(self._prepared) > CACHE_SIZE:
                 self._prepared.popitem(last=False)
         return prep
+
+    def soma(self, sha: str) -> somata.Somata | None:
+        """A CZI's somata (soma.py), kept per image; None for a TIFF."""
+        if not self.is_czi(sha):
+            return None
+        with self._lock:
+            if sha in self._somata:
+                self._somata.move_to_end(sha)
+                return self._somata[sha]
+        image = read_czi(self.file_path(sha).read_bytes())
+        found = somata.find(image.channel(SOMA_CHANNEL), image.pixel_um or aa.DEFAULT.pixconv)
+        with self._lock:
+            self._somata[sha] = found
+            while len(self._somata) > CACHE_SIZE:
+                self._somata.popitem(last=False)
+        return found
 
     def bright_ref(self, sha: str) -> float:
         """The image's bright level (see bright_level), kept per image."""
@@ -124,7 +164,35 @@ class Library:
         return level
 
     def preview(self, sha: str) -> bytes:
-        return preview_png(self.array(sha))
+        """The traced image: a CZI's processed AIS channel, else the file."""
+        arr = self.array(sha)
+        return preview_png(preprocess.processed(arr) if self.is_czi(sha) else arr)
+
+    def channels(self, sha: str) -> list[dict[str, Any]]:
+        """A CZI's channels, [{index, name, color}], for the channel buttons;
+        [] for a TIFF."""
+        if not self.is_czi(sha):
+            return []
+        image = read_czi(self.file_path(sha).read_bytes())
+        return [{"index": i, "name": name, "color": image.colors[name]} for i, name in enumerate(image.channels)]
+
+    def channel_png(self, sha: str, index: int) -> bytes:
+        """One CZI channel, greyscale between its 0.1th and 99.9th percentile."""
+        if not self.is_czi(sha):
+            raise ImageError("only a .czi has channels")
+        planes = list(read_czi(self.file_path(sha).read_bytes()).channels.values())
+        if not 0 <= index < len(planes):
+            raise ImageError("no such channel")
+        return preview_png(planes[index], CHANNEL_PERCENTILES)
+
+    def matlab_pair(self, processed: str, raw: str | None) -> tuple[bytes, bytes | None]:
+        """The TIFFs ais_auto.m reads for this cell (app/analysis/matlab.py):
+        the files themselves, or for a CZI the pair trace() uses -- its
+        processed AIS channel and the AIS channel as ZEN exports it."""
+        if not raw and self.is_czi(processed):
+            arr = self.array(processed)
+            return tiff_bytes(preprocess.processed(arr)), tiff_bytes(arr)
+        return self.file_path(processed).read_bytes(), self.file_path(raw).read_bytes() if raw else None
 
     def thumbnail(self, sha: str) -> bytes:
         return thumbnail_png(self.array(sha))
@@ -133,6 +201,9 @@ class Library:
               click: tuple[float, float], click2: tuple[float, float] | None,
               threshold: float, settings: aa.Settings = aa.DEFAULT) -> dict[str, Any]:
         prep = self.prepared(processed, settings)
+        if not raw and self.is_czi(processed):
+            return run_click(prep, self.array(processed), click, click2, threshold, settings,
+                             bright_ref=self.bright_ref(processed))
         if not raw:
             # Only one file for this cell: profile the image that was traced.
             out = run_click(prep, prep.pic, click, click2, threshold, settings, bright_ref=self.bright_ref(processed))
@@ -146,8 +217,14 @@ class Library:
     def detect(self, processed: str, raw: str | None, threshold: float,
                settings: aa.Settings = aa.DEFAULT, start: str = "both",
                exclude: list[list[list[int]]] | None = None) -> dict[str, Any]:
-        """Auto mode: every AIS on the image (app/analysis/detect.py)."""
+        """Auto mode: every AIS on the image (app/analysis/detect.py). On a
+        CZI, with the somata it found (start "soma" needs them)."""
         prep = self.prepared(processed, settings)
+        if not raw and self.is_czi(processed):
+            return auto.detect(prep, self.array(processed), threshold, settings, start, exclude,
+                               soma=self.soma(processed))
+        if start == "soma":
+            raise ImageError("start \"soma\" needs a .czi image (its AMCA channel)")
         if not raw:
             out = auto.detect(prep, prep.pic, threshold, settings, start, exclude)
             for candidate in out["candidates"]:
@@ -157,6 +234,16 @@ class Library:
         if raw_arr.shape[:2] != prep.pic.shape:
             raise ImageError("raw and processed images differ in size")
         return auto.detect(prep, raw_arr, threshold, settings, start, exclude)
+
+
+def _read(data: bytes) -> np.ndarray:
+    """The image a file holds: a TIFF's first page, a CZI's AIS channel as
+    ZEN exports it to TIFF."""
+    if is_czi(data):
+        image = read_czi(data)
+        image.channel(SOMA_CHANNEL)   # refuse a CZI auto mode could not use
+        return np.ascontiguousarray(image.as_tiff(AIS_CHANNEL))
+    return read_tiff(data)
 
 
 def bright_level(raw: np.ndarray) -> float:

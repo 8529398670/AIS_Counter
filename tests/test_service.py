@@ -1,6 +1,8 @@
 """The JSON one click produces, on a synthetic image (no example data needed)."""
 from __future__ import annotations
 
+import struct
+
 import numpy as np
 
 from app.analysis import ais_auto as aa
@@ -95,3 +97,64 @@ def test_store_is_shared_and_finds_legacy_and_local_files(tmp_path):
     except ImageError:
         pass
     assert lib.thumbnail(sha).startswith(b"\x89PNG")
+
+
+def test_a_czi_is_traced_on_its_processed_ais_channel_and_finds_somata(tmp_path):
+    import pytest
+
+    from app.analysis import preprocess
+    from app.analysis.images import ImageError
+    from app.analysis.service import Library
+    from tests.czidata import write_czi
+
+    ais_channel = (synthetic()[0] >> 4).astype(np.uint16)     # 12-bit, as the camera gives
+    H, W = ais_channel.shape
+    yy, xx = np.mgrid[0:H, 0:W]
+    amca = (800 + 1500 * np.exp(-((yy - 100) ** 2 + (xx - 30) ** 2) / (2 * 25.0 ** 2))).astype(np.uint16)
+    library = Library(tmp_path)
+    info = library.add(write_czi({"Alexa Fluor 488": ais_channel, "AMCA": amca}))
+    sha = info["sha256"]
+    assert info["czi"] and (tmp_path / "ais" / "files" / f"{sha}.czi").exists()
+    assert library.is_czi(sha) and library.has(sha)
+    assert np.array_equal(library.array(sha), ais_channel * 16)
+    assert np.array_equal(library.prepared(sha).pic, aa.PreparedImage.from_array(preprocess.processed(ais_channel * 16)).pic)
+    assert library.soma(sha).mask[100, 30]
+    clicked = library.trace(sha, None, (38.0, 101.0), None, 0.01)
+    assert clicked["ok"] and "single image" not in " ".join(clicked["notes"])
+    found = library.detect(sha, None, 0.01, start="soma")
+    assert "somata" in found and all("soma_gap_um" in c for c in found["candidates"])
+
+    # The channel buttons: each channel with its color, as a PNG of the image's
+    # size; the main view is the processed image that is traced.
+    from app.analysis.images import preview_png
+
+    assert [(c["index"], c["name"]) for c in library.channels(sha)] == [(0, "Alexa Fluor 488"), (1, "AMCA")]
+    png = library.channel_png(sha, 1)
+    assert png[:8] == b"\x89PNG\r\n\x1a\n" and struct.unpack(">II", png[16:24]) == (W, H)
+    assert library.preview(sha) == preview_png(preprocess.processed(ais_channel * 16))
+    with pytest.raises(ImageError):
+        library.channel_png(sha, 2)
+
+    # MATLAB gets the pair it is traced from, as TIFFs: processed and raw.
+    from app.analysis.images import read_tiff
+
+    processed_tiff, raw_tiff = library.matlab_pair(sha, None)
+    assert np.array_equal(read_tiff(processed_tiff), preprocess.processed(ais_channel * 16))
+    assert np.array_equal(read_tiff(raw_tiff), ais_channel * 16)
+
+    tiff = library.add(_tiff(synthetic()[0]))["sha256"]
+    assert library.matlab_pair(tiff, None) == (_tiff(synthetic()[0]), None)
+    assert not library.is_czi(tiff) and library.soma(tiff) is None
+    assert library.channels(tiff) == []
+    with pytest.raises(ImageError, match="czi"):
+        library.detect(tiff, None, 0.01, start="soma")
+
+
+def _tiff(arr: np.ndarray) -> bytes:
+    import io
+
+    import tifffile
+
+    buffer = io.BytesIO()
+    tifffile.imwrite(buffer, arr)
+    return buffer.getvalue()

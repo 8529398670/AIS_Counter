@@ -4,7 +4,9 @@ ais_auto(cell, ...) reads <cell>.tif - Processed method 2.5.tif and <cell>.tif
 and writes <cell>_xy.txt beside them, so both files are copied into a fresh
 folder under the app's storage first: the user's data folder is never written
 to, uploaded images work too, and a cell with one file gets it under both
-names -- what the web port does for a single image.
+names -- what the web port does for a single image. A .czi is written out as
+the pair the web port traces: its processed AIS channel (preprocess.py) and
+the AIS channel as ZEN exports it to TIFF (Library.matlab_pair).
 
 Three ways to run it, all in MATLAB's desktop (-desktop: without it a MATLAB
 started with no terminal reads commands from stdin, hits end-of-file when
@@ -120,9 +122,10 @@ def replay_source(settings: Settings = DEFAULT) -> str:
     return apply_patches(text, REPLAY_PATCHES)
 
 
-def stage(runs_dir: Path, cell: str, processed: Path, raw: Path | None) -> Path:
-    """Copy the pair into runs_dir/<time>-<cell>/ under the original's names;
-    returns the <cell> path stem ais_auto takes. Old runs beyond KEEP_RUNS go."""
+def stage(runs_dir: Path, cell: str, processed: bytes, raw: bytes | None) -> Path:
+    """Write the pair (TIFF bytes) into runs_dir/<time>-<cell>/ under the
+    original's names; returns the <cell> path stem ais_auto takes. Old runs
+    beyond KEEP_RUNS go."""
     safe = "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in cell) or "cell"
     runs_dir.mkdir(parents=True, exist_ok=True)
     runs = sorted(p for p in runs_dir.iterdir() if p.is_dir())   # oldest first: names start with the time
@@ -135,8 +138,8 @@ def stage(runs_dir: Path, cell: str, processed: Path, raw: Path | None) -> Path:
         folder = runs_dir / f"{time.strftime('%Y%m%d-%H%M%S')}-{safe}-{n}"
     folder.mkdir()
     stem = folder / safe
-    (folder / (safe + PROCESSED_SUFFIX)).write_bytes(processed.read_bytes())
-    (folder / (safe + ".tif")).write_bytes((raw or processed).read_bytes())
+    (folder / (safe + PROCESSED_SUFFIX)).write_bytes(processed)
+    (folder / (safe + ".tif")).write_bytes(raw or processed)
     return stem
 
 

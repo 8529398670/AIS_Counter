@@ -37,6 +37,13 @@ def read_tiff(data: bytes) -> np.ndarray:
     return np.ascontiguousarray(arr)
 
 
+def tiff_bytes(arr: np.ndarray) -> bytes:
+    """arr as a one-page TIFF, which imread reads back as the same pixels."""
+    buf = io.BytesIO()
+    tifffile.imwrite(buf, arr)
+    return buf.getvalue()
+
+
 def role_and_cell(filename: str) -> tuple[str, str]:
     """("processed" | "raw", cell name) from a filename: the processed file is
     the raw file's name plus " - Processed method 2.5.tif"."""
@@ -48,10 +55,12 @@ def role_and_cell(filename: str) -> tuple[str, str]:
     raise ImageError("expected a .tif file")
 
 
-def preview_png(arr: np.ndarray) -> bytes:
-    """8-bit greyscale PNG scaled min..max, as imagesc with colormap(gray)."""
+def preview_png(arr: np.ndarray, percentiles: tuple[float, float] | None = None) -> bytes:
+    """8-bit greyscale PNG scaled min..max, as imagesc with colormap(gray);
+    or between two percentiles, clipped (a channel view, as napari shows it)."""
     a = arr.astype(np.float64)
-    lo, hi = a.min(), a.max()
+    lo, hi = (a.min(), a.max()) if percentiles is None else np.percentile(a, percentiles)
+    a = np.clip(a, lo, hi)
     scaled = np.zeros(a.shape, np.uint8) if hi == lo else np.floor((a - lo) / (hi - lo) * 255 + 0.5).astype(np.uint8)
     h, w = scaled.shape
     raw = b"".join(b"\x00" + scaled[r].tobytes() for r in range(h))

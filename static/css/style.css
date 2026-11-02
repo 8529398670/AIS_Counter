@@ -254,6 +254,7 @@ th { color: var(--bs-secondary-color); font-size: 0.8rem; text-transform: upperc
 .ais-auto-quick { display: grid; grid-template-columns: repeat( 3 , minmax( 0 , 1fr ) ); gap: 0.35rem 0.5rem; }
 .ais-auto-quick[hidden] { display: none; }
 .ais-auto-quick label { display: flex; flex-direction: column; gap: 0.15rem; margin: 0; }
+.ais-auto-quick label[hidden] { display: none; }
 .ais-auto-quick .ais-auto-quick-start { grid-column: 1 / -1; }
 .ais-auto-n { min-width: 2.2rem; font-variant-numeric: tabular-nums; }
 .ais-length { font-size: 2.25rem; font-weight: 600; line-height: 1.1; margin-bottom: 0.75rem; font-variant-numeric: tabular-nums; }
@@ -278,11 +279,20 @@ th { color: var(--bs-secondary-color); font-size: 0.8rem; text-transform: upperc
 .ais-progress .progress { width: 8rem; height: 0.4rem; }
 
 /* Pan and zoom tools, floating on the (always dark) stage. */
-.ais-viewtools { position: absolute; top: 0.75rem; right: 0.75rem; opacity: 0.85; }
-.ais-viewtools:hover { opacity: 1; }
-/* Trace / Edit / Delete (Ais.setTool), a row left of the view tools. */
-.ais-tools { position: absolute; top: 0.75rem; right: 4.6rem; opacity: 0.85; }
-.ais-tools:hover { opacity: 1; }
+.ais-viewtools { position: absolute; top: 0.75rem; right: 0.75rem; opacity: 0; transition: opacity 0.15s; }
+.ais-viewtools:hover, .ais-viewtools:focus-within { opacity: 1; }
+/* Invisible until the mouse is over the top left corner, so it never covers the image. */
+.ais-channels { position: absolute; top: 0.75rem; left: 0.75rem; display: flex; align-items: flex-start; gap: 0.35rem; opacity: 0; transition: opacity 0.15s; }
+.ais-channels:hover, .ais-channels:focus-within { opacity: 1; }
+.ais-channels[hidden], .ais-channels-list[hidden] { display: none; }
+.ais-channels-toggle { white-space: nowrap; }
+.ais-channels-list { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+.ais-channels .btn.active { background: var(--bs-secondary-bg); color: var(--bs-body-color); border-color: var(--bs-secondary-bg); }
+.ais-channel-dot { display: inline-block; width: 0.6rem; height: 0.6rem; border-radius: 50%; vertical-align: baseline; box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.5); }
+/* Trace / Edit / Delete (Ais.setTool), a row left of the view tools; invisible
+   until the mouse is over it, like the channels (the T / E / D keys still work). */
+.ais-tools { position: absolute; top: 0.75rem; right: 4.6rem; opacity: 0; transition: opacity 0.15s; }
+.ais-tools:hover, .ais-tools:focus-within { opacity: 1; }
 .ais-tools .btn[data-tool="trace"].active { background: var(--bs-primary); border-color: var(--bs-primary); }
 .ais-tools .btn[data-tool="edit"].active { background: var(--bs-warning); border-color: var(--bs-warning); color: #000; }
 .ais-tools .btn[data-tool="delete"].active { background: var(--bs-danger); border-color: var(--bs-danger); }
@@ -319,10 +329,37 @@ th { color: var(--bs-secondary-color); font-size: 0.8rem; text-transform: upperc
 /* Open path. */
 .ais-path-list { max-height: 50vh; overflow-y: auto; }
 .ais-recent { max-width: 14rem; }
-.ais-batch-path { max-width: 28rem; }
 
-/* Batches: each assignee's progress. Assign: one slider per person. */
-.ais-assignees { min-width: 18rem; }
+/* The Batches screen (static/js/batches.js): a card per batch. */
+.batches-filter { max-width: 14rem; }
+.batches-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 30rem), 1fr)); gap: 1rem; align-items: start; }
+.batches-card-mine { border-color: var(--bs-primary-border-subtle); }
+.batches-card-archived { opacity: 0.6; }
+.batches-card-archived:hover, .batches-card-archived:focus-within { opacity: 1; }
+/* The rename pencil shows on hover; Rename is in the card's menu too. */
+.batches-rename { opacity: 0; transition: opacity 0.15s; }
+.batches-card:hover .batches-rename, .batches-rename:focus-visible { opacity: 1; }
+/* Reordering (admins): the grip, the card in flight, and where it would land. */
+.batches-grip { cursor: grab; margin-left: -0.35rem; }
+.batches-dragging { opacity: 0.4; }
+.batches-drop-before { box-shadow: -4px 0 0 0 var(--bs-primary); }
+.batches-drop-after { box-shadow: 4px 0 0 0 var(--bs-primary); }
+.batches-drop-vertical.batches-drop-before { box-shadow: 0 -4px 0 0 var(--bs-primary); }
+.batches-drop-vertical.batches-drop-after { box-shadow: 0 4px 0 0 var(--bs-primary); }
+.batches-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0.5rem; }
+.batches-head > .min-w-0 { flex: 1 1 14rem; }
+.batches-name { color: inherit; text-decoration: none; }
+.batches-name:hover { text-decoration: underline; }
+.batches-actions { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 0.25rem; }
+.batches-measures { display: flex; flex-direction: column; gap: 0.25rem; margin-top: 0.75rem; }
+.batches-measure { display: grid; grid-template-columns: 5.5rem 1fr auto; align-items: center; gap: 0.5rem; font-variant-numeric: tabular-nums; }
+.batches-bar { height: 0.5rem; }
+.batches-status { margin-top: 0.25rem; }
+.batches-status-scroll { max-height: 22rem; overflow-y: auto; }
+.min-w-0 { min-width: 0; }
+
+/* Each assignee's progress. Assign: one slider per person. */
+.ais-assignees { min-width: 0; }
 .ais-assignee { display: grid; grid-template-columns: 7rem 5rem auto; align-items: center; gap: 0.5rem; padding: 0.1rem 0.25rem; border-radius: 0.25rem; }
 .ais-assignee-me { background: var(--bs-primary-bg-subtle); }
 .ais-assignee-name { min-width: 0; }

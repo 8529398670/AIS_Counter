@@ -5,7 +5,7 @@
 // (app/models/ais.py assign): a contiguous run each, duplicates left out,
 // finished images kept by whoever had them.
 const AisAssign = {
-  batch: null,           // the Batches list row being assigned
+  batch: null,           // the Batches screen's row being assigned
   shares: [],            // [{ user_id, name, percent }], whole percents
   team: [],
 
@@ -15,8 +15,7 @@ const AisAssign = {
     Dom.get( "ais-assign-add" ).addEventListener( "click" , () => this.add() );
     Dom.get( "ais-assign-save" ).addEventListener( "click" , () => this.save( this.shares ) );
     Dom.get( "ais-assign-clear" ).addEventListener( "click" , () => this.save( [] ) );
-    // Back to the Batches list (two Bootstrap modals cannot be open at once).
-    this.modalEl.addEventListener( "hidden.bs.modal" , () => AisImages.openBatches() );
+    this.modalEl.addEventListener( "hidden.bs.modal" , () => Batches.refresh( true ) );
   },
 
   async open( batch ) {
@@ -33,13 +32,7 @@ const AisAssign = {
     Dom.text( Dom.get( "ais-assign-batch" ) , batch.path || batch.name );
     Dom.get( "ais-assign-clear" ).disabled = !batch.assignees.length;
     this.render();
-    // Shown once the Batches list has finished closing, so the two never overlap.
-    if ( AisImages.batchesModalEl.classList.contains( "show" ) ) {
-      AisImages.batchesModalEl.addEventListener( "hidden.bs.modal" , () => this.modal.show() , { once: true } );
-      AisImages.batchesModal.hide();
-    } else {
-      this.modal.show();
-    }
+    this.modal.show();
   },
 
   // n parts of total by weight, largest remainder first: they sum to total.

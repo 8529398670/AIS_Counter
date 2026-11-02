@@ -15,9 +15,23 @@
 // The Edit and Delete tools (ais.js) act on the candidates as on saved AIS.
 // Candidates shorter, dimmer or thinner than Settings > Auto mode allows are
 // left out (the server reports each one's shape: app/analysis/service.shape).
-// While confirming, the panel has those filters and the start end too: a
-// filter change re-sorts the image's candidates at once, a start change finds
-// them again.
+//
+// Settings > Auto mode's method "fitted" (a trial, kept apart from the
+// classic one above) has detect.py start each trace where a person would
+// click, and filters by its own length, brightness and branchiness, judged
+// on the server's "filter" for each candidate (the measure it was chosen
+// by; the minimum length holds for the length shown too). Method "fitted2" (a
+// second trial) is the same with start "fitted2", which keeps a few more
+// whole-blob AIS, and a contrast filter in brightness's place.
+//
+// CZI mode: on a .czi the server also finds the somata (AMCA channel,
+// app/analysis/soma.py). Start "soma" traces each AIS from the end nearer a
+// soma (on a TIFF it means "both"), every candidate says how far its start is
+// from one, and a candidate further than Settings allows is left out too.
+// While a run is on (any mode but Review), the panel has those filters and
+// the start end too. Confirming: a filter change re-sorts the image's
+// candidates at once, a start change finds them again. Saving in the
+// background: a change applies from the next image found.
 //
 // The finding is the server's (POST /api/ais/detect, app/analysis/detect.py):
 // each candidate is exactly what a click at its seed gives, so a saved one
@@ -40,14 +54,24 @@ const AisAuto = {
     Dom.get( "ais-auto-stop" ).addEventListener( "click" , () => this.stop() );
     Dom.get( "ais-auto-next" ).addEventListener( "click" , () => this.next() );
     Dom.get( "ais-auto-skip" ).addEventListener( "click" , () => this.skip() );
-    Object.entries( this.quick ).forEach( ( [ id , field ] ) => {
-      Dom.get( id ).addEventListener( "change" , ( e ) => this.setQuick( field , e.target ) );
+    Object.keys( Object.assign( {} , this.quick , this.quickFitted , this.quickFitted2 ) ).forEach( ( id ) => {
+      Dom.get( id ).addEventListener( "change" , ( e ) => this.setQuick( this.quickFields()[ id ] , e.target ) );
     } );
   },
 
-  // The panel's quick settings: control id -> Settings field.
+  // The panel's quick settings: control id -> Settings field, per method
+  // (a control the method has no field for is hidden).
   quick: { "ais-auto-quick-start": "auto_start" , "ais-auto-quick-length": "auto_min_length" ,
-    "ais-auto-quick-brightness": "auto_min_brightness" , "ais-auto-quick-width": "auto_min_width" },
+    "ais-auto-quick-brightness": "auto_min_brightness" , "ais-auto-quick-width": "auto_min_width" ,
+    "ais-auto-quick-soma": "auto_max_soma_gap" },
+  quickFitted: { "ais-auto-quick-length": "fitted_min_length" , "ais-auto-quick-brightness": "fitted_min_brightness" ,
+    "ais-auto-quick-branchiness": "fitted_max_branchiness" },
+  quickFitted2: { "ais-auto-quick-length": "fitted2_min_length" , "ais-auto-quick-contrast": "fitted2_min_contrast" ,
+    "ais-auto-quick-brightness": "fitted2_min_brightness" , "ais-auto-quick-branchiness": "fitted2_max_branchiness" },
+  quickFields() {
+    const method = Settings.autoMethod();
+    return method === "fitted" ? this.quickFitted : method === "fitted2" ? this.quickFitted2 : this.quick;
+  },
 
   // The Auto and Review buttons follow the batch and its progress, and so
   // does the panel (a hand-traced AIS added moves the candidates' numbers up,
@@ -111,11 +135,34 @@ const AisAuto = {
 
   // Settings > Auto mode's start end and filters, as a run uses them.
   filters() {
+    if ( Settings.autoMethod() === "fitted" ) {
+      return {
+        method: "fitted",
+        start: "fitted",
+        min: Settings.fittedMinLength() || 0,
+        minShown: Settings.minLength() || 0,
+        brightness: ( Settings.fittedMinBrightness() || 0 ) / 100,
+        branchiness: Settings.fittedMaxBranchiness() || 0,
+      };
+    }
+    if ( Settings.autoMethod() === "fitted2" ) {
+      return {
+        method: "fitted2",
+        start: "fitted2",
+        min: Settings.fitted2MinLength() || 0,
+        minShown: Settings.minLength() || 0,
+        contrast: ( Settings.fitted2MinContrast() || 0 ) / 100,
+        brightness: ( Settings.fitted2MinBrightness() || 0 ) / 100,
+        branchiness: Settings.fitted2MaxBranchiness() || 0,
+      };
+    }
     return {
+      method: "classic",
       start: Settings.autoStart(),
       min: Math.max( Settings.minLength() || 0 , Settings.autoMinLength() || 0 ),
       brightness: ( Settings.autoMinBrightness() || 0 ) / 100,
       width: Settings.autoMinWidth() || 0,
+      somaGap: Settings.autoMaxSomaGap() || 0,
     };
   },
 
@@ -125,9 +172,17 @@ const AisAuto = {
     const run = this.run;
     const kept = Settings.setGeneral( field , control.value );
     control.value = kept;
-    if ( !run || run.mode !== "each" ) return;
+    if ( !run || !run.params ) return;
     const start = run.params.start;
     Object.assign( run.params , this.filters() );
+    if ( run.mode !== "each" ) {
+      // Saving in the background: the images not found yet are found again
+      // from the new end; the one being saved now keeps its candidates.
+      if ( run.params.start !== start ) {
+        run.queue.slice( run.at + 1 ).forEach( ( index ) => run.pending.delete( index ) );
+      }
+      return;
+    }
     if ( run.params.start !== start ) {
       // Traced from another end: find them all again.
       run.pending.clear();
@@ -171,7 +226,7 @@ const AisAuto = {
           raw: Ais.kind( entry ) === "pair" ? Ais.sha( entry , "raw" ) : null,
           threshold: run.params.threshold,
           settings: run.params.settings,
-          start: run.params.start,
+          start: this.startFor( entry , run.params.start ),
           exclude: Ais.savedRows( entry ).map( ( row ) => row.pixels ),
         } );
         out.candidates = out.candidates.map( ( c ) => Object.assign( c , { image: entry.key , source: Ais.kind( entry ) } ) );
@@ -183,14 +238,43 @@ const AisAuto = {
     return run.pending.get( index );
   },
 
-  // Settings > Auto mode's filters: long, bright and wide enough.
+  // "soma" needs a .czi's somata: a TIFF is traced from both ends instead.
+  startFor( entry , start ) {
+    return start === "soma" && Ais.kind( entry ) !== "czi" ? "both" : start;
+  },
+
+  // Settings > Auto mode's filters: long, bright and wide enough, and (a
+  // .czi with somata found) starting near a soma.
   passes( c , params ) {
+    if ( params.method === "fitted" || params.method === "fitted2" ) return this.passesFitted( c , params );
     const m = c.measures;
     const shape = c.shape || {};
     if ( params.min && m.length_um < params.min ) return false;
     if ( params.brightness && shape.brightness < params.brightness ) return false;
     if ( params.width && shape.width_um < params.width ) return false;
+    if ( params.somaGap && c.soma_gap_um != null && c.soma_gap_um > params.somaGap ) return false;
     return true;
+  },
+
+  // Methods "fitted" and "fitted2": long and bright enough (fitted2: and
+  // contrasted enough) and not branched, judged on the measure it was chosen
+  // by. The minimum lengths (the method's and the general one) hold for the
+  // length shown and saved too, which the refit start makes a little shorter.
+  passesFitted( c , params ) {
+    const f = c.filter;
+    if ( params.minShown && c.measures.length_um < params.minShown ) return false;
+    if ( params.min && ( f.length_um < params.min || c.measures.length_um < params.min ) ) return false;
+    if ( params.contrast && f.contrast < params.contrast ) return false;
+    if ( params.brightness && f.brightness < params.brightness ) return false;
+    if ( params.branchiness && f.branchiness > params.branchiness ) return false;
+    return true;
+  },
+
+  // Whether this run (else Settings) uses method "fitted" or "fitted2".
+  fitted() {
+    const params = this.run && this.run.params;
+    const method = params ? params.method : Settings.autoMethod();
+    return method === "fitted" || method === "fitted2";
   },
 
   // Start on the next image too, so it is ready sooner.
@@ -290,7 +374,7 @@ const AisAuto = {
     Ais.draw();
   },
 
-  // Enter, or the panel's main button.
+  // Enter / Space, or the panel's main button.
   async next() {
     const run = this.run;
     if ( !run || this.busy ) return;
@@ -384,10 +468,13 @@ const AisAuto = {
     Ais.draw();
   },
 
-  // An edited candidate: its new trace, ticked.
+  // An edited candidate: its new trace, ticked if the filters still keep it
+  // (else shown unticked, to tick on purpose). A click's result has no
+  // "filter", so it keeps its blob's, which methods fitted / fitted2 judge.
   replaceCandidate( c , result ) {
+    if ( c.result.filter && !result.filter ) result.filter = c.result.filter;
     c.result = result;
-    c.on = true;
+    c.on = !this.run || !this.run.params || this.passes( result , this.run.params );
     this.render();
     Ais.draw();
   },
@@ -417,6 +504,7 @@ const AisAuto = {
 
   // Forget a run without a word (another batch was opened).
   reset() {
+    if ( this.run ) this.report( this.run , "stopped" );
     this.run = null;
     this.phase = null;
     this.candidates = [];
@@ -426,6 +514,8 @@ const AisAuto = {
 
   finish( stopped ) {
     const run = this.run;
+    if ( run ) this.report( run , stopped ? "stopped" : "finished" );
+    this.run = null;
     this.reset();
     this.refresh();
     Ais.draw();
@@ -446,10 +536,31 @@ const AisAuto = {
 
   // --- the panel and the canvas ----------------------------------------------
 
+  // Tell the server how far the run has got, for everyone's Batches screen
+  // (app/models/ais.py Activity): on each change, and every 20 s while it
+  // waits on someone, so the report does not age out. Errors are ignored.
+  report( run , state ) {
+    if ( !run.batchId ) run.batchId = Ais.batch && Ais.batch.id;
+    if ( !run.batchId ) return;
+    const done = Math.min( run.at , run.queue.length );
+    const key = state + ":" + done;
+    const now = Date.now();
+    if ( key === run.reported && now - ( run.reportedAt || 0 ) < 15000 ) return;
+    run.reported = key;
+    run.reportedAt = now;
+    Api.post( "/api/ais/batches/" + run.batchId + "/activity" ,
+      { kind: "auto" , state: state , done: done , total: run.queue.length } ).catch( () => {} );
+    window.clearTimeout( this.reportTimer );
+    if ( state === "running" || state === "paused" ) {
+      this.reportTimer = window.setTimeout( () => { if ( this.run === run ) this.report( run , state ); } , 20000 );
+    }
+  },
+
   render() {
     const run = this.run;
     Dom.show( Dom.get( "ais-auto-panel" ) , Boolean( run ) );
     if ( !run ) return;
+    this.report( run , this.phase === "saved" ? "paused" : "running" );
     const total = run.queue.length;
     const saved = this.phase === "saved";
     const k = saved ? total : Math.min( run.at + 1 , total );
@@ -466,10 +577,19 @@ const AisAuto = {
     const help = reviewing ? "ais.auto_help_review" : background ? "ais.auto_help_saving" : saved ? "ais.auto_help_saved" : "";
     Dom.text( Dom.get( "ais-auto-help" ) , help ? I18n.get( help ) : "" );
     Dom.show( Dom.get( "ais-auto-help" ) , Boolean( help ) );
-    const quick = run.mode === "each" && ( this.phase === "confirm" || this.phase === "finding" );
+    // Every mode while finding, confirming or saving; Review has nothing left to filter.
+    const quick = this.phase === "confirm" || this.phase === "finding";
     Dom.show( Dom.get( "ais-auto-quick" ) , quick );
+    const shownEntry = Ais.images[ this.current() ];
+    const fields = this.quickFields();
+    Dom.show( Dom.get( "ais-auto-quick-start-field" ) , "ais-auto-quick-start" in fields );
+    Dom.show( Dom.get( "ais-auto-quick-width-field" ) , "ais-auto-quick-width" in fields );
+    Dom.show( Dom.get( "ais-auto-quick-contrast-field" ) , "ais-auto-quick-contrast" in fields );
+    Dom.show( Dom.get( "ais-auto-quick-branchiness-field" ) , "ais-auto-quick-branchiness" in fields );
+    Dom.show( Dom.get( "ais-auto-quick-soma-field" ) , "ais-auto-quick-soma" in fields &&
+      Boolean( shownEntry && Ais.kind( shownEntry ) === "czi" ) );
     if ( quick ) {
-      Object.entries( this.quick ).forEach( ( [ id , field ] ) => {
+      Object.entries( fields ).forEach( ( [ id , field ] ) => {
         const control = Dom.get( id );
         if ( document.activeElement !== control ) control.value = Settings.values[ field ];
       } );
@@ -503,7 +623,7 @@ const AisAuto = {
         Dom.el( "label" , { class: "d-flex align-items-center w-100 gap-2" , children: [
           box,
           Dom.el( "span" , { class: "ais-auto-n" , text: numbers.has( c ) ? "#" + numbers.get( c ) : "–" } ),
-          Dom.el( "span" , { class: "me-auto text-body-secondary" , text: this.shapeText( c.result.shape ) } ),
+          Dom.el( "span" , { class: "me-auto text-body-secondary" , text: this.shapeText( this.fitted() ? c.result.filter : c.result.shape , c.result.soma_gap_um ) } ),
           Dom.el( "span" , { class: "fw-semibold" , text: m.length_str + " µm" } ),
         ] } ),
       ] ,
@@ -511,10 +631,20 @@ const AisAuto = {
     } );
   },
 
-  // "2.9 µm · 62 %": width and brightness, what the filters look at.
-  shapeText( shape ) {
+  // "2.9 µm · 62 %": width and brightness, what the filters look at (method
+  // fitted: " · branched 1.00" too, fitted2: " · contrast 34 %" before it),
+  // and on a .czi " · soma 1.6 µm", how far the start is from a soma.
+  shapeText( shape , somaGap ) {
     if ( !shape ) return "";
-    return Ais.fmt( Number( shape.width_um.toFixed( 1 ) ) ) + " µm · " + Math.round( shape.brightness * 100 ) + " %";
+    let text = Ais.fmt( Number( shape.width_um.toFixed( 1 ) ) ) + " µm · " + Math.round( shape.brightness * 100 ) + " %";
+    if ( shape.contrast != null ) {
+      text += " · " + I18n.get( "ais.auto_contrast" ).replace( "{c}" , Math.round( shape.contrast * 100 ) );
+    }
+    if ( shape.branchiness != null ) {
+      text += " · " + I18n.get( "ais.auto_branchiness" ).replace( "{b}" , Ais.fmt( Number( shape.branchiness.toFixed( 2 ) ) ) );
+    }
+    if ( somaGap == null ) return text;
+    return text + " · " + I18n.get( "ais.auto_soma_gap" ).replace( "{gap}" , Ais.fmt( Number( somaGap.toFixed( 1 ) ) ) );
   },
 
   // Hovering a list entry highlights its trace on the image.
@@ -590,7 +720,7 @@ const AisAuto = {
     if ( Ais.pending() ) return false;
     // Saving in the background: Enter and N are the hand tracing's.
     if ( this.phase === "finding" && this.run.mode !== "each" ) return false;
-    if ( key === "Enter" ) {
+    if ( key === "Enter" || key === " " ) {
       event.preventDefault();
       this.next();
       return true;

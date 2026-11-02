@@ -27,6 +27,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import threading
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable, Iterator
@@ -55,8 +56,71 @@ BUCKETS = (BUCKET_USERS, BUCKET_SESSIONS, BUCKET_LOGIN_TOKENS, BUCKET_API_KEYS, 
 # "database is locked" instead of simply waiting its turn.
 BUSY_TIMEOUT_SECONDS = 5.0
 
+# How long a writer in this process queues behind the others (see
+# _WriteQueue). Long, because each one in front is a real write that will
+# finish; the limit is only there so a stuck one fails loudly, not forever.
+QUEUE_TIMEOUT_SECONDS = 60.0
+
 Record = dict[str, Any]
 Key = int | str
+
+
+class _WriteQueue:
+    """First come, first served among this process's writers.
+
+    SQLite's busy timeout does not queue a waiting writer: it sleeps and
+    retries, and a writer that holds the lock for a moment, lets go and takes
+    it again at once (auto mode accepting AIS back to back) can starve it
+    until it gives up with "database is locked". Writers in the server take a
+    ticket here first, so only one of them is ever at SQLite's door and they
+    go in the order they came. Reentrant per thread, so a write made inside a
+    transaction on the same thread waits on SQLite as before instead of on
+    itself. Other processes (a `manage` command) still meet the busy timeout."""
+
+    def __init__(self) -> None:
+        self._cond = threading.Condition()
+        self._next_ticket = 0
+        self._serving = 0
+        self._owner: int | None = None
+        self._depth = 0
+        # Tickets whose writer timed out before its turn came.
+        self._abandoned: set[int] = set()
+
+    @contextmanager
+    def turn(self) -> Iterator[None]:
+        me = threading.get_ident()
+        with self._cond:
+            if self._owner == me:
+                self._depth += 1
+            else:
+                ticket = self._next_ticket
+                self._next_ticket += 1
+                if not self._cond.wait_for(lambda: self._serving == ticket, QUEUE_TIMEOUT_SECONDS):
+                    # Give the ticket up so the ones behind are not stuck on it.
+                    self._skip(ticket)
+                    raise sqlite3.OperationalError("database is locked (queued too long behind other writes)")
+                self._owner, self._depth = me, 1
+        try:
+            yield
+        finally:
+            with self._cond:
+                self._depth -= 1
+                if self._depth == 0:
+                    self._owner = None
+                    self._advance()
+
+    def _advance(self) -> None:
+        self._serving += 1
+        while self._serving in self._abandoned:
+            self._abandoned.discard(self._serving)
+            self._serving += 1
+        self._cond.notify_all()
+
+    def _skip(self, ticket: int) -> None:
+        if self._serving == ticket:
+            self._advance()
+        else:
+            self._abandoned.add(ticket)
 
 
 class DecodeError(Exception):
@@ -77,6 +141,7 @@ class Store:
         self.path = path
         self._secret_key = secret_key
         self._encrypt_at_rest = encrypt_at_rest
+        self._queue = _WriteQueue()
 
     # -- connections -------------------------------------------------------
 
@@ -101,7 +166,7 @@ class Store:
         """A write transaction taken up front (BEGIN IMMEDIATE). Taking the
         write lock before the first read is what closes the lost-update gap:
         two callers cannot both read the old row and then both write."""
-        with self._connection() as connection:
+        with self._queue.turn(), self._connection() as connection:
             connection.execute("BEGIN IMMEDIATE")
             try:
                 yield connection
@@ -155,7 +220,7 @@ class Store:
 
     def put(self, bucket: str, key: Key, record: Record) -> None:
         encoded = self.encode(record)
-        with self._connection() as connection:
+        with self._queue.turn(), self._connection() as connection:
             connection.execute(f"INSERT OR REPLACE INTO {_table(bucket)} (key, value) VALUES (?, ?)", (key, encoded))
 
     def get(self, bucket: str, key: Key) -> Record | None:
@@ -166,7 +231,7 @@ class Store:
         return None if row is None else self.decode(row[0])
 
     def delete(self, bucket: str, key: Key) -> None:
-        with self._connection() as connection:
+        with self._queue.turn(), self._connection() as connection:
             connection.execute(f"DELETE FROM {_table(bucket)} WHERE key = ?", (key,))
 
     def all(self, bucket: str) -> list[tuple[Key, Record]]:

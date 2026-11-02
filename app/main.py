@@ -91,6 +91,8 @@ def build_app(
     # but only while local folders are allowed at all.
     resolver = (lambda sha: ais_batches.local_path_for(store, sha)) if cfg.local_folders_enabled else None
     app.state.ais = Library(cfg.storage_dir, resolver)
+    # Auto runs people report on each batch, for the Batches screen.
+    app.state.ais_activity = ais_batches.Activity()
     # Reported to MCP clients as serverInfo.version.
     app.state.version = version
     return app

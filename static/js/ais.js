@@ -1,5 +1,6 @@
-// The Process screen: open a folder of TIFF pairs (or lone TIFFs), click near
-// an AIS, see the original ais_auto.m's trace and length, accept or reject it.
+// The Process screen: open a folder of TIFF pairs (or lone TIFFs, or .czi
+// files: CZI mode), click near an AIS, see the original ais_auto.m's trace and
+// length, accept or reject it.
 //
 // The analysis is all server-side (app/analysis/). Each opened folder becomes
 // a batch on the server (app/models/ais.py), shared with every signed-in
@@ -16,6 +17,9 @@
 // Coordinates sent to and received from the server are MATLAB axes
 // coordinates: x = column, y = row, pixel centres at 1..n. On the canvas a
 // pixel (x, y) covers [x-1, x) x [y-1, y) in image units.
+// The Soma button's outlines (a .czi's cell bodies, from its AMCA channel).
+const SOMA_COLOUR = "rgba(255, 140, 40, 0.85)";
+
 const Ais = {
   processedSuffix: ".tif - Processed method 2.5.tif",
   legacyResultsKey: "ais-results",
@@ -25,16 +29,29 @@ const Ais = {
   focusKey: "ais-focus",
   hintKey: "ais-hint-hidden",
   noteKey: "ais-note-hidden",   // the batch whose single-image note was closed
-  // An image: { key, cell, dir, dup_of?, included, files: { processed?, raw? } }
+  // An image: { key, cell, dir, dup_of?, included, files: { processed?, raw?, czi? } }
   // with a file { name, rel, sha, size, stored, path?, file? } -- `file` only
   // in the browser that picked it, `path` only for Open path.
   images: [],
   batch: null,           // the server's batch record
+  openFresh: null,       // a batch id the Batches screen just created: opens with the Images dialog
+  following: null,       // the hash followUrl is opening
   me: null,
   local: { enabled: false , platform: "" , matlab: false },
   index: -1,
   bitmap: null,          // the current image, brightness applied, as a canvas
   source: null,          // its decoded <img>
+  // The views the bottom-left buttons offer besides the processed image: a
+  // .czi's channels, or a TIFF pair's raw file. { list: [{ key, name, label,
+  // color, src, img? }], on: Set of keys } -- none on shows the processed
+  // image. viewWanted: the names last switched on, kept for the next image.
+  views: null,
+  viewWanted: [],
+  // The Soma button (a .czi): its soma outlines drawn over the image, fetched
+  // once per image; switched on, it stays on for the next image.
+  showSomata: false,
+  somata: null,
+  viewsOpen: false,      // the view buttons spread out along the top, or folded into one
   view: { scale: 1 , ox: 0 , oy: 0 },
   locked: false,         // pan and zoom frozen, the same view on every image
   focus: false,          // focus mode: only the image, navigation and result
@@ -50,7 +67,15 @@ const Ais = {
   editing: null,         // the target being edited
   hover: null,           // the target under the pointer (Edit / Delete)
   allRows: null,         // every batch's, loaded when the table shows all
+  // Undo / redo of the saved rows: each step { kind: "add" | "edit" |
+  // "delete", ref, before, after }. A ref is one row through deletes and
+  // re-adds (which give it a new id), so older steps still find it.
+  undoStack: [],
+  redoStack: [],
+  historyBatch: null,    // the batch the stacks belong to
+  refs: new Map(),       // row id -> its ref
   busy: false,
+  historyBusy: false,    // an undo / redo is on its way to the server
 
   init( me ) {
     this.me = me || null;
@@ -64,6 +89,21 @@ const Ais = {
     Dom.get( "ais-prev" ).addEventListener( "click" , () => this.step( -1 ) );
     Dom.get( "ais-next" ).addEventListener( "click" , () => this.step( 1 ) );
     Dom.get( "ais-gamma" ).addEventListener( "input" , () => { this.buildBitmap(); this.draw(); } );
+    Dom.get( "ais-channels" ).addEventListener( "click" , ( e ) => {
+      if ( e.target.closest( "#ais-channels-toggle" ) ) {
+        this.viewsOpen = !this.viewsOpen;
+        this.renderViews();
+        return;
+      }
+      const button = e.target.closest( "[data-view]" );
+      if ( button ) this.toggleView( button.dataset.view );
+    } );
+    // Leaving the corner folds the row away again.
+    Dom.get( "ais-channels" ).addEventListener( "mouseleave" , () => {
+      if ( !this.viewsOpen ) return;
+      this.viewsOpen = false;
+      this.renderViews();
+    } );
     Dom.all( "[data-layer]" ).forEach( ( box ) => box.addEventListener( "change" , () => this.draw() ) );
     Dom.get( "ais-accept" ).addEventListener( "click" , () => this.accept() );
     Dom.all( "[data-tool]" ).forEach( ( button ) => button.addEventListener( "click" , () => this.setTool( button.dataset.tool ) ) );
@@ -92,6 +132,8 @@ const Ais = {
     Dom.get( "ais-zoom-out" ).addEventListener( "click" , () => this.zoomBy( 0.8 ) );
     Dom.get( "ais-zoom-level" ).addEventListener( "click" , () => this.zoomTo( 1 ) );
     Dom.get( "ais-view-reset" ).addEventListener( "click" , () => this.resetView() );
+    Dom.get( "ais-undo" ).addEventListener( "click" , () => this.undo() );
+    Dom.get( "ais-redo" ).addEventListener( "click" , () => this.redo() );
     Dom.get( "ais-view-lock" ).addEventListener( "click" , () => this.setLocked( !this.locked ) );
     Dom.get( "ais-focus" ).addEventListener( "click" , () => this.setFocus( !this.focus ) );
     Dom.get( "ais-hint-close" ).addEventListener( "click" , () => this.setHint( false ) );
@@ -198,7 +240,19 @@ const Ais = {
 
   // A pasted link, back / forward, or the first load: open what the URL names.
   // A bare #ais (or /) goes back to the open batch, or the last one seen.
+  // One hash change fires both hashchange and popstate: followed once.
   async followUrl() {
+    const hash = window.location.hash;
+    if ( this.following === hash ) return;
+    this.following = hash;
+    try {
+      await this.followUrlNow();
+    } finally {
+      if ( this.following === hash ) this.following = null;
+    }
+  },
+
+  async followUrlNow() {
     if ( Nav.current() !== "ais" ) {
       if ( this.focus ) this.setFocus( false );
       return;
@@ -206,7 +260,10 @@ const Ais = {
     let want = this.parseUrl();
     let remembered = false;
     if ( !want ) {
-      if ( this.batch ) { this.setUrl( false ); return; }
+      if ( this.batch && !this.stale ) { this.setUrl( false ); return; }
+      if ( this.batch ) want = { id: this.batch.id , key: null };
+    }
+    if ( !want ) {
       let last = null;
       try {
         last = window.localStorage.getItem( this.lastKey );
@@ -217,7 +274,7 @@ const Ais = {
       if ( !want ) return;
       remembered = true;
     }
-    if ( this.batch && this.batch.id === want.id ) {
+    if ( this.batch && this.batch.id === want.id && !this.stale ) {
       const i = this.images.findIndex( ( entry ) => entry.key === want.key );
       if ( i >= 0 && i !== this.index ) {
         if ( !this.images[ i ].included ) { this.images[ i ].included = true; this.renderPicker(); }
@@ -225,9 +282,22 @@ const Ais = {
       }
       return;
     }
+    // Images added on the Batches screen: reload, keeping the files this
+    // browser still has to upload.
+    let carried = null;
+    if ( this.batch && this.batch.id === want.id && this.stale ) {
+      carried = new Map();
+      this.images.forEach( ( entry ) => Object.values( entry.files ).forEach( ( f ) => { if ( f.file ) carried.set( f.rel , f.file ); } ) );
+      if ( !want.key && this.images[ this.index ] ) want.key = this.images[ this.index ].key;
+    }
+    this.stale = false;
     try {
       const batch = await Api.request( "/api/ais/batches/" + want.id );
-      await this.loadBatch( batch , null , { key: want.key } );
+      // Just created with its images on the Batches screen: opens like Open
+      // folder does, with the Images dialog.
+      const fresh = this.openFresh === want.id;
+      this.openFresh = null;
+      await this.loadBatch( batch , carried , { key: want.key , fresh: fresh } );
     } catch ( error ) {
       // A remembered batch that has since been deleted is just forgotten.
       if ( remembered && error.status === 404 ) this.forgetLast();
@@ -244,32 +314,42 @@ const Ais = {
 
   // --- opening a batch -----------------------------------------------------
 
-  // Picked in the browser (Open folder / Open files): hash every TIFF, create
-  // the batch from names and hashes, then upload in the background.
-  async openFiles( fileList ) {
-    const files = Array.from( fileList ).filter( ( f ) => /\.tiff?$/i.test( f.name ) && !f.name.startsWith( "." ) );
-    if ( !files.length ) {
-      App.showError( I18n.get( "ais.no_tiffs" ) );
-      return;
-    }
+  // Picked in the browser: the images (TIFF or .czi) hashed, as a batch is
+  // created or added to from names and hashes alone. onProgress(done, total)
+  // follows the reading. null when none of the files is an image.
+  async hashFiles( fileList , onProgress ) {
+    const files = Array.from( fileList ).filter( ( f ) => /\.(tiff?|czi)$/i.test( f.name ) && !f.name.startsWith( "." ) );
+    if ( !files.length ) return null;
     const rel = files[ 0 ].webkitRelativePath || "";
     const root = rel.includes( "/" ) ? rel.split( "/" )[ 0 ] : "";
-    const name = root || I18n.get( "ais.loose_files" ) || "Files";
     const described = [];
     const byRel = new Map();
+    for ( let i = 0; i < files.length; i += 1 ) {
+      onProgress( i + 1 , files.length );
+      const f = files[ i ];
+      const digest = await crypto.subtle.digest( "SHA-256" , await f.arrayBuffer() );
+      const sha = Array.from( new Uint8Array( digest ) , ( b ) => b.toString( 16 ).padStart( 2 , "0" ) ).join( "" );
+      const fileRel = f.webkitRelativePath || f.name;
+      described.push( { name: f.name , rel: fileRel , sha: sha , size: f.size } );
+      byRel.set( fileRel , f );
+    }
+    return { name: root || I18n.get( "ais.loose_files" ) || "Files" , files: described , byRel: byRel };
+  },
+
+  // Open folder / Open files: hash every image, create the batch from names
+  // and hashes, then upload in the background.
+  async openFiles( fileList ) {
     try {
-      for ( let i = 0; i < files.length; i += 1 ) {
-        this.status( I18n.get( "ais.reading" ).replace( "{done}" , i + 1 ).replace( "{total}" , files.length ) );
-        const f = files[ i ];
-        const digest = await crypto.subtle.digest( "SHA-256" , await f.arrayBuffer() );
-        const sha = Array.from( new Uint8Array( digest ) , ( b ) => b.toString( 16 ).padStart( 2 , "0" ) ).join( "" );
-        const fileRel = f.webkitRelativePath || f.name;
-        described.push( { name: f.name , rel: fileRel , sha: sha , size: f.size } );
-        byRel.set( fileRel , f );
+      const picked = await this.hashFiles( fileList , ( done , total ) =>
+        this.status( I18n.get( "ais.reading" ).replace( "{done}" , done ).replace( "{total}" , total ) ) );
+      if ( !picked ) {
+        App.showError( I18n.get( "ais.no_tiffs" ) );
+        return;
       }
-      const batch = await Api.post( "/api/ais/batches/upload" , { name: name , files: described } );
+      const batch = await Api.post( "/api/ais/batches/upload" , { name: picked.name , files: picked.files } );
       this.status( "" );
-      await this.loadBatch( batch , byRel , { fresh: true } );
+      Dom.toast( I18n.get( "batches.created" ).replace( "{name}" , batch.name ) );
+      await this.loadBatch( batch , picked.byRel , { fresh: true } );
     } catch ( error ) {
       this.status( "" );
       App.showError( error.message );
@@ -370,6 +450,15 @@ const Ais = {
     this.renderCurrent();
   },
 
+  // The Batches screen changed a batch: a new name shows at once; added
+  // images load when the Process screen shows it again.
+  batchChanged( batch , added ) {
+    if ( !this.batch || this.batch.id !== batch.id ) return;
+    this.batch.name = batch.name;
+    if ( added ) this.stale = true;
+    this.renderCurrent();
+  },
+
   // Back to no batch (the open one was deleted).
   closeBatch() {
     AisAuto.reset();
@@ -407,8 +496,10 @@ const Ais = {
   },
 
   // The file that is thresholded and traced, and whether a separate raw
-  // image exists to read the profile from.
+  // image exists to read the profile from. A .czi is both: the server traces
+  // a processed version of its AIS channel and profiles the channel itself.
   traced( entry ) {
+    if ( entry.files.czi ) return "czi";
     return entry.files.processed ? "processed" : "raw";
   },
 
@@ -418,8 +509,15 @@ const Ais = {
   },
 
   kind( entry ) {
+    if ( entry.files.czi ) return "czi";
     if ( entry.files.processed && entry.files.raw ) return "pair";
     return entry.files.processed ? "processed only" : "raw only";
+  },
+
+  // Both the traced and the profiled image are there: a pair, or a .czi.
+  whole( entry ) {
+    const kind = this.kind( entry );
+    return kind === "pair" || kind === "czi";
   },
 
   // Indices of the images to step through, in list order.
@@ -489,7 +587,7 @@ const Ais = {
       const entry = this.images[ i ];
       const count = this.acceptedCount( entry );
       const mark = this.isComplete( entry ) ? "✓ " : "";
-      const single = this.kind( entry ) === "pair" ? "" : " (" + I18n.get( "ais.single" ) + ")";
+      const single = this.whole( entry ) ? "" : " (" + I18n.get( "ais.single" ) + ")";
       const label = mark + ( i + 1 ) + ". " + entry.key + single + ( count ? "  (" + count + ")" : "" );
       select.appendChild( Dom.el( "option" , { text: label , attrs: { value: String( i ) } } ) );
     } );
@@ -546,6 +644,9 @@ const Ais = {
     this.renderCurrent();
     this.setUrl( push );
     const entry = this.images[ index ];
+    this.views = null;
+    this.somata = null;
+    this.renderViews();
     try {
       await this.upload( entry );
     } catch ( error ) {
@@ -558,6 +659,7 @@ const Ais = {
       return;
     }
     if ( this.index !== index ) return;   // moved on while uploading
+    this.loadViews( entry , index );
     const img = new Image();
     img.onload = () => {
       if ( this.index !== index ) return;
@@ -569,35 +671,45 @@ const Ais = {
       this.draw();
     };
     img.onerror = () => { if ( this.index === index ) this.status( I18n.get( "ais.not_uploaded" ) ); };
-    img.src = "/api/ais/files/" + this.sha( entry ) + "/view.png";
+    // A .czi's view.png used to be its raw AIS channel and is now the processed
+    // image: a URL of its own, so a copy cached under the old one is not reused.
+    img.src = "/api/ais/files/" + this.sha( entry ) + "/view.png" + ( this.kind( entry ) === "czi" ? "?processed=1" : "" );
   },
 
   // Why a lone TIFF is handled the way it is -- until closed for this batch.
   imageNote( entry ) {
     const kind = this.kind( entry );
-    if ( kind !== "pair" && this.noteHidden() ) return "";
-    return kind === "pair" ? "" : I18n.get( kind === "raw only" ? "ais.raw_only" : "ais.no_raw" );
+    if ( this.whole( entry ) ) return "";
+    if ( this.noteHidden() ) return "";
+    return I18n.get( kind === "raw only" ? "ais.raw_only" : "ais.no_raw" );
   },
 
   // Make sure the server has the image's files. Files picked in this browser
   // upload (once); Open-path files the server fetches itself; a file only
   // someone else has is "not uploaded yet" until they upload it.
   async upload( entry ) {
-    for ( const role of [ "processed" , "raw" ] ) {
+    for ( const role of [ "processed" , "raw" , "czi" ] ) {
       const f = entry.files[ role ];
       if ( !f || f.stored ) continue;
+      // Picked on the Batches screen (Add images) rather than here.
+      if ( !f.file ) f.file = Batches.fileFor( f.sha );
       if ( !f.file ) throw new Error( I18n.get( "ais.not_uploaded" ) );
       if ( !f.pending ) {
         f.pending = ( async () => {
           await Api.post( "/api/ais/files" , { data: await this.base64( f.file ) } );
-          // Every copy of the same bytes (duplicates) is on the server now.
-          this.images.forEach( ( other ) => Object.values( other.files ).forEach( ( g ) => {
-            if ( g.sha === f.sha ) g.stored = true;
-          } ) );
+          this.fileStored( f.sha );
         } )().finally( () => { f.pending = null; } );
       }
       await f.pending;
     }
+  },
+
+  // A file is on the server now (uploaded here or by the Batches screen):
+  // every copy of the same bytes (duplicates) is.
+  fileStored( sha ) {
+    this.images.forEach( ( entry ) => Object.values( entry.files ).forEach( ( f ) => {
+      if ( f.sha === sha ) f.stored = true;
+    } ) );
   },
 
   // After an import: upload every included image this browser picked,
@@ -658,6 +770,7 @@ const Ais = {
     Dom.get( "ais-progress-bar-wrap" ).setAttribute( "aria-valuenow" , String( done ) );
     Dom.get( "ais-progress-bar-wrap" ).setAttribute( "aria-valuemax" , String( total ) );
     const buttons = [ "ais-file-open" , "ais-file-reveal" , "ais-file-copy" , "ais-file-link" , "ais-matlab-menu" , "ais-file-done" ];
+    // A .czi goes to MATLAB as the TIFF pair it is traced from (Library.matlab_pair).
     Dom.show( Dom.get( "ais-matlab-group" ) , Boolean( this.local.matlab ) );
     if ( !entry ) {
       [ "ais-current-pos" , "ais-current-stem" , "ais-current-ext" , "ais-current-partner" ].forEach( ( id ) => Dom.text( Dom.get( id ) , "" ) );
@@ -771,6 +884,11 @@ const Ais = {
   // The preview is min..max scaled like imagesc; the brightness slider is a
   // display-only gamma on top, so faint AIS are easier to find.
   buildBitmap() {
+    const on = this.views ? this.views.list.filter( ( v ) => this.views.on.has( v.key ) ) : [];
+    if ( on.length ) {
+      this.buildComposite( on );
+      return;
+    }
     if ( !this.source ) return;
     const w = this.source.naturalWidth;
     const h = this.source.naturalHeight;
@@ -790,6 +908,178 @@ const Ais = {
       }
       octx.putImageData( data , 0 , 0 );
     }
+    this.bitmap = off;
+  },
+
+  // --- channels: the processed image, or channels blended -------------------
+
+  // The image's other views: a .czi's channels in ZEN's colors, a pair's raw
+  // file in white. The names switched on for the last image stay on here.
+  async loadViews( entry , index ) {
+    let list = [];
+    if ( this.kind( entry ) === "czi" ) {
+      try {
+        const out = await Api.request( "/api/ais/files/" + this.sha( entry ) + "/channels" );
+        list = out.channels.map( ( c ) => ( { key: "c" + c.index , name: c.name , label: this.channelLabel( c.name ) ,
+          color: c.color , src: "/api/ais/files/" + this.sha( entry ) + "/channel/" + c.index + ".png" } ) );
+      } catch ( error ) {
+        list = [];
+      }
+    } else if ( this.kind( entry ) === "pair" ) {
+      list = [ { key: "raw" , name: "raw" , label: I18n.get( "ais.view_raw" ) , color: "#ffffff" ,
+        src: "/api/ais/files/" + this.sha( entry , "raw" ) + "/view.png" } ];
+    }
+    if ( this.index !== index ) return;
+    if ( this.showSomata ) this.loadSomata( entry , index );
+    this.views = { list: list , on: new Set( list.filter( ( v ) => this.viewWanted.includes( v.name ) ).map( ( v ) => v.key ) ) };
+    this.views.list.filter( ( v ) => this.views.on.has( v.key ) ).forEach( ( v ) => this.loadViewImage( v , index ) );
+    this.renderViews();
+    if ( this.views.on.size ) {
+      this.buildBitmap();
+      this.draw();
+    }
+  },
+
+  // "Alexa Fluor 488" -> "488"; other names as they are.
+  channelLabel( name ) {
+    const number = /(\d{3})\s*$/.exec( name );
+    return number ? number[ 1 ] : name;
+  },
+
+  loadViewImage( view , index ) {
+    if ( view.img ) return;
+    view.img = new Image();
+    view.img.onload = () => {
+      if ( this.index !== index ) return;
+      const wasEmpty = !this.bitmap;
+      this.buildBitmap();
+      if ( wasEmpty && this.bitmap && !this.locked ) this.fit();
+      this.draw();
+    };
+    view.img.src = view.src;
+  },
+
+  // Processed shows it alone; a channel turns on or off, and with none left
+  // on, the processed image is back.
+  toggleView( key ) {
+    if ( !this.views ) return;
+    if ( key === "soma" ) {
+      this.showSomata = !this.showSomata;
+      if ( this.showSomata ) this.loadSomata( this.images[ this.index ] , this.index );
+      this.renderViews();
+      this.draw();
+      return;
+    }
+    const on = this.views.on;
+    if ( key === "processed" ) on.clear();
+    else if ( on.has( key ) ) on.delete( key );
+    else on.add( key );
+    this.viewWanted = this.views.list.filter( ( v ) => on.has( v.key ) ).map( ( v ) => v.name );
+    this.views.list.filter( ( v ) => on.has( v.key ) ).forEach( ( v ) => this.loadViewImage( v , this.index ) );
+    this.renderViews();
+    this.buildBitmap();
+    this.draw();
+  },
+
+  async loadSomata( entry , index ) {
+    if ( this.somata || this.kind( entry ) !== "czi" ) return;
+    let found = [];
+    try {
+      found = ( await Api.request( "/api/ais/files/" + this.sha( entry ) + "/somata" ) ).somata;
+    } catch ( error ) {
+      this.status( error.message );
+    }
+    if ( this.index !== index ) return;
+    this.somata = found;
+    this.draw();
+  },
+
+  renderViews() {
+    const bar = Dom.get( "ais-channels" );
+    const list = this.views ? this.views.list : [];
+    Dom.show( bar , list.length > 0 );
+    if ( !list.length ) {
+      Dom.clear( bar );
+      return;
+    }
+    const on = this.views.on;
+    const button = ( key , pressed , title , children ) => Dom.el( "button" , {
+      class: "btn btn-dark" + ( pressed ? " active" : "" ),
+      attrs: { type: "button" , "data-view": key , "aria-pressed": String( pressed ) , title: title },
+      children: children,
+    } );
+    // The dot's color through the DOM: the CSP has no inline style attributes.
+    const dot = ( color ) => {
+      const node = Dom.el( "span" , { class: "ais-channel-dot me-1" } );
+      node.style.backgroundColor = color;
+      return node;
+    };
+    let somaButton = null;
+    const buttons = [
+      button( "processed" , !on.size , I18n.get( "ais.view_processed_help" ) ,
+        [ Dom.el( "i" , { class: "bi bi-image me-1" , attrs: { "aria-hidden": "true" } } ) , Dom.el( "span" , { text: I18n.get( "ais.view_processed" ) } ) ] ),
+      ...list.map( ( v ) => button( v.key , on.has( v.key ) , v.name , [ dot( v.color ) , Dom.el( "span" , { text: v.label } ) ] ) ),
+    ];
+    if ( this.kind( this.images[ this.index ] ) === "czi" ) {
+      const soma = button( "soma" , this.showSomata , I18n.get( "ais.view_soma_help" ) ,
+        [ dot( SOMA_COLOUR ) , Dom.el( "span" , { text: I18n.get( "ais.view_soma" ) } ) ] );
+      soma.classList.add( "ais-view-soma" , "btn-sm" );
+      somaButton = soma;
+    }
+    // Folded, one button names what is shown; open, the rest run along the top.
+    const shown = on.size ? list.filter( ( v ) => on.has( v.key ) ).map( ( v ) => v.label ) : [ I18n.get( "ais.view_processed" ) ];
+    if ( this.showSomata && somaButton ) shown.push( I18n.get( "ais.view_soma" ) );
+    const toggle = Dom.el( "button" , {
+      class: "btn btn-dark btn-sm ais-channels-toggle",
+      attrs: { id: "ais-channels-toggle" , type: "button" , "aria-expanded": String( this.viewsOpen ) , title: I18n.get( "ais.views" ) },
+      children: [
+        Dom.el( "i" , { class: "bi bi-layers me-1" , attrs: { "aria-hidden": "true" } } ),
+        Dom.el( "span" , { text: shown.join( " + " ) } ),
+        Dom.el( "i" , { class: "bi ms-1 " + ( this.viewsOpen ? "bi-chevron-left" : "bi-chevron-right" ) , attrs: { "aria-hidden": "true" } } ),
+      ],
+    } );
+    const group = Dom.el( "div" , { class: "btn-group btn-group-sm" , attrs: { role: "group" } , children: buttons } );
+    const row = Dom.el( "div" , { class: "ais-channels-list" , children: somaButton ? [ group , somaButton ] : [ group ] } );
+    Dom.show( row , this.viewsOpen );
+    bar.replaceChildren( toggle , row );
+  },
+
+  // The channels switched on, each brightened like the processed image,
+  // tinted its color and added together.
+  buildComposite( on ) {
+    if ( on.some( ( v ) => !v.img || !v.img.complete || !v.img.naturalWidth ) ) return;   // drawn once loaded
+    const w = on[ 0 ].img.naturalWidth;
+    const h = on[ 0 ].img.naturalHeight;
+    const off = document.createElement( "canvas" );
+    off.width = w;
+    off.height = h;
+    const octx = off.getContext( "2d" , { willReadFrequently: true } );
+    const gamma = Number( Dom.get( "ais-gamma" ).value );
+    const lut = new Float32Array( 256 );
+    for ( let v = 0; v < 256; v += 1 ) lut[ v ] = 255 * Math.pow( v / 255 , gamma );
+    const sum = new Float32Array( w * h * 3 );
+    on.forEach( ( view ) => {
+      const hex = view.color.replace( "#" , "" );
+      const tint = [ 0 , 2 , 4 ].map( ( i ) => parseInt( hex.slice( i , i + 2 ) , 16 ) / 255 );
+      octx.clearRect( 0 , 0 , w , h );
+      octx.drawImage( view.img , 0 , 0 , w , h );
+      const px = octx.getImageData( 0 , 0 , w , h ).data;
+      for ( let i = 0 , j = 0; i < px.length; i += 4 , j += 3 ) {
+        const g = lut[ px[ i ] ];
+        sum[ j ] += g * tint[ 0 ];
+        sum[ j + 1 ] += g * tint[ 1 ];
+        sum[ j + 2 ] += g * tint[ 2 ];
+      }
+    } );
+    const data = octx.createImageData( w , h );
+    const out = data.data;
+    for ( let i = 0 , j = 0; i < out.length; i += 4 , j += 3 ) {
+      out[ i ] = sum[ j ];
+      out[ i + 1 ] = sum[ j + 1 ];
+      out[ i + 2 ] = sum[ j + 2 ];
+      out[ i + 3 ] = 255;
+    }
+    octx.putImageData( data , 0 , 0 );
     this.bitmap = off;
   },
 
@@ -1008,8 +1298,15 @@ const Ais = {
     if ( document.body.classList.contains( "modal-open" ) ) return;
     const tag = ( event.target.tagName || "" ).toLowerCase();
     if ( tag === "input" || tag === "select" || tag === "textarea" ) return;
-    if ( event.ctrlKey || event.metaKey || event.altKey ) return;
     const key = event.key;
+    // Ctrl/⌘+Z undoes, Ctrl/⌘+Y or Ctrl/⌘+Shift+Z redoes.
+    if ( ( event.ctrlKey || event.metaKey ) && !event.altKey && ( key === "z" || key === "Z" || key === "y" || key === "Y" ) ) {
+      event.preventDefault();
+      if ( key === "y" || key === "Y" || event.shiftKey ) this.redo();
+      else this.undo();
+      return;
+    }
+    if ( event.ctrlKey || event.metaKey ) return;
     // Esc: drop an edit, then the Edit / Delete tool, then (auto) the run.
     if ( key === "Escape" && ( this.editing || this.tool !== "trace" ) ) {
       event.preventDefault();
@@ -1017,15 +1314,20 @@ const Ais = {
       else this.setTool( "trace" );
       return;
     }
-    if ( AisAuto.onKey( event ) ) return;
     const arrows = { ArrowLeft: [ -1 , 0 ] , ArrowRight: [ 1 , 0 ] , ArrowUp: [ 0 , -1 ] , ArrowDown: [ 0 , 1 ] };
-    if ( arrows[ key ] && this.pending() ) {
+    if ( event.altKey && !arrows[ key ] ) return;
+    if ( AisAuto.onKey( event ) ) return;
+    // Alt+arrows walk a waiting click; plain arrows switch images and drop it.
+    if ( arrows[ key ] && event.altKey ) {
       event.preventDefault();
+      if ( !this.pending() ) return;
       const step = event.shiftKey ? 5 : 1;
       this.nudge( arrows[ key ][ 0 ] * step , arrows[ key ][ 1 ] * step );
       return;
     }
-    if ( key === "Enter" ) { event.preventDefault(); this.accept(); }
+    if ( event.altKey ) return;
+    if ( ( key === "ArrowLeft" || key === "ArrowRight" ) && this.pending() ) this.reject();
+    if ( key === "Enter" || key === " " ) { event.preventDefault(); this.accept(); }
     else if ( key === "n" || key === "N" ) this.reject();
     else if ( key === "ArrowRight" || key === "PageDown" ) { event.preventDefault(); this.step( 1 ); }
     else if ( key === "ArrowLeft" || key === "PageUp" ) { event.preventDefault(); this.step( -1 ); }
@@ -1309,7 +1611,13 @@ const Ais = {
 
   // Store a row for entry; throws what the server said. The caller redraws.
   async saveRow( entry , row ) {
-    const saved = await Api.post( "/api/ais/results" , { batch_id: this.batch.id , image: entry.key , row: row } );
+    const saved = await this.postAdd( this.batch.id , entry.key , row );
+    this.remember( { kind: "add" , ref: this.refFor( saved ) } );
+    return saved;
+  },
+
+  async postAdd( batchId , image , row ) {
+    const saved = await Api.post( "/api/ais/results" , { batch_id: batchId , image: image , row: row } );
     this.batchRows.push( saved );
     if ( this.allRows ) this.allRows.push( saved );
     return saved;
@@ -1391,7 +1699,7 @@ const Ais = {
     this.draw();
   },
 
-  // Edit: trace the target again from its start, which the arrow keys then
+  // Edit: trace the target again from its start, which Alt+arrow keys then
   // walk and a click moves; Enter keeps the new trace (commitEdit).
   startEdit( target ) {
     const item = target.item;
@@ -1416,10 +1724,19 @@ const Ais = {
       return;
     }
     const old = target.item;
-    const saved = await Api.post( "/api/ais/results/" + old.id + "/update" , { row: this.rowFor( entry , r , old.origin || "" ) } );
-    const swap = ( list ) => list && list.forEach( ( row , i ) => { if ( row.id === saved.id ) list[ i ] = saved; } );
+    const ref = this.refFor( old );
+    const saved = await this.postUpdate( old.id , this.rowFor( entry , r , old.origin || "" ) );
+    this.remember( { kind: "edit" , ref: ref , before: old , after: saved } );
+  },
+
+  async postUpdate( id , row ) {
+    const saved = await Api.post( "/api/ais/results/" + id + "/update" , { row: row } );
+    const swap = ( list ) => list && list.forEach( ( old , i ) => { if ( old.id === saved.id ) list[ i ] = saved; } );
     swap( this.batchRows );
     swap( this.allRows );
+    const ref = this.refs.get( saved.id );
+    if ( ref ) ref.row = saved;
+    return saved;
   },
 
   deleteTrace( target ) {
@@ -1433,6 +1750,8 @@ const Ais = {
   // --- results (on the server) -------------------------------------------------
 
   async loadBatchRows() {
+    const batchId = this.batch ? this.batch.id : null;
+    if ( this.historyBatch !== batchId ) this.clearHistory( batchId );
     if ( !this.batch ) {
       this.batchRows = [];
       return;
@@ -1503,19 +1822,92 @@ const Ais = {
 
   // Delete a saved row; the server renumbers the rest of its image 1..k.
   async deleteRow( row ) {
-    let out;
+    const ref = this.refFor( row );
     try {
-      out = await Api.post( "/api/ais/results/" + row.id + "/delete" , {} );
+      await this.postDelete( row );
     } catch ( error ) {
       App.showError( error.message );
       return;
     }
+    this.remember( { kind: "delete" , ref: ref } );
+  },
+
+  // Delete on the server, then here; throws what the server said.
+  async postDelete( row ) {
+    const out = await Api.post( "/api/ais/results/" + row.id + "/delete" , {} );
     if ( this.editing && this.editing.item === row ) this.reject();
     const renumbered = new Map( ( out.renumbered || [] ).map( ( r ) => [ r.id , r.n ] ) );
     const keep = ( list ) => list.filter( ( r ) => r.id !== row.id ).map( ( r ) => renumbered.has( r.id ) ? Object.assign( r , { n: renumbered.get( r.id ) } ) : r );
     this.batchRows = keep( this.batchRows );
     if ( this.allRows ) this.allRows = keep( this.allRows );
     AisAuto.rowDeleted();
+    this.renderTable();
+    this.renderPicker();
+    this.draw();
+  },
+
+  // --- undo / redo (of the saved rows) ------------------------------------------
+
+  refFor( row ) {
+    let ref = this.refs.get( row.id );
+    if ( !ref ) {
+      ref = { row: row };
+      this.refs.set( row.id , ref );
+    }
+    return ref;
+  },
+
+  remember( step ) {
+    this.undoStack.push( step );
+    this.redoStack = [];
+    this.renderHistory();
+  },
+
+  clearHistory( batchId ) {
+    this.undoStack = [];
+    this.redoStack = [];
+    this.refs = new Map();
+    this.historyBatch = batchId;
+    this.renderHistory();
+  },
+
+  renderHistory() {
+    Dom.get( "ais-undo" ).disabled = !this.undoStack.length || this.historyBusy;
+    Dom.get( "ais-redo" ).disabled = !this.redoStack.length || this.historyBusy;
+  },
+
+  undo() { return this.replay( this.undoStack , this.redoStack , true ); },
+  redo() { return this.replay( this.redoStack , this.undoStack , false ); },
+
+  // Take the last step off from and do it backwards (undo) or again (redo);
+  // it then goes on to. A step that fails (someone else changed the row)
+  // is dropped.
+  async replay( from , to , backwards ) {
+    if ( this.historyBusy || this.busy || !from.length ) return;
+    const step = from.pop();
+    const ref = step.ref;
+    const remove = ( step.kind === "add" ) === backwards;
+    this.historyBusy = true;
+    this.renderHistory();
+    try {
+      if ( step.kind === "edit" ) {
+        await this.postUpdate( ref.row.id , backwards ? step.before : step.after );
+      } else if ( remove ) {
+        await this.postDelete( ref.row );
+      } else {
+        const saved = await this.postAdd( ref.row.batch_id , ref.row.image , ref.row );
+        this.refs.delete( ref.row.id );
+        ref.row = saved;
+        this.refs.set( saved.id , ref );
+      }
+      to.push( step );
+    } catch ( error ) {
+      App.showError( error.message );
+    } finally {
+      this.historyBusy = false;
+      this.renderHistory();
+    }
+    if ( this.editing ) this.reject();
     this.renderTable();
     this.renderPicker();
     this.draw();
@@ -1558,6 +1950,8 @@ const Ais = {
         }
       } );
     }
+
+    if ( this.showSomata && this.somata ) this.somata.forEach( ( outline ) => this.dots( outline , SOMA_COLOUR ) );
 
     AisAuto.draw( ctx , s , lw );
 

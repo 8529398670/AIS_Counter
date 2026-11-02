@@ -39,16 +39,37 @@ const Settings = {
   // Settings for every method: field -> default, control id and allowed range
   // (numbers) or choices (text). A true/false default is a checkbox.
   general: {
+    // auto_method: "classic" is auto mode as it always was (auto_start and
+    // the auto_ filters); "fitted", the default, is the trial one fitted to hand-clicked AIS
+    // (start "fitted" in app/analysis/detect.py, and the fitted_ filters);
+    // "fitted2" a second trial (start "fitted2", the fitted2_ filters).
     defaults: { min_length: 0 , line_width: 1.5 ,
-      auto_review: "each" , auto_start: "both" , auto_min_length: 5 , auto_min_brightness: 30 , auto_min_width: 2.4 ,
+      auto_review: "each" , auto_method: "fitted" , auto_start: "soma" , auto_min_length: 5 , auto_min_brightness: 30 ,
+      auto_min_width: 2.4 , auto_max_soma_gap: 10 ,
+      fitted_min_length: 13 , fitted_min_brightness: 55 , fitted_max_branchiness: 1.02 ,
+      fitted2_min_length: 13 , fitted2_min_contrast: 30 , fitted2_min_brightness: 0 , fitted2_max_branchiness: 1.02 ,
       auto_skip_done: true },
     controls: { min_length: "settings-min-length" , line_width: "settings-line-width" ,
-      auto_review: "settings-auto-review" , auto_start: "settings-auto-start" ,
+      auto_review: "settings-auto-review" , auto_method: "settings-auto-method" , auto_start: "settings-auto-start" ,
       auto_min_length: "settings-auto-min-length" , auto_min_brightness: "settings-auto-min-brightness" ,
-      auto_min_width: "settings-auto-min-width" , auto_skip_done: "settings-auto-skip-done" },
+      auto_min_width: "settings-auto-min-width" , auto_max_soma_gap: "settings-auto-max-soma-gap" ,
+      fitted_min_length: "settings-fitted-min-length" , fitted_min_brightness: "settings-fitted-min-brightness" ,
+      fitted_max_branchiness: "settings-fitted-max-branchiness" ,
+      fitted2_min_length: "settings-fitted2-min-length" , fitted2_min_contrast: "settings-fitted2-min-contrast" ,
+      fitted2_min_brightness: "settings-fitted2-min-brightness" , fitted2_max_branchiness: "settings-fitted2-max-branchiness" ,
+      auto_skip_done: "settings-auto-skip-done" },
     ranges: { min_length: [ 0 , 1000 ] , line_width: [ 0.5 , 6 ] , auto_min_length: [ 0 , 1000 ] ,
-      auto_min_brightness: [ 0 , 100 ] , auto_min_width: [ 0 , 20 ] },
-    choices: { auto_review: [ "each" , "end" , "all" ] , auto_start: [ "both" , "brighter" , "dimmer" ] },
+      auto_min_brightness: [ 0 , 100 ] , auto_min_width: [ 0 , 20 ] , auto_max_soma_gap: [ 0 , 100 ] ,
+      fitted_min_length: [ 0 , 1000 ] , fitted_min_brightness: [ 0 , 100 ] , fitted_max_branchiness: [ 0 , 10 ] ,
+      fitted2_min_length: [ 0 , 1000 ] , fitted2_min_contrast: [ 0 , 100 ] , fitted2_min_brightness: [ 0 , 100 ] ,
+      fitted2_max_branchiness: [ 0 , 10 ] },
+    choices: { auto_review: [ "each" , "end" , "all" ] , auto_method: [ "classic" , "fitted" , "fitted2" ] ,
+      auto_start: [ "soma" , "both" , "brighter" , "dimmer" ] },
+    // A build that briefly made the fitted filters the auto_ ones (marked by
+    // auto_max_branchiness) saved its values there: they move to fitted_,
+    // and the auto_ ones go back to their defaults.
+    interim: { auto_min_length: "fitted_min_length" , auto_min_brightness: "fitted_min_brightness" ,
+      auto_max_branchiness: "fitted_max_branchiness" , auto_start: null , auto_min_width: null , auto_max_soma_gap: null },
   },
 
   values: null,
@@ -146,7 +167,14 @@ const Settings = {
   load() {
     const method = this.find( this.all().method );
     const all = this.all();
-    const general = this.pick( this.general , all.general && typeof all.general === "object" ? all.general : {} );
+    const stored = Object.assign( {} , all.general && typeof all.general === "object" ? all.general : {} );
+    if ( "auto_max_branchiness" in stored ) {
+      Object.entries( this.general.interim ).forEach( ( [ from , to ] ) => {
+        if ( to && from in stored ) stored[ to ] = stored[ from ];
+        delete stored[ from ];
+      } );
+    }
+    const general = this.pick( this.general , stored );
     const values = Object.assign( { method: method.key } , general , method.defaults );
     const saved = this.saved( method.key );
     Object.keys( method.defaults ).forEach( ( field ) => {
@@ -188,6 +216,10 @@ const Settings = {
 
   renderGeneral() {
     Dom.text( Dom.get( "settings-line-width-value" ) , this.values.line_width + " px" );
+    const method = this.values.auto_method;
+    Dom.show( Dom.get( "settings-auto-classic" ) , method === "classic" );
+    Dom.show( Dom.get( "settings-auto-fitted" ) , method === "fitted" );
+    Dom.show( Dom.get( "settings-auto-fitted2" ) , method === "fitted2" );
   },
 
   // A general setting changed elsewhere (the Auto panel): cleaned, shown
@@ -228,13 +260,25 @@ const Settings = {
   minLength() { return this.values.min_length; },
   // Screen pixels, whatever the zoom.
   lineWidth() { return this.values.line_width; },
-  // Auto mode (ais_auto.js): each | end | all, both | brighter | dimmer, the
-  // filters (µm, % of the image's bright level, µm; 0 is off), and whether
+  // Auto mode (ais_auto.js): each | end | all, classic | fitted | fitted2,
+  // classic's soma | both | brighter | dimmer and filters (µm, % of the
+  // image's bright level, µm, and µm from a soma on a .czi; 0 is off),
+  // fitted's filters (µm, %, skeleton over trace length; 0 is off), fitted2's
+  // (µm, % contrast, %, skeleton over trace length; 0 is off), and whether
   // complete images are left alone.
   autoReview() { return this.values.auto_review; },
+  autoMethod() { return this.values.auto_method; },
   autoStart() { return this.values.auto_start; },
   autoMinLength() { return this.values.auto_min_length; },
   autoMinBrightness() { return this.values.auto_min_brightness; },
   autoMinWidth() { return this.values.auto_min_width; },
+  autoMaxSomaGap() { return this.values.auto_max_soma_gap; },
+  fittedMinLength() { return this.values.fitted_min_length; },
+  fittedMinBrightness() { return this.values.fitted_min_brightness; },
+  fittedMaxBranchiness() { return this.values.fitted_max_branchiness; },
+  fitted2MinLength() { return this.values.fitted2_min_length; },
+  fitted2MinContrast() { return this.values.fitted2_min_contrast; },
+  fitted2MinBrightness() { return this.values.fitted2_min_brightness; },
+  fitted2MaxBranchiness() { return this.values.fitted2_max_branchiness; },
   autoSkipDone() { return this.values.auto_skip_done; },
 };

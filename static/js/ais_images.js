@@ -1,7 +1,6 @@
 // The Process screen's dialogs: Images (which of the batch to step through,
-// with previews and duplicates), Open path (a folder on this machine, read by
-// the server) and Batches (every shared batch, to open, assign or delete,
-// with each assignee's progress, refreshed while the dialog is open). Ais
+// with previews and duplicates) and Open path (a folder on this machine, read
+// by the server, for a new batch or one the Batches screen adds to). Ais
 // (ais.js) owns the images; this file only edits their `included` flag, and
 // only when the selection is confirmed.
 const AisImages = {
@@ -36,7 +35,6 @@ const AisImages = {
     } );
 
     this.initPath();
-    this.initBatches();
   },
 
   // --- Images ----------------------------------------------------------------
@@ -74,10 +72,12 @@ const AisImages = {
       const main = entry.files[ Ais.traced( entry ) ];
       const name = Ais.splitName( main.name );
       const pair = Ais.kind( entry ) === "pair";
+      const czi = Ais.kind( entry ) === "czi";
       const count = Ais.acceptedCount( entry );
       const box = Dom.el( "input" , { class: "form-check-input ais-card-check" , attrs: { type: "checkbox" , tabindex: "-1" , "aria-label": main.name } } );
       const badges = [
-        Dom.el( "span" , { class: "badge " + ( pair ? "text-bg-secondary" : "text-bg-warning" ) , text: I18n.get( pair ? "ais.pair" : "ais.single" ) } ),
+        Dom.el( "span" , { class: "badge " + ( pair || czi ? "text-bg-secondary" : "text-bg-warning" ) ,
+          text: I18n.get( czi ? "ais.czi" : pair ? "ais.pair" : "ais.single" ) } ),
       ];
       if ( entry.dup_of != null ) {
         badges.push( Dom.el( "span" , { class: "badge text-bg-danger" , text: I18n.get( "ais.duplicate_of" ).replace( "{n}" , entry.dup_of + 1 ) } ) );
@@ -149,16 +149,19 @@ const AisImages = {
   },
 
   // A card shows its thumbnail once it scrolls near view: decoded here
-  // (tiff.js) when this browser picked the file, else rendered by the server
-  // -- which can for an Open-path file or one already uploaded.
+  // (tiff.js) when this browser picked the TIFF, else rendered by the server
+  // -- which can for an Open-path file or one already uploaded (a .czi
+  // always: tiff.js does not read them).
   async loadThumb( i , holder ) {
     const entry = Ais.images[ i ];
     if ( !entry || !holder ) return;
     const f = entry.files[ Ais.traced( entry ) ];
+    // Picked on the Batches screen and still waiting to upload: read here too.
+    const picked = f.file || Batches.fileFor( f.sha );
     if ( !entry.thumb ) {
-      if ( f.file ) {
+      if ( picked && Ais.kind( entry ) !== "czi" ) {
         try {
-          entry.thumb = await Tiff.thumbnail( f.file , this.thumbSide );
+          entry.thumb = await Tiff.thumbnail( picked , this.thumbSide );
         } catch ( error ) {
           entry.thumb = null;
         }
@@ -271,7 +274,8 @@ const AisImages = {
     this.pathModalEl = Dom.get( "ais-path-modal" );
     this.pathModal = bootstrap.Modal.getOrCreateInstance( this.pathModalEl );
     this.listing = null;
-    Dom.get( "ais-open-path" ).addEventListener( "click" , () => this.openPathDialog() );
+    this.pathTarget = null;   // the batch to add the folder to, or null for a new one
+    Dom.get( "ais-open-path" ).addEventListener( "click" , () => this.openPathDialog( null ) );
     Dom.get( "ais-path-form" ).addEventListener( "submit" , ( e ) => { e.preventDefault(); this.browse( Dom.get( "ais-path-input" ).value ); } );
     Dom.get( "ais-path-choose" ).addEventListener( "click" , () => this.chooseNative() );
     Dom.get( "ais-path-open" ).addEventListener( "click" , () => this.openListing() );
@@ -281,13 +285,16 @@ const AisImages = {
   async recentPaths() {
     try {
       const list = ( await Api.request( "/api/ais/batches" ) ).batches;
-      return Array.from( new Set( list.filter( ( b ) => b.path ).map( ( b ) => b.path ) ) ).slice( 0 , 8 );
+      const newest = list.filter( ( b ) => b.path ).sort( ( a , b ) => b.id - a.id );
+      return Array.from( new Set( newest.map( ( b ) => b.path ) ) ).slice( 0 , 8 );
     } catch ( error ) {
       return [];
     }
   },
 
-  async openPathDialog() {
+  // target: a Batches list row to add the folder to, or null to open a new batch.
+  async openPathDialog( target ) {
+    this.pathTarget = target || null;
     Dom.show( Dom.get( "ais-path-choose" ) , Ais.local.platform === "mac" );
     this.pathModal.show();
     const recent = await this.recentPaths();
@@ -299,7 +306,7 @@ const AisImages = {
       attrs: { type: "button" , title: path },
       on: { click: () => this.browse( path ) },
     } ) ) );
-    this.browse( ( Ais.batch && Ais.batch.path ) || recent[ 0 ] || "~" );
+    this.browse( ( target && target.path ) || ( Ais.batch && Ais.batch.path ) || recent[ 0 ] || "~" );
   },
 
   async browse( path ) {
@@ -328,7 +335,8 @@ const AisImages = {
     l.files.slice( 0 , 200 ).forEach( ( f ) => row( "bi-file-earmark-image" , f.name , null , true ) );
     const n = l.files.length;
     Dom.text( Dom.get( "ais-path-summary" ) , I18n.get( "ais.path_tiffs" ).replace( "{n}" , n ) );
-    Dom.get( "ais-path-open" ).disabled = n === 0;
+    // Subfolders are read too (app/analysis/local.py), so a folder of folders opens.
+    Dom.get( "ais-path-open" ).disabled = n === 0 && !l.dirs.length;
   },
 
   async chooseNative() {
@@ -342,128 +350,14 @@ const AisImages = {
 
   openListing() {
     const l = this.listing;
-    if ( !l || !l.files.length ) return;
+    if ( !l || ( !l.files.length && !l.dirs.length ) ) return;
     this.pathModal.hide();
+    const target = this.pathTarget;
+    if ( target ) {
+      Batches.addPath( target , l.path );
+      return;
+    }
     // Let the path dialog finish closing before the Images dialog opens.
     this.pathModalEl.addEventListener( "hidden.bs.modal" , () => Ais.openPath( l.path ) , { once: true } );
-  },
-
-  // --- Batches ---------------------------------------------------------------
-
-  initBatches() {
-    this.batchesModalEl = Dom.get( "ais-batches-modal" );
-    this.batchesModal = bootstrap.Modal.getOrCreateInstance( this.batchesModalEl );
-    this.mineOnly = null;    // the "Assigned to me" switch, once someone sets it
-    Dom.get( "ais-batches-open" ).addEventListener( "click" , () => this.openBatches() );
-    Dom.get( "ais-batches-mine" ).addEventListener( "change" , ( e ) => { this.mineOnly = e.target.checked; this.renderBatches(); } );
-    // The monitor: while the list is open (and the tab is visible), fetch it
-    // again every few seconds, so each person's progress follows along.
-    this.batchesModalEl.addEventListener( "hidden.bs.modal" , () => window.clearInterval( this.batchesTimer ) );
-  },
-
-  async openBatches() {
-    this.batchesModal.show();
-    this.batchList = null;
-    Dom.clear( Dom.get( "ais-batches-list" ) );
-    await this.refreshBatches();
-    window.clearInterval( this.batchesTimer );
-    this.batchesTimer = window.setInterval( () => {
-      if ( document.visibilityState === "visible" ) this.refreshBatches( true );
-    } , 5000 );
-  },
-
-  async refreshBatches( quiet ) {
-    try {
-      this.batchList = ( await Api.request( "/api/ais/batches" ) ).batches;
-    } catch ( error ) {
-      if ( !quiet ) App.showError( error.message );
-      return;
-    }
-    this.renderBatches();
-  },
-
-  // "5 min ago" for an ISO time.
-  ago( iso ) {
-    const seconds = Math.max( 0 , ( Date.now() - new Date( iso ).getTime() ) / 1000 );
-    const [ n , unit ] = seconds < 60 ? [ 0 , "now" ] : seconds < 3600 ? [ Math.floor( seconds / 60 ) , "min" ]
-      : seconds < 86400 ? [ Math.floor( seconds / 3600 ) , "h" ] : [ Math.floor( seconds / 86400 ) , "d" ];
-    return I18n.get( "ais.ago_" + unit ).replace( "{n}" , n );
-  },
-
-  // One line per assignee: name, bar, completed / images, AIS, last activity.
-  assigneeLines( b ) {
-    return b.assignees.map( ( a ) => {
-      const me = Ais.me && a.user_id === Ais.me.id;
-      const share = a.images ? 100 * a.completed / a.images : 0;
-      const bar = Dom.el( "div" , { class: "progress ais-assignee-bar" , attrs: {
-        role: "progressbar" , "aria-label": a.name , "aria-valuenow": String( a.completed ) , "aria-valuemin": "0" , "aria-valuemax": String( a.images ) ,
-      } , children: [ Dom.el( "div" , { class: "progress-bar" + ( a.images && a.completed === a.images ? " bg-success" : "" ) } ) ] } );
-      bar.firstChild.style.width = share + "%";
-      const details = [ a.completed + " / " + a.images , I18n.get( "ais.n_ais" ).replace( "{n}" , a.ais ) ];
-      if ( a.last_at ) details.push( this.ago( a.last_at ) );
-      return Dom.el( "div" , { class: "ais-assignee" + ( me ? " ais-assignee-me" : "" ) , children: [
-        Dom.el( "span" , { class: "ais-assignee-name text-truncate" , text: a.name , attrs: { title: a.name + " · " + Math.round( a.percent ) + " %" } } ),
-        bar,
-        Dom.el( "span" , { class: "text-body-secondary text-nowrap" , text: details.join( " · " ) } ),
-      ] } );
-    } );
-  },
-
-  renderBatches() {
-    const list = this.batchList || [];
-    const admin = Boolean( Ais.me && Ais.me.role === "admin" );
-    const anyMine = list.some( ( b ) => b.mine );
-    if ( this.mineOnly === null ) Dom.get( "ais-batches-mine" ).checked = anyMine;
-    Dom.show( Dom.get( "ais-batches-mine-wrap" ) , anyMine );
-    const mineOnly = anyMine && Dom.get( "ais-batches-mine" ).checked;
-    const shown = list.filter( ( b ) => !mineOnly || b.mine );
-    const body = Dom.get( "ais-batches-list" );
-    Dom.clear( body );
-    Dom.show( Dom.get( "ais-batches-none" ) , !list.length );
-    shown.forEach( ( b ) => {
-      const mine = Ais.me && ( b.created_by === Ais.me.id || admin );
-      const open = Dom.el( "a" , {
-        class: "fw-semibold",
-        text: b.name,
-        attrs: { href: Ais.urlFor( b , null ) , title: b.path || b.name },
-        on: { click: () => this.batchesModal.hide() },
-      } );
-      const del = Dom.el( "button" , {
-        class: "btn btn-sm btn-link text-danger p-0",
-        attrs: { type: "button" , title: I18n.get( "ais.batch_delete" ) , "aria-label": I18n.get( "ais.batch_delete" ) + ": " + b.name },
-        children: [ Dom.el( "i" , { class: "bi bi-trash" } ) ],
-        on: { click: () => this.deleteBatch( b ) },
-      } );
-      const assign = Dom.el( "button" , {
-        class: "btn btn-sm btn-link p-0 me-2",
-        attrs: { type: "button" , title: I18n.get( "ais.assign" ) , "aria-label": I18n.get( "ais.assign" ) + ": " + b.name },
-        children: [ Dom.el( "i" , { class: "bi bi-people" } ) ],
-        on: { click: () => AisAssign.open( b ) },
-      } );
-      const assigned = b.assignees.length ? this.assigneeLines( b )
-        : [ Dom.el( "span" , { class: "text-body-secondary" , text: I18n.get( "ais.unassigned" ) } ) ];
-      body.appendChild( Dom.el( "tr" , { children: [
-        Dom.el( "td" , { children: [ open , Dom.el( "div" , { class: "small text-body-secondary text-truncate ais-batch-path" , text: b.path || I18n.get( "ais.uploaded" ) } ) ] } ),
-        Dom.el( "td" , { class: "text-nowrap" , text: b.completed + " / " + b.images } ),
-        Dom.el( "td" , { text: b.duplicates ? String( b.duplicates ) : "" } ),
-        Dom.el( "td" , { class: "ais-assignees" , children: assigned } ),
-        Dom.el( "td" , { text: b.created_by_name } ),
-        Dom.el( "td" , { text: new Date( b.created_at ).toLocaleString() } ),
-        Dom.el( "td" , { class: "text-nowrap" , children: ( admin ? [ assign ] : [] ).concat( mine ? [ del ] : [] ) } ),
-      ] } ) );
-    } );
-  },
-
-  async deleteBatch( b ) {
-    const question = I18n.get( "ais.batch_delete_confirm" ).replace( "{name}" , b.name );
-    if ( question && !window.confirm( question ) ) return;
-    try {
-      await Api.post( "/api/ais/batches/" + b.id + "/delete" , {} );
-    } catch ( error ) {
-      App.showError( error.message );
-      return;
-    }
-    if ( Ais.batch && Ais.batch.id === b.id ) Ais.closeBatch();
-    this.openBatches();
   },
 };
