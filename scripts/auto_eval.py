@@ -11,7 +11,9 @@ total: precision, recall, F1, and the length error on matches.
 
 --method is Settings > Auto mode's method with its default start and filter
 values (static/js/settings.js): "classic" (start soma, its filters),
-"fitted" or "fitted2" (that start, its filters). --start and --filters (a set from
+"fitted" or "fitted2" (that start, its filters), or "learned" (start
+learned, kept from the lowest score its model was shipped with, which
+--min-score overrides). --start and --filters (a set from
 FILTERS, "off" for none) override either. --plain runs as for a TIFF pair (no
 somata, no AMCA): start soma becomes both, as the client does.
 
@@ -57,13 +59,16 @@ FILTERS = {
     "fitted": ("fitted", (13, 0.55, 0, 0, 1.02, 0)),
     "fitted2": ("fitted2", (13, 0, 0, 0, 1.02, 0.30)),
 }
-METHODS = {"classic": "soma", "fitted": "fitted", "fitted2": "fitted2"}   # method -> its start
+METHODS = {"classic": "soma", "fitted": "fitted", "fitted2": "fitted2", "learned": "learned"}   # method -> its start
 OVERLAP = 0.5
+LEARNED_MIN_SCORE: float | None = None   # --min-score
 
 
 def load(gt_path: Path) -> list[dict[str, Any]]:
     """The ground truth's images, each with "raw" (the AIS channel as ZEN
-    exports it), "amca" and "pixel_um" read from its .czi."""
+    exports it), "amca" and "pixel_um" read from its .czi. An AIS without
+    "pixels" (scripts/export_csv_ground_truth.py's files) gets the trace a
+    click at its click gives."""
     images = json.loads(gt_path.read_text())["images"]
     for image in images:
         path = Path(image["file"])
@@ -71,7 +76,23 @@ def load(gt_path: Path) -> list[dict[str, Any]]:
         image["raw"] = np.ascontiguousarray(czi.as_tiff(czi.ais_name))
         image["amca"] = czi.channel(czi.soma_name or "AMCA")
         image["pixel_um"] = czi.pixel_um or aa.DEFAULT.pixconv
+        if any("pixels" not in ais for ais in image["ais"]):
+            _retrace(image)
     return images
+
+
+def _retrace(image: dict[str, Any]) -> None:
+    prep = aa.PreparedImage.from_array(preprocess.processed(image["raw"]))
+    cache: dict = {}
+    ref = bright_level(image["raw"])
+    for ais in image["ais"]:
+        if "pixels" not in ais:
+            click = (float(ais["click_x"]), float(ais["click_y"]))
+            two = ais.get("click2_x") is not None and (ais["click2_x"], ais["click2_y"]) != (ais["click_x"], ais["click_y"])
+            click2 = (float(ais["click2_x"]), float(ais["click2_y"])) if two else None
+            out = run_click(prep, image["raw"], click, click2, ais.get("threshold_initial") or 0.01, aa.DEFAULT, cache,
+                            outline=False, bright_ref=ref)
+            ais["pixels"] = out["pixels"]
 
 
 def near_masks(image: dict[str, Any]) -> list[np.ndarray]:
@@ -124,9 +145,17 @@ def _found(job: tuple[dict[str, Any], str, bool]) -> list[dict[str, Any]]:
     return auto.detect(prep, raw, 0.01, aa.DEFAULT, start, [], soma=soma)["candidates"]
 
 
+def learned_min_score() -> float:
+    """Method learned's lowest score: its model's, unless --min-score."""
+    from app.analysis import learned
+    return LEARNED_MIN_SCORE if LEARNED_MIN_SCORE is not None else learned.models()["meta"]["min_score"]
+
+
 def passes(c: dict[str, Any], filters: str) -> bool:
-    """static/js/ais_auto.js passes() (classic) and passesFitted(), with the
-    general minimum length off."""
+    """static/js/ais_auto.js passes() (classic), passesFitted() and
+    passesLearned(), with the general minimum length off."""
+    if filters == "learned":
+        return c["filter"]["score"] >= learned_min_score()
     method, (length, bright, width, gap, branch, contrast) = FILTERS[filters]
     f = c["filter"] if method != "classic" else dict(c["shape"], length_um=c["measures"]["length_um"])
     if length and f["length_um"] < length:
@@ -229,11 +258,14 @@ def main() -> None:
     ap.add_argument("--method", default="classic", choices=METHODS)
     ap.add_argument("--start", choices=auto.STARTS, help="instead of the method's")
     ap.add_argument("--plain", action="store_true", help="no somata or AMCA, as for a TIFF pair")
-    ap.add_argument("--filters", choices=FILTERS, help="instead of the method's")
+    ap.add_argument("--filters", choices=list(FILTERS) + ["learned"], help="instead of the method's")
+    ap.add_argument("--min-score", type=float, help="method learned's lowest score (0-1), instead of its model's")
     ap.add_argument("--dump", metavar="DIR")
     ap.add_argument("--jobs", type=int, default=os.cpu_count() or 1, help="images worked on at once")
     ap.add_argument("--json", action="store_true", help="print the result as JSON")
     args = ap.parse_args()
+    global LEARNED_MIN_SCORE
+    LEARNED_MIN_SCORE = args.min_score
     images = load(Path(args.gt))
     if args.dump:
         dump(images, Path(args.dump), args.jobs)

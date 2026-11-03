@@ -22,7 +22,11 @@
 // on the server's "filter" for each candidate (the measure it was chosen
 // by; the minimum length holds for the length shown too). Method "fitted2" (a
 // second trial) is the same with start "fitted2", which keeps a few more
-// whole-blob AIS, and a contrast filter in brightness's place.
+// whole-blob AIS, and a contrast filter in brightness's place. Method
+// "learned" (start "learned", app/analysis/learned.py) is a detector of its
+// own, learnt from hand-clicked batches: every candidate has a score, the
+// chance a person would have clicked it, and is kept from the lowest score
+// Settings allows (and the lowest length, if set).
 //
 // CZI mode: on a .czi the server also finds the somata (AMCA channel,
 // app/analysis/soma.py). Start "soma" traces each AIS from the end nearer a
@@ -54,7 +58,7 @@ const AisAuto = {
     Dom.get( "ais-auto-stop" ).addEventListener( "click" , () => this.stop() );
     Dom.get( "ais-auto-next" ).addEventListener( "click" , () => this.next() );
     Dom.get( "ais-auto-skip" ).addEventListener( "click" , () => this.skip() );
-    Object.keys( Object.assign( {} , this.quick , this.quickFitted , this.quickFitted2 ) ).forEach( ( id ) => {
+    Object.keys( Object.assign( {} , this.quick , this.quickFitted , this.quickFitted2 , this.quickLearned ) ).forEach( ( id ) => {
       Dom.get( id ).addEventListener( "change" , ( e ) => this.setQuick( this.quickFields()[ id ] , e.target ) );
     } );
   },
@@ -68,8 +72,10 @@ const AisAuto = {
     "ais-auto-quick-branchiness": "fitted_max_branchiness" },
   quickFitted2: { "ais-auto-quick-length": "fitted2_min_length" , "ais-auto-quick-contrast": "fitted2_min_contrast" ,
     "ais-auto-quick-brightness": "fitted2_min_brightness" , "ais-auto-quick-branchiness": "fitted2_max_branchiness" },
+  quickLearned: { "ais-auto-quick-score": "learned_min_score" , "ais-auto-quick-length": "learned_min_length" },
   quickFields() {
     const method = Settings.autoMethod();
+    if ( method === "learned" ) return this.quickLearned;
     return method === "fitted" ? this.quickFitted : method === "fitted2" ? this.quickFitted2 : this.quick;
   },
 
@@ -154,6 +160,15 @@ const AisAuto = {
         contrast: ( Settings.fitted2MinContrast() || 0 ) / 100,
         brightness: ( Settings.fitted2MinBrightness() || 0 ) / 100,
         branchiness: Settings.fitted2MaxBranchiness() || 0,
+      };
+    }
+    if ( Settings.autoMethod() === "learned" ) {
+      return {
+        method: "learned",
+        start: "learned",
+        min: Settings.learnedMinLength() || 0,
+        minShown: Settings.minLength() || 0,
+        score: ( Settings.learnedMinScore() || 0 ) / 100,
       };
     }
     return {
@@ -247,6 +262,7 @@ const AisAuto = {
   // .czi with somata found) starting near a soma.
   passes( c , params ) {
     if ( params.method === "fitted" || params.method === "fitted2" ) return this.passesFitted( c , params );
+    if ( params.method === "learned" ) return this.passesLearned( c , params );
     const m = c.measures;
     const shape = c.shape || {};
     if ( params.min && m.length_um < params.min ) return false;
@@ -268,6 +284,15 @@ const AisAuto = {
     if ( params.brightness && f.brightness < params.brightness ) return false;
     if ( params.branchiness && f.branchiness > params.branchiness ) return false;
     return true;
+  },
+
+  // Method "learned": scored high enough, and long enough (its lowest length
+  // and the general one).
+  passesLearned( c , params ) {
+    const length = c.measures.length_um;
+    if ( params.minShown && length < params.minShown ) return false;
+    if ( params.min && length < params.min ) return false;
+    return !( params.score && ( c.filter ? c.filter.score : 0 ) < params.score );
   },
 
   // Whether this run (else Settings) uses method "fitted" or "fitted2".
@@ -586,6 +611,8 @@ const AisAuto = {
     Dom.show( Dom.get( "ais-auto-quick-width-field" ) , "ais-auto-quick-width" in fields );
     Dom.show( Dom.get( "ais-auto-quick-contrast-field" ) , "ais-auto-quick-contrast" in fields );
     Dom.show( Dom.get( "ais-auto-quick-branchiness-field" ) , "ais-auto-quick-branchiness" in fields );
+    Dom.show( Dom.get( "ais-auto-quick-score-field" ) , "ais-auto-quick-score" in fields );
+    Dom.show( Dom.get( "ais-auto-quick-brightness-field" ) , "ais-auto-quick-brightness" in fields );
     Dom.show( Dom.get( "ais-auto-quick-soma-field" ) , "ais-auto-quick-soma" in fields &&
       Boolean( shownEntry && Ais.kind( shownEntry ) === "czi" ) );
     if ( quick ) {
@@ -623,7 +650,7 @@ const AisAuto = {
         Dom.el( "label" , { class: "d-flex align-items-center w-100 gap-2" , children: [
           box,
           Dom.el( "span" , { class: "ais-auto-n" , text: numbers.has( c ) ? "#" + numbers.get( c ) : "–" } ),
-          Dom.el( "span" , { class: "me-auto text-body-secondary" , text: this.shapeText( this.fitted() ? c.result.filter : c.result.shape , c.result.soma_gap_um ) } ),
+          Dom.el( "span" , { class: "me-auto text-body-secondary" , text: this.shapeText( this.shownShape( c.result ) , c.result.soma_gap_um ) } ),
           Dom.el( "span" , { class: "fw-semibold" , text: m.length_str + " µm" } ),
         ] } ),
       ] ,
@@ -631,12 +658,26 @@ const AisAuto = {
     } );
   },
 
+  // What a candidate's line describes: its "filter" for methods fitted and
+  // fitted2, its shape and score for learned, else its shape.
+  shownShape( result ) {
+    const method = this.run && this.run.params ? this.run.params.method : Settings.autoMethod();
+    if ( method === "learned" && result.shape ) {
+      return Object.assign( {} , result.shape , { score: result.filter ? result.filter.score : null } );
+    }
+    return this.fitted() ? result.filter : result.shape;
+  },
+
   // "2.9 µm · 62 %": width and brightness, what the filters look at (method
-  // fitted: " · branched 1.00" too, fitted2: " · contrast 34 %" before it),
-  // and on a .czi " · soma 1.6 µm", how far the start is from a soma.
+  // fitted: " · branched 1.00" too, fitted2: " · contrast 34 %" before it,
+  // learned: " · score 87 %"), and on a .czi " · soma 1.6 µm", how far the
+  // start is from a soma.
   shapeText( shape , somaGap ) {
     if ( !shape ) return "";
     let text = Ais.fmt( Number( shape.width_um.toFixed( 1 ) ) ) + " µm · " + Math.round( shape.brightness * 100 ) + " %";
+    if ( shape.score != null ) {
+      text += " · " + I18n.get( "ais.auto_score" ).replace( "{s}" , Math.round( shape.score * 100 ) );
+    }
     if ( shape.contrast != null ) {
       text += " · " + I18n.get( "ais.auto_contrast" ).replace( "{c}" , Math.round( shape.contrast * 100 ) );
     }

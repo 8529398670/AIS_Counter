@@ -42,12 +42,15 @@ const Settings = {
     // auto_method: "classic" is auto mode as it always was (auto_start and
     // the auto_ filters); "fitted", the default, is the trial one fitted to hand-clicked AIS
     // (start "fitted" in app/analysis/detect.py, and the fitted_ filters);
-    // "fitted2" a second trial (start "fitted2", the fitted2_ filters).
+    // "fitted2" a second trial (start "fitted2", the fitted2_ filters);
+    // "learned" its own detector (start "learned", app/analysis/learned.py)
+    // with a lowest score and length.
     defaults: { min_length: 0 , line_width: 1.5 ,
       auto_review: "each" , auto_method: "fitted" , auto_start: "soma" , auto_min_length: 5 , auto_min_brightness: 30 ,
       auto_min_width: 2.4 , auto_max_soma_gap: 10 ,
       fitted_min_length: 13 , fitted_min_brightness: 55 , fitted_max_branchiness: 1.02 ,
       fitted2_min_length: 13 , fitted2_min_contrast: 30 , fitted2_min_brightness: 0 , fitted2_max_branchiness: 1.02 ,
+      learned_min_score: 25 , learned_min_length: 0 ,
       auto_skip_done: true },
     controls: { min_length: "settings-min-length" , line_width: "settings-line-width" ,
       auto_review: "settings-auto-review" , auto_method: "settings-auto-method" , auto_start: "settings-auto-start" ,
@@ -57,13 +60,14 @@ const Settings = {
       fitted_max_branchiness: "settings-fitted-max-branchiness" ,
       fitted2_min_length: "settings-fitted2-min-length" , fitted2_min_contrast: "settings-fitted2-min-contrast" ,
       fitted2_min_brightness: "settings-fitted2-min-brightness" , fitted2_max_branchiness: "settings-fitted2-max-branchiness" ,
+      learned_min_score: "settings-learned-min-score" , learned_min_length: "settings-learned-min-length" ,
       auto_skip_done: "settings-auto-skip-done" },
     ranges: { min_length: [ 0 , 1000 ] , line_width: [ 0.5 , 6 ] , auto_min_length: [ 0 , 1000 ] ,
       auto_min_brightness: [ 0 , 100 ] , auto_min_width: [ 0 , 20 ] , auto_max_soma_gap: [ 0 , 100 ] ,
       fitted_min_length: [ 0 , 1000 ] , fitted_min_brightness: [ 0 , 100 ] , fitted_max_branchiness: [ 0 , 10 ] ,
       fitted2_min_length: [ 0 , 1000 ] , fitted2_min_contrast: [ 0 , 100 ] , fitted2_min_brightness: [ 0 , 100 ] ,
-      fitted2_max_branchiness: [ 0 , 10 ] },
-    choices: { auto_review: [ "each" , "end" , "all" ] , auto_method: [ "classic" , "fitted" , "fitted2" ] ,
+      fitted2_max_branchiness: [ 0 , 10 ] , learned_min_score: [ 0 , 100 ] , learned_min_length: [ 0 , 1000 ] },
+    choices: { auto_review: [ "each" , "end" , "all" ] , auto_method: [ "classic" , "fitted" , "fitted2" , "learned" ] ,
       auto_start: [ "soma" , "both" , "brighter" , "dimmer" ] },
     // A build that briefly made the fitted filters the auto_ ones (marked by
     // auto_max_branchiness) saved its values there: they move to fitted_,
@@ -220,6 +224,7 @@ const Settings = {
     Dom.show( Dom.get( "settings-auto-classic" ) , method === "classic" );
     Dom.show( Dom.get( "settings-auto-fitted" ) , method === "fitted" );
     Dom.show( Dom.get( "settings-auto-fitted2" ) , method === "fitted2" );
+    Dom.show( Dom.get( "settings-auto-learned" ) , method === "learned" );
   },
 
   // A general setting changed elsewhere (the Auto panel): cleaned, shown
@@ -260,12 +265,12 @@ const Settings = {
   minLength() { return this.values.min_length; },
   // Screen pixels, whatever the zoom.
   lineWidth() { return this.values.line_width; },
-  // Auto mode (ais_auto.js): each | end | all, classic | fitted | fitted2,
+  // Auto mode (ais_auto.js): each | end | all, classic | fitted | fitted2 | learned,
   // classic's soma | both | brighter | dimmer and filters (µm, % of the
   // image's bright level, µm, and µm from a soma on a .czi; 0 is off),
   // fitted's filters (µm, %, skeleton over trace length; 0 is off), fitted2's
-  // (µm, % contrast, %, skeleton over trace length; 0 is off), and whether
-  // complete images are left alone.
+  // (µm, % contrast, %, skeleton over trace length; 0 is off), learned's
+  // (% score, µm; 0 is off), and whether complete images are left alone.
   autoReview() { return this.values.auto_review; },
   autoMethod() { return this.values.auto_method; },
   autoStart() { return this.values.auto_start; },
@@ -280,5 +285,7 @@ const Settings = {
   fitted2MinContrast() { return this.values.fitted2_min_contrast; },
   fitted2MinBrightness() { return this.values.fitted2_min_brightness; },
   fitted2MaxBranchiness() { return this.values.fitted2_max_branchiness; },
+  learnedMinScore() { return this.values.learned_min_score; },
+  learnedMinLength() { return this.values.learned_min_length; },
   autoSkipDone() { return this.values.auto_skip_done; },
 };

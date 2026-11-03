@@ -1,0 +1,3 @@
+-r requirements-dev.txt
+# scripts/train_learned.py only: the app evaluates the trees it exports with numpy.
+scikit-learn==1.9.1

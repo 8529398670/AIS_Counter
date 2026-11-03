@@ -1,7 +1,8 @@
 """Auto mode against the AIS someone accepted by hand (scripts/auto_eval.py):
 methods fitted's and fitted2's starts and filter defaults (detect.py
 "fitted" / "fitted2", static/js/settings.js) must keep what they scored when
-they were fitted, and classic what it always did. Needs example-data/."""
+they were fitted, classic what it always did, and learned what its shipped
+model gives. Needs example-data/."""
 from __future__ import annotations
 
 import os
@@ -41,6 +42,16 @@ def test_classic_scores_as_it_did_before_fitted():
     images = auto_eval.load(GT)
     total = auto_eval.evaluate(images, "soma", False, "classic", os.cpu_count() or 1)["total"]
     assert (total["tp"], total["found"]) == (81, 122)
+
+
+@NEEDS
+def test_learned_scores_as_shipped():
+    """Method learned with its model's lowest score (app/analysis/learned_model.json,
+    trained on example-data-2's batches, not these images)."""
+    images = auto_eval.load(GT)
+    total = auto_eval.evaluate(images, "learned", False, "learned", os.cpu_count() or 1)["total"]
+    assert (total["tp"], total["found"]) == (84, 108)
+    assert total["recall"] >= 0.9
 
 
 def test_match_is_one_to_one_by_overlap():

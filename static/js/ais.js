@@ -22,6 +22,7 @@ const SOMA_COLOUR = "rgba(255, 140, 40, 0.85)";
 
 const Ais = {
   processedSuffix: ".tif - Processed method 2.5.tif",
+  concurrency: 4,        // files hashed, uploaded or exported at once
   legacyResultsKey: "ais-results",
   includeKey: "ais-include-",
   viewKey: "ais-view",
@@ -322,17 +323,19 @@ const Ais = {
     if ( !files.length ) return null;
     const rel = files[ 0 ].webkitRelativePath || "";
     const root = rel.includes( "/" ) ? rel.split( "/" )[ 0 ] : "";
-    const described = [];
+    const described = new Array( files.length );
     const byRel = new Map();
-    for ( let i = 0; i < files.length; i += 1 ) {
-      onProgress( i + 1 , files.length );
-      const f = files[ i ];
+    let done = 0;
+    // A few at a time: reading one file while another hashes.
+    await this.pool( files , this.concurrency , async ( f , i ) => {
       const digest = await crypto.subtle.digest( "SHA-256" , await f.arrayBuffer() );
       const sha = Array.from( new Uint8Array( digest ) , ( b ) => b.toString( 16 ).padStart( 2 , "0" ) ).join( "" );
       const fileRel = f.webkitRelativePath || f.name;
-      described.push( { name: f.name , rel: fileRel , sha: sha , size: f.size } );
+      described[ i ] = { name: f.name , rel: fileRel , sha: sha , size: f.size };
       byRel.set( fileRel , f );
-    }
+      done += 1;
+      onProgress( done , files.length );
+    } );
     return { name: root || I18n.get( "ais.loose_files" ) || "Files" , files: described , byRel: byRel };
   },
 
@@ -723,7 +726,7 @@ const Ais = {
       if ( !f.file ) throw new Error( I18n.get( "ais.not_uploaded" ) );
       if ( !f.pending ) {
         f.pending = ( async () => {
-          await Api.post( "/api/ais/files" , { data: await this.base64( f.file ) } );
+          await Api.postBytes( "/api/ais/files" , f.file );
           this.fileStored( f.sha );
         } )().finally( () => { f.pending = null; } );
       }
@@ -744,38 +747,58 @@ const Ais = {
   },
 
   // After an import: upload every included image this browser picked,
-  // current first, one at a time, so the batch is complete for others.
+  // current first, a few at a time, so the batch is complete for others.
   async uploadAll() {
     const token = {};
     this.uploadToken = token;
-    const waiting = () => this.images.filter( ( entry ) => entry.included &&
+    const busy = new Set();
+    const waiting = () => this.images.filter( ( entry ) => entry.included && !busy.has( entry ) &&
       Object.values( entry.files ).some( ( f ) => !f.stored && f.file ) );
     const total = waiting().length;
     let done = 0;
-    while ( this.uploadToken === token ) {
-      const left = waiting();
-      if ( !left.length ) break;
-      const current = this.images[ this.index ];
-      const next = left.includes( current ) ? current : left[ 0 ];
-      Dom.text( Dom.get( "ais-upload-status" ) , I18n.get( "ais.uploading_n" ).replace( "{done}" , done ).replace( "{total}" , total ) );
-      try {
-        await this.upload( next );
-      } catch ( error ) {
-        App.showError( error.message );
-        break;
+    let failed = false;
+    const worker = async () => {
+      while ( this.uploadToken === token && !failed ) {
+        const left = waiting();
+        if ( !left.length ) break;
+        const current = this.images[ this.index ];
+        const next = left.includes( current ) ? current : left[ 0 ];
+        busy.add( next );
+        Dom.text( Dom.get( "ais-upload-status" ) , I18n.get( "ais.uploading_n" ).replace( "{done}" , done ).replace( "{total}" , total ) );
+        try {
+          await this.upload( next );
+        } catch ( error ) {
+          if ( !failed ) App.showError( error.message );
+          failed = true;
+          break;
+        } finally {
+          busy.delete( next );
+        }
+        done += 1;
       }
-      done += 1;
-    }
+    };
+    await Promise.all( Array.from( { length: this.concurrency } , worker ) );
     if ( this.uploadToken === token ) Dom.text( Dom.get( "ais-upload-status" ) , "" );
   },
 
-  base64( file ) {
-    return new Promise( function ( resolve , reject ) {
-      const reader = new FileReader();
-      reader.onload = function () { resolve( String( reader.result ).split( "," )[ 1 ] || "" ); };
-      reader.onerror = function () { reject( new Error( "could not read " + file.name ) ); };
-      reader.readAsDataURL( file );
-    } );
+  // Run worker( item ) over items, at most n at a time; resolves when all
+  // are done, rejects with the first error (the others still finish).
+  async pool( items , n , worker ) {
+    let next = 0;
+    let failed = null;
+    const run = async () => {
+      while ( next < items.length && !failed ) {
+        const i = next;
+        next += 1;
+        try {
+          await worker( items[ i ] , i );
+        } catch ( error ) {
+          failed = failed || error;
+        }
+      }
+    };
+    await Promise.all( Array.from( { length: Math.min( n , items.length ) } , run ) );
+    if ( failed ) throw failed;
   },
 
   // --- the current image's bar -----------------------------------------------

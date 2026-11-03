@@ -278,7 +278,10 @@
                     <label id="ais-auto-quick-contrast-field" hidden><span data-i18n="ais.auto_quick_contrast"></span>
                       <span class="input-group input-group-sm"><input id="ais-auto-quick-contrast" class="form-control" type="number" min="0" max="100" step="1" data-i18n-attr="title:settings.fitted2_min_contrast_label" /><span class="input-group-text">%</span></span>
                     </label>
-                    <label><span data-i18n="ais.auto_quick_brightness"></span>
+                    <label id="ais-auto-quick-score-field" hidden><span data-i18n="ais.auto_quick_score"></span>
+                      <span class="input-group input-group-sm"><input id="ais-auto-quick-score" class="form-control" type="number" min="0" max="100" step="1" data-i18n-attr="title:settings.learned_min_score_label" /><span class="input-group-text">%</span></span>
+                    </label>
+                    <label id="ais-auto-quick-brightness-field"><span data-i18n="ais.auto_quick_brightness"></span>
                       <span class="input-group input-group-sm"><input id="ais-auto-quick-brightness" class="form-control" type="number" min="0" max="100" step="1" data-i18n-attr="title:settings.auto_min_brightness_label" /><span class="input-group-text">%</span></span>
                     </label>
                     <label id="ais-auto-quick-width-field"><span data-i18n="ais.auto_quick_width"></span>
@@ -413,10 +416,8 @@
             <label for="batches-new-name" class="form-label small" data-i18n="batches.new_name"></label>
             <input id="batches-new-name" class="form-control" maxlength="200" required />
             <div class="d-flex flex-wrap gap-2 mt-2">
-              <button class="btn btn-primary" type="button" data-new-add="batches-add-folder"><i class="bi bi-folder2-open me-1" aria-hidden="true"></i><span data-i18n="batches.create_folder"></span></button>
-              <button class="btn btn-outline-primary" type="button" data-new-add="batches-add-files"><i class="bi bi-images me-1" aria-hidden="true"></i><span data-i18n="batches.create_files"></span></button>
-              <button id="batches-new-path" class="btn btn-outline-primary" type="button" data-new-add="path" hidden><i class="bi bi-hdd me-1" aria-hidden="true"></i><span data-i18n="batches.create_path"></span></button>
-              <button class="btn btn-outline-secondary" type="submit" data-i18n="batches.create_empty"></button>
+              <!-- Enter in the name submits: the batch is created empty. -->
+              <button type="submit" hidden></button>
               <button id="batches-new-cancel" class="btn btn-outline-secondary" type="button" data-i18n="ais.cancel"></button>
             </div>
           </form>
@@ -602,6 +603,7 @@
                   <option value="classic" data-i18n="settings.auto_method_classic"></option>
                   <option value="fitted" data-i18n="settings.auto_method_fitted" selected></option>
                   <option value="fitted2" data-i18n="settings.auto_method_fitted2"></option>
+                  <option value="learned" data-i18n="settings.auto_method_learned"></option>
                 </select>
                 <div id="settings-auto-method-help" class="form-text" data-i18n="settings.auto_method_help"></div>
               </div>
@@ -701,6 +703,24 @@
                 <label for="settings-fitted2-max-branchiness" class="form-label" data-i18n="settings.fitted_max_branchiness_label"></label>
                 <input id="settings-fitted2-max-branchiness" class="form-control" type="number" min="0" max="10" step="0.01" value="1.02" aria-describedby="settings-fitted2-max-branchiness-help" />
                 <div id="settings-fitted2-max-branchiness-help" class="form-text" data-i18n="settings.fitted_max_branchiness_help"></div>
+              </div>
+              </div>
+              <div id="settings-auto-learned" hidden>
+              <div class="mb-3 settings-field">
+                <label for="settings-learned-min-score" class="form-label" data-i18n="settings.learned_min_score_label"></label>
+                <div class="input-group">
+                  <input id="settings-learned-min-score" class="form-control" type="number" min="0" max="100" step="1" value="25" aria-describedby="settings-learned-min-score-help" />
+                  <span class="input-group-text">%</span>
+                </div>
+                <div id="settings-learned-min-score-help" class="form-text" data-i18n="settings.learned_min_score_help"></div>
+              </div>
+              <div class="mb-3 settings-field">
+                <label for="settings-learned-min-length" class="form-label" data-i18n="settings.fitted_min_length_label"></label>
+                <div class="input-group">
+                  <input id="settings-learned-min-length" class="form-control" type="number" min="0" max="1000" step="0.1" value="0" aria-describedby="settings-learned-min-length-help" />
+                  <span class="input-group-text">µm</span>
+                </div>
+                <div id="settings-learned-min-length-help" class="form-text" data-i18n="settings.learned_min_length_help"></div>
               </div>
               </div>
               <div class="form-check settings-field">

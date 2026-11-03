@@ -102,8 +102,8 @@ the start of an AIS gives the original's trace and length. **Enter** accepts,
 
   In every mode, a click away from the candidates traces one by hand as
   usual, and Esc stops. Other settings:
-  - **Method:** *Fitted* (the default) or *Fitted 2*, trials (below), or
-    *Classic*, auto mode as it has always been.
+  - **Method:** *Fitted* (the default), *Fitted 2* or *Learned*, trials
+    (below), or *Classic*, auto mode as it has always been.
   - **Where a trace starts:** the end nearer a soma (a `.czi`; on a TIFF
     this is "both"), both ends (keep the better trace), the brighter end, or
     the dimmer end.
@@ -142,6 +142,29 @@ the start of an AIS gives the original's trace and length. **Enter** accepts,
   the traces of AIS both find are the same. Touching or crossing AIS
   (branched) and ones under 13 µm stay hard: below those limits most blobs
   are not AIS.
+
+  **Learned** (a third trial, built from scratch apart from the others:
+  `app/analysis/learned.py`) was trained on 3,277 AIS clicked by hand on
+  600 `.czi` images (batches C2 and C4-C7, `example-data-2/`). Instead of one
+  click per blob, it clicks every end of each large blob's skeleton and
+  every 10 px along it (a person often clicks where the AIS starts, partway
+  along a blob), then a gradient-boosted tree model scores each distinct
+  trace: how likely it is that a person would have clicked it, from its
+  measures, intensity profile, width, brightness, contrast, blob shape,
+  soma distance and nearness to the border. Of the traces lying on one AIS,
+  a second model picks the one it expects to measure nearest what a person
+  measured; a third skips blobs no one would click on before any clicking.
+  Candidates are kept from a **lowest score** (25 % by default; each shows
+  its score), and optionally a lowest length. Scoring each batch with models
+  trained on the other four, it found 85 % of the 3,277 AIS at 73 % right
+  (F1 0.79), measured 2.6 µm off on average and 75 % within 2 µm. On C2, the
+  newest batch, it found 72 % at 87 % right (F1 0.79) where Fitted 2 found
+  38 % (F1 0.52). It scores by "would a person's click give this trace",
+  not just "is this an AIS": scored the second way, long traces running on
+  past the AIS won, and lengths were 4-5 µm off. Without somata (a TIFF
+  pair) it uses models trained without the soma features, which did about
+  as well (F1 0.79). On the older batch 12 images, clicked to other habits,
+  it finds more (96 %) but measures about 1.5 µm longer than those clicks.
   - **Skip images already done.**
 
   Rows have `origin` = `auto` in the table and CSV, which also has
@@ -264,6 +287,21 @@ Manager needs a display, though batch mode opens no windows):
 .venv/bin/python scripts/preprocess_check.py example-data/006-both-tiff --stages /tmp/fiji006
 ```
 
+### Exporting a batch's files
+
+`scripts/export_batches.py` copies the files of one or more batches out of
+the store (where they live by sha-256) into `exports/<id>-<name>/` (or
+`--out DIR`), under their original names and subfolders. Batches are named
+as in **Batches** or by id; with no arguments it lists them. A re-run only
+copies what is missing; files the server no longer has are listed and the
+exit code is 1.
+
+```bash
+.venv/bin/python scripts/export_batches.py
+.venv/bin/python scripts/export_batches.py C4 C5 --out ~/Desktop/batches
+.venv/bin/python scripts/export_batches.py --all
+```
+
 ### Checking auto mode
 
 `scripts/export_ground_truth.py` writes the AIS accepted on a batch as a
@@ -275,7 +313,24 @@ detecting again). `tests/autodata/` holds one batch of 76 `.czi` images:
 `batch12.json` (images 1-10, clicked by hand, what Fitted was fitted to),
 `batch12_test.json` (11-30, clicked by hand) and `batch12_auto.json`
 (31-76: Fitted's picks that were accepted, plus the ones it missed, added by
-hand). Fitted 2 was fitted to all three.
+hand). Fitted 2 was fitted to all three. `tests/autodata/c4.json` to
+`c7.json` and `c2.json` hold batches C2 and C4-C7 (`example-data-2/`, every image, clicked by
+hand), written by `scripts/export_csv_ground_truth.py` from each batch's
+exported `results.csv`: clicks only, the traces are what those clicks give.
+
+Method Learned is trained by `scripts/train_learned.py` (scikit-learn, from
+`requirements-train.txt`; the app evaluates the exported trees with numpy):
+`extract` finds every candidate on those images once (cached in
+`.run/learned/`), `cv` scores each batch with models trained on the other
+three, and `fit` writes `app/analysis/learned_model.json` with the lowest
+score that gave the best F1.
+
+```bash
+.venv/bin/pip install -r requirements-train.txt
+.venv/bin/python scripts/train_learned.py extract
+.venv/bin/python scripts/train_learned.py fit
+.venv/bin/python scripts/auto_eval.py tests/autodata/batch12_test.json --method learned
+```
 
 ```bash
 .venv/bin/python scripts/export_ground_truth.py 12 tests/autodata/batch12_test.json --skip 10 --images 20

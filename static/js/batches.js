@@ -9,8 +9,8 @@
 // card's grip or from its menu. Reports (one batch, or every batch shown) are
 // built in AisExport: an Excel workbook, or a ZIP with it and the traced PNGs.
 //
-// Images added here upload from this browser in the background, one file at
-// a time, whichever screen is showing; Ais (ais.js) borrows those files
+// Images added here upload from this browser in the background, a few files
+// at a time, whichever screen is showing; Ais (ais.js) borrows those files
 // (fileFor) when it needs one before its turn, and hears of each one that
 // lands (Ais.fileStored), as the batch it loaded may predate the upload.
 const Batches = {
@@ -26,18 +26,14 @@ const Batches = {
   dragging: null,        // the batch id being dragged to a new place
   exports: new Map(),    // batch id -> progress text of an export from here
   addTarget: null,       // the batch the file pickers add to
-  pendingNew: null,      // or the name of a batch to create once files are picked
-  openAfter: null,       // a new batch's id: opened on Process once its images are added
   resetting: null,       // the batch the Reset results dialog is for
-  pumping: false,
+  pumping: 0,           // upload workers running
 
   init( me ) {
     this.me = me;
     Dom.get( "batches-new" ).addEventListener( "click" , () => this.showNew( true ) );
     Dom.get( "batches-new-cancel" ).addEventListener( "click" , () => this.showNew( false ) );
     Dom.get( "batches-new-form" ).addEventListener( "submit" , ( e ) => { e.preventDefault(); this.create(); } );
-    Dom.all( "[data-new-add]" ).forEach( ( button ) => button.addEventListener( "click" ,
-      () => this.createWith( button.getAttribute( "data-new-add" ) ) ) );
     Dom.get( "batches-mine" ).addEventListener( "change" , () => this.render() );
     Dom.get( "batches-archived" ).addEventListener( "change" , () => this.render() );
     Dom.all( "[data-export-all]" ).forEach( ( button ) => button.addEventListener( "click" ,
@@ -47,15 +43,9 @@ const Batches = {
       const input = Dom.get( id );
       input.addEventListener( "change" , () => {
         const target = this.addTarget;
-        const name = this.pendingNew;
-        // A copy: input.files is live, and clearing the input below empties
-        // it before a new batch (created first) gets to read it.
+        // A copy: input.files is live, and clearing the input below empties it.
         const picked = Array.from( input.files || [] );
-        this.pendingNew = null;
-        if ( picked && picked.length ) {
-          if ( target ) this.addPicked( target , picked );
-          else if ( name ) this.createPicked( name , picked );
-        }
+        if ( target && picked.length ) this.addPicked( target , picked );
         input.value = "";
       } );
     } );
@@ -108,14 +98,14 @@ const Batches = {
   showNew( visible ) {
     const form = Dom.get( "batches-new-form" );
     Dom.show( form , visible );
-    Dom.show( Dom.get( "batches-new-path" ) , Boolean( Ais.local && Ais.local.enabled ) );
     if ( visible ) {
       Dom.get( "batches-new-name" ).value = "";
       Dom.get( "batches-new-name" ).focus();
     }
   },
 
-  // Create empty: the batch alone, to add images to later.
+  // The form's only way: a name and Enter make the batch, empty; its images
+  // are added from its card (Add images).
   async create() {
     const name = Dom.get( "batches-new-name" ).value.trim();
     if ( !name ) return;
@@ -135,46 +125,6 @@ const Batches = {
     Dom.toast( I18n.get( "batches.created" ).replace( "{name}" , batch.name ) );
     this.fresh = batch.id;
     return batch;
-  },
-
-  // Folder… / Files… / Folder on this machine… on the new-batch form: the
-  // picker opens in the click itself (a browser opens one only then), and
-  // the batch is created once something is picked. Its images added, it
-  // opens on the Process screen with the Images dialog.
-  async createWith( how ) {
-    const input = Dom.get( "batches-new-name" );
-    const name = input.value.trim();
-    if ( !name ) {
-      input.reportValidity();
-      return;
-    }
-    if ( how === "path" ) {
-      const batch = await this.createNamed( name );
-      if ( !batch ) return;
-      this.openAfter = batch.id;
-      await this.refresh( true );
-      AisImages.openPathDialog( batch );
-      return;
-    }
-    this.addTarget = null;
-    this.pendingNew = name;
-    Dom.get( how ).click();
-  },
-
-  async createPicked( name , fileList ) {
-    const batch = await this.createNamed( name );
-    if ( !batch ) return;
-    this.openAfter = batch.id;
-    await this.addPicked( batch , fileList );
-  },
-
-  // A batch created with its images: on to the Process screen, which shows
-  // the Images dialog for it (Ais.followUrl).
-  openNew( batch ) {
-    if ( this.openAfter !== batch.id ) return;
-    this.openAfter = null;
-    Ais.openFresh = batch.id;
-    window.location.hash = Ais.urlFor( batch , null );
   },
 
   startRename( b ) {
@@ -442,7 +392,6 @@ const Batches = {
 
   pick( b , id ) {
     this.addTarget = b;
-    this.pendingNew = null;
     Dom.get( id ).click();
   },
 
@@ -487,7 +436,6 @@ const Batches = {
     this.local.delete( b.id );
     this.pump();
     await this.refresh( true );
-    this.openNew( b );
   },
 
   // A folder on this machine (the Open path dialog), read by the server.
@@ -500,11 +448,9 @@ const Batches = {
       Dom.toast( I18n.get( "batches.added_path" ).replace( "{name}" , batch.name ) );
     } catch ( error ) {
       App.showError( error.message );
-      this.openAfter = null;
     }
     this.local.delete( b.id );
     await this.refresh( true );
-    this.openNew( b );
   },
 
   // --- uploading ---------------------------------------------------------------
@@ -513,41 +459,47 @@ const Batches = {
     return this.files.get( sha ) || null;
   },
 
-  async pump() {
-    if ( this.pumping ) return;
-    this.pumping = true;
-    try {
-      while ( this.queue.length ) {
-        const item = this.queue[ 0 ];
-        // Not again if the Process screen has uploaded it meanwhile.
-        const file = Ais.isStored( item.sha ) ? null : this.files.get( item.sha );
-        const progress = this.local.get( item.batchId ) || { reading: false , done: 0 , total: 0 };
-        if ( !this.local.has( item.batchId ) ) {
-          progress.total = this.queue.filter( ( q ) => q.batchId === item.batchId ).length;
-          this.local.set( item.batchId , progress );
-        }
-        this.renderLocal( item.batchId );
-        if ( file ) {
-          try {
-            await Api.post( "/api/ais/files" , { data: await Ais.base64( file ) } );
-          } catch ( error ) {
-            App.showError( file.name + ": " + error.message );
-            this.queue = this.queue.filter( ( q ) => q.batchId !== item.batchId );
-            this.local.delete( item.batchId );
-            continue;
-          }
-        }
-        if ( file ) Ais.fileStored( item.sha );
-        this.queue.shift();
-        progress.done += 1;
-        if ( !this.queue.some( ( q ) => q.batchId === item.batchId ) ) {
-          this.local.delete( item.batchId );
-          this.refresh( true );
-        }
-        this.renderLocal( item.batchId );
+  // Up to Ais.concurrency uploads at once, each worker taking the next item.
+  pump() {
+    while ( this.pumping < Ais.concurrency && this.queue.length > this.pumping ) {
+      this.pumping += 1;
+      this.uploadNext().finally( () => { this.pumping -= 1; } );
+    }
+  },
+
+  async uploadNext() {
+    while ( this.queue.length ) {
+      const item = this.queue.shift();
+      // Not again if the Process screen has uploaded it meanwhile.
+      const file = Ais.isStored( item.sha ) ? null : this.files.get( item.sha );
+      let progress = this.local.get( item.batchId );
+      if ( !progress ) {
+        progress = { reading: false , done: 0 , total: 1 + this.queue.filter( ( q ) => q.batchId === item.batchId ).length };
+        this.local.set( item.batchId , progress );
       }
-    } finally {
-      this.pumping = false;
+      progress.active = ( progress.active || 0 ) + 1;
+      this.renderLocal( item.batchId );
+      if ( file ) {
+        try {
+          await Api.postBytes( "/api/ais/files" , file );
+        } catch ( error ) {
+          App.showError( file.name + ": " + error.message );
+          this.queue = this.queue.filter( ( q ) => q.batchId !== item.batchId );
+          this.local.delete( item.batchId );
+          this.render();
+          continue;
+        }
+        Ais.fileStored( item.sha );
+      }
+      progress.active -= 1;
+      progress.done += 1;
+      // The batch's last upload (none queued, none still going).
+      if ( this.local.get( item.batchId ) === progress && !progress.active &&
+        !this.queue.some( ( q ) => q.batchId === item.batchId ) ) {
+        this.local.delete( item.batchId );
+        this.refresh( true );
+      }
+      this.renderLocal( item.batchId );
     }
   },
 

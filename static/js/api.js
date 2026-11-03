@@ -11,8 +11,8 @@ const Api = {
       // The session cookie is the only credential; without this an
       // authenticated request silently arrives as an anonymous one.
       credentials: "same-origin",
-      headers: { "Content-Type": "application/json" },
-      body: settings.body ? JSON.stringify( settings.body ) : undefined,
+      headers: settings.headers || { "Content-Type": "application/json" },
+      body: settings.raw || ( settings.body ? JSON.stringify( settings.body ) : undefined ),
     } );
 
     let payload = {};
@@ -36,6 +36,15 @@ const Api = {
     return this.request( path , {
       method: "POST",
       body: Object.assign( {} , body || {} , { csrf_token: this.csrfToken } ),
+    } );
+  },
+
+  // A file's bytes as they are (an upload), the token in a header instead.
+  async postBytes( path , blob ) {
+    return this.request( path , {
+      method: "POST",
+      headers: { "Content-Type": "application/octet-stream" , "X-CSRF-Token": this.csrfToken || "" },
+      raw: blob,
     } );
   },
 

@@ -1,5 +1,6 @@
 # Data (large, local only)
-example-data/
+/example-data
+/example-data-2
 .DS_Store
 .claude/
 .pytest_cache/
@@ -27,3 +28,6 @@ __pycache__/
 # MATLAB parity harness output (generated from local example-data)
 tests/matlab/build/
 tests/golden/
+
+# scripts/export_batches.py default output
+exports/

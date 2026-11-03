@@ -63,6 +63,7 @@ class Library:
         self._arrays: OrderedDict[str, np.ndarray] = OrderedDict()
         self._bright: dict[str, float] = {}
         self._somata: OrderedDict[str, somata.Somata | None] = OrderedDict()
+        self._previews: OrderedDict[str, bytes] = OrderedDict()
 
     def _path(self, sha: str, czi: bool = False) -> Path:
         if not isinstance(sha, str) or not SHA_RE.match(sha):
@@ -187,9 +188,20 @@ class Library:
         return level
 
     def preview(self, sha: str) -> bytes:
-        """The traced image: a CZI's processed AIS channel, else the file."""
+        """The traced image: a CZI's processed AIS channel, else the file.
+        Kept for the last few images: an export asks for every one of them,
+        and a CZI's is a whole preprocess run."""
+        with self._lock:
+            if sha in self._previews:
+                self._previews.move_to_end(sha)
+                return self._previews[sha]
         arr = self.array(sha)
-        return preview_png(preprocess.processed(arr) if self.is_czi(sha) else arr)
+        png = preview_png(preprocess.processed(arr) if self.is_czi(sha) else arr)
+        with self._lock:
+            self._previews[sha] = png
+            while len(self._previews) > CACHE_SIZE * 4:
+                self._previews.popitem(last=False)
+        return png
 
     def channels(self, sha: str) -> list[dict[str, Any]]:
         """A CZI's channels, [{index, name, color}], for the channel buttons;

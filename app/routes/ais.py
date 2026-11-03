@@ -2,8 +2,9 @@
 on an image one POST that runs the ais_auto.m port (app/analysis/), and the
 accepted AIS stored with their batch (app/models/ais.py).
 
-Uploads are JSON like every other POST here (base64 file + CSRF token), with a
-larger body limit on that one route; a TIFF pair is ~6 MB. A batch is created
+Uploads are a file's raw bytes (CSRF token in a header), or JSON like every
+other POST here (base64 file + CSRF token), with a larger body limit on that
+one route; a TIFF pair is ~6 MB. A batch is created
 from names and sha-256s alone (the browser hashes its files first), so the
 duplicates and the shareable link exist before a single file is uploaded.
 """
@@ -48,16 +49,24 @@ async def _body(request: Request) -> tuple[dict[str, Any] | None, Response | Non
 
 
 async def upload(request: Request) -> Response:
-    body, refused = await _body(request)
-    if refused:
-        return refused
-    data = body.get("data")
-    if not isinstance(data, str):
-        return bad_request("data must be a base64 string")
-    try:
-        raw = base64.b64decode(data, validate=True)
-    except (binascii.Error, ValueError):
-        return bad_request("data must be a base64 string")
+    """The file's bytes as application/octet-stream with the CSRF token in
+    X-CSRF-Token (what the page sends: no base64, no JSON parse of a 6 MB
+    string), or JSON {data: base64} like every other POST."""
+    if request.headers.get("content-type", "").split(";")[0].strip() == "application/octet-stream":
+        if not check_csrf(request, request.headers.get("x-csrf-token")):
+            return forbidden("invalid csrf token")
+        raw = await request.body()
+    else:
+        body, refused = await _body(request)
+        if refused:
+            return refused
+        data = body.get("data")
+        if not isinstance(data, str):
+            return bad_request("data must be a base64 string")
+        try:
+            raw = base64.b64decode(data, validate=True)
+        except (binascii.Error, ValueError):
+            return bad_request("data must be a base64 string")
     try:
         info = await run(_library(request).add, raw)
     except ImageError as exc:
@@ -188,7 +197,8 @@ async def detect(request: Request) -> Response:
     """Auto mode. Body: {processed, raw?, threshold?, settings?, start?,
     exclude?: [[[x, y], ...], ...]}. Every AIS found on the image without a
     click (app/analysis/detect.py); start is both | brighter | dimmer | soma
-    (a .czi only) | fitted | fitted2, exclude the traces already accepted on it."""
+    (a .czi only) | fitted | fitted2 | learned, exclude the traces already
+    accepted on it."""
     body, refused = await _body(request)
     if refused:
         return refused

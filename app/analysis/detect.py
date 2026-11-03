@@ -55,6 +55,10 @@ batch12_auto.json):
   bright level. A clear AIS in an image with a few very bright spots is
   dim by brightness but not by contrast.
 
+"learned" (method "Learned") is its own detector, app/analysis/learned.py,
+learnt from 3,277 hand-clicked AIS; detect() only hands it over, and
+nothing above applies to it.
+
 All clicks on one image share a cache (ais_auto.trace), so each threshold is
 segmented and each component thinned once.
 """
@@ -70,7 +74,7 @@ from app.analysis import ais_auto as aa
 from app.analysis import mlcompat as ml
 from app.analysis.soma import Somata
 
-STARTS = ("both", "brighter", "dimmer", "soma", "fitted", "fitted2")
+STARTS = ("both", "brighter", "dimmer", "soma", "fitted", "fitted2", "learned")
 MAX_COMPONENTS = 200
 OVERLAP = 0.5      # a component or trace this much inside earlier ones is a repeat
 EXCLUDE_REACH = 2  # px around an accepted trace that still counts as on it
@@ -218,6 +222,9 @@ def detect(prep: aa.PreparedImage, raw: np.ndarray | None, threshold: float = 0.
 
     if start not in STARTS:
         raise ValueError("start must be one of " + ", ".join(STARTS))
+    if start == "learned":
+        from app.analysis import learned
+        return learned.detect(prep, raw, threshold, settings, exclude, soma)
     if start == "soma" and soma is None:
         raise ValueError('start "soma" needs the somata')
     fitted2 = start == "fitted2"

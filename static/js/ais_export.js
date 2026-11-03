@@ -73,23 +73,29 @@ const AisExport = {
     } );
     const multiBatch = new Set( rows.map( ( row ) => row.batch_id ) ).size > 1;
     const files = [ { name: "results.csv" , data: this.csv( rows ) } ].concat( extra || [] );
-    const missing = [];
+    // A few images at a time, each put back in its place once drawn.
+    const list = Array.from( groups.values() );
+    const pngs = new Array( list.length );
+    const missing = new Array( list.length );
     let done = 0;
-    for ( const group of groups.values() ) {
-      done += 1;
-      progress( done , groups.size );
+    progress( 0 , list.length );
+    await Ais.pool( list , Ais.concurrency , async ( group , i ) => {
       const first = group[ 0 ];
       try {
         const sha = await this.shaFor( first );
         if ( !sha ) throw new Error( "image not available" );
         const png = await this.render( sha , group );
         const folder = multiBatch ? this.safe( first.batch_name || "batch" ) + "/" : "";
-        files.push( { name: folder + this.safe( first.image.replace( /\//g , "__" ) ) + "_traces.png" , data: png } );
+        pngs[ i ] = { name: folder + this.safe( first.image.replace( /\//g , "__" ) ) + "_traces.png" , data: png };
       } catch ( error ) {
-        missing.push( ( first.batch_name ? first.batch_name + " / " : "" ) + first.image + ": " + error.message );
+        missing[ i ] = ( first.batch_name ? first.batch_name + " / " : "" ) + first.image + ": " + error.message;
       }
-    }
-    if ( missing.length ) files.push( { name: "missing.txt" , data: missing.join( "\n" ) + "\n" } );
+      done += 1;
+      progress( done , list.length );
+    } );
+    pngs.forEach( ( png ) => { if ( png ) files.push( png ); } );
+    const gone = missing.filter( Boolean );
+    if ( gone.length ) files.push( { name: "missing.txt" , data: gone.join( "\n" ) + "\n" } );
     progress( 0 , 0 );
     this.download( Zip.build( files ) , base + ".zip" );
   },

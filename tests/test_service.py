@@ -98,6 +98,20 @@ def test_store_is_shared_and_finds_legacy_and_local_files(tmp_path):
     assert lib.thumbnail(sha).startswith(b"\x89PNG")
 
 
+def test_preview_is_kept_after_the_first_request(tmp_path):
+    from app.analysis.service import Library
+
+    pic, _ = synthetic()
+    lib = Library(tmp_path / "s")
+    sha = lib.add(_tiff_bytes(pic))["sha256"]
+    first = lib.preview(sha)
+    assert first.startswith(b"\x89PNG")
+    # the second comes from memory, even with the file gone from disk
+    lib.file_path(sha).unlink()
+    lib._arrays.clear()
+    assert lib.preview(sha) is first
+
+
 def test_a_czi_is_traced_on_its_processed_ais_channel_and_finds_somata(tmp_path):
     import pytest
 
