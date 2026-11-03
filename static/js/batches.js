@@ -55,6 +55,11 @@ const Batches = {
         input.value = "";
       } );
     } );
+    Dom.get( "batches-translation" ).addEventListener( "change" , ( e ) => {
+      const file = e.target.files && e.target.files[ 0 ];
+      if ( this.addTarget && file ) this.loadTranslation( this.addTarget , file );
+      e.target.value = "";
+    } );
     // A poll does not redraw under an open menu; it catches up once it closes.
     Dom.get( "batches-list" ).addEventListener( "hidden.bs.dropdown" , () => this.render() );
     window.addEventListener( "hashchange" , () => this.onView() );
@@ -231,7 +236,7 @@ const Batches = {
     this.renderReset();
     Dom.text( status , I18n.get( "batches.reset_backing_up" ) );
     try {
-      const items = await this.gather( [ b ] );
+      const items = await this.gather( [ b ] , true );
       await AisExport.exportReport( items , b.name , "zip" , ( done , total ) => Dom.text( status ,
         total ? I18n.get( "batches.exporting" ).replace( "{done}" , done ).replace( "{total}" , total ) : "" ) );
       this.backedUp = true;
@@ -349,11 +354,22 @@ const Batches = {
 
   // [{ batch , images , rows }] for the batches given, fetched now. rows:
   // one batch's accepted AIS, or (several batches) all of them, split here.
-  async gather( list ) {
+  // Images the team left out, and their AIS, are not in it unless everything
+  // is asked for (a backup).
+  async gather( list , everything ) {
     const one = list.length === 1;
     const results = ( await Api.request( "/api/ais/results?batch=" + ( one ? list[ 0 ].id : "all" ) ) ).results;
     const statuses = await Promise.all( list.map( ( b ) => Api.request( "/api/ais/batches/" + b.id + "/status" ).then( ( r ) => r.images ) ) );
-    return list.map( ( b , i ) => ( { batch: b , images: statuses[ i ] , rows: results.filter( ( r ) => r.batch_id === b.id ) } ) );
+    return list.map( ( b , i ) => {
+      const out = new Set( statuses[ i ].filter( ( image ) => !image.included && !everything ).map( ( image ) => image.key ) );
+      return { batch: b , images: statuses[ i ].filter( ( image ) => !out.has( image.key ) ) ,
+        rows: results.filter( ( r ) => r.batch_id === b.id && !out.has( r.image ) ) };
+    } );
+  },
+
+  exportLine( done , total , waiting ) {
+    if ( waiting ) return I18n.get( "batches.export_waiting" );
+    return total ? I18n.get( "batches.exporting" ).replace( "{done}" , done ).replace( "{total}" , total ) : "";
   },
 
   async exportBatch( b , kind , options ) {
@@ -365,8 +381,8 @@ const Batches = {
     note( I18n.get( "batches.preparing" ) );
     try {
       const items = await this.gather( [ b ] );
-      await AisExport.exportReport( items , b.name , kind , ( done , total ) =>
-        note( total ? I18n.get( "batches.exporting" ).replace( "{done}" , done ).replace( "{total}" , total ) : "" ) , options );
+      await AisExport.exportReport( items , b.name , kind , ( done , total , waiting ) =>
+        note( this.exportLine( done , total , waiting ) ) , options );
     } catch ( error ) {
       App.showError( error.message );
     }
@@ -397,8 +413,8 @@ const Batches = {
     note( I18n.get( "batches.preparing" ) );
     try {
       const items = await this.gather( list );
-      await AisExport.exportReport( items , list.length === 1 ? list[ 0 ].name : "batches" , kind , ( done , total ) =>
-        note( total ? I18n.get( "batches.exporting" ).replace( "{done}" , done ).replace( "{total}" , total ) : "" ) , options );
+      await AisExport.exportReport( items , list.length === 1 ? list[ 0 ].name : "batches" , kind , ( done , total , waiting ) =>
+        note( this.exportLine( done , total , waiting ) ) , options );
     } catch ( error ) {
       App.showError( error.message );
     }
@@ -439,6 +455,19 @@ const Batches = {
     return adds.length ? adds[ adds.length - 1 ].id : null;
   },
 
+  // A __Translation.txt for a batch blinded somewhere else and uploaded
+  // without it (admins): the original names of the images it names.
+  async loadTranslation( b , file ) {
+    try {
+      const out = await Api.post( "/api/ais/batches/" + b.id + "/translation" , { text: await file.text() } );
+      Ais.batchChanged( out , true );
+      Dom.toast( I18n.get( "batches.translation_loaded" ).replace( "{n}" , out.named ).replace( "{m}" , out.unnamed ) );
+    } catch ( error ) {
+      App.showError( error.message );
+    }
+    await this.refresh( true );
+  },
+
   // Files picked in this browser: hash them, add them to the batch, then
   // upload them in the background.
   async addPicked( b , fileList ) {
@@ -458,7 +487,7 @@ const Batches = {
         return;
       }
       const batch = await Api.post( "/api/ais/batches/" + b.id + "/upload" , { files: picked.files ,
-        randomize: this.randomize() , add_name: picked.name } );
+        randomize: this.randomize() , add_name: picked.name , translations: picked.translations } );
       Ais.batchChanged( batch , true );
       Dom.toast( I18n.get( "batches.added" ).replace( "{n}" , picked.files.length ).replace( "{name}" , batch.name ) );
       // Only what the server does not have yet, each sha once.
@@ -692,6 +721,10 @@ const Batches = {
         this.menuItem( "bi-chevron-up" , I18n.get( "batches.move_up" ) , () => this.move( b , -1 ) ),
         this.menuItem( "bi-chevron-down" , I18n.get( "batches.move_down" ) , () => this.move( b , 1 ) ),
       );
+      if ( b.images ) {
+        items.push( divider() );
+        items.push( this.menuItem( "bi-translate" , I18n.get( "batches.load_translation" ) , () => this.pick( b , "batches-translation" ) ) );
+      }
       if ( b.ais ) {
         items.push( divider() );
         items.push( this.menuItem( "bi-arrow-counterclockwise" , I18n.get( "batches.reset" ) , () => this.openReset( b ) , "text-danger" ) );
@@ -783,6 +816,15 @@ const Batches = {
         this.bar( I18n.get( "batches.on_server" ) , b.stored ?? b.files , b.files , "bg-info" ),
         this.bar( I18n.get( "batches.completed" ) , b.completed , this.includedOf( b ) , "" ),
         Dom.el( "div" , { class: "small text-body-secondary" , text: counts.join( " · " ) } ),
+      ] } ) );
+    }
+
+    if ( admin && b.unnamed ) {
+      body.push( Dom.el( "div" , { class: "small text-warning-emphasis mt-1" , children: [
+        Dom.el( "i" , { class: "bi bi-exclamation-triangle me-1" } ),
+        Dom.el( "span" , { text: I18n.get( "batches.translation_missing" ).replace( "{n}" , b.unnamed ) + " " } ),
+        Dom.el( "button" , { class: "btn btn-link btn-sm p-0 align-baseline" , attrs: { type: "button" } ,
+          text: I18n.get( "batches.load_translation" ) , on: { click: () => this.pick( b , "batches-translation" ) } } ),
       ] } ) );
     }
 

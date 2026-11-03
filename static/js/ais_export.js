@@ -4,10 +4,12 @@
 // Rendering happens here from the server's preview of each image, so it
 // works at any point in a batch. The Batches screen's reports (one batch or
 // all) come from here too: an Excel workbook (xlsx.js), or a ZIP with it and
-// what the Export dialog asks for -- the traced PNGs (as before), the
-// original files, the processed images, a .czi's channels as 16-bit TIFFs,
-// and (admins, blinded batches) an Original-names folder of links to them
-// with the batch's __Translation.txt.
+// what the Export dialog asks for -- the traced PNGs (as before), and as
+// they are, as PNGs or both: the original files, the processed images and
+// each channel found in the .czi files (16-bit TIFFs as they are); and
+// (admins, blinded batches) either everything under its original names
+// (unrandomize) or an Original-names folder of links to the files, with the
+// batch's __Translation.txt either way.
 const AisExport = {
   cols: [ "batch_name" , "batch_id" , "image" , "n" , "file" , "source" , "length_um" , "start_um" , "end_um" , "mid_um" , "max_um" , "arc_um" ,
     "threshold_initial" , "threshold" , "click_x" , "click_y" , "click2_x" , "click2_y" , "profile_points" ,
@@ -19,29 +21,39 @@ const AisExport = {
 
   linkKey: "ais-export-links",
   bigBytes: 2 * 1024 * 1024 * 1024,
+  retries: 5,
+  // The address the Process screen shows a .czi's processed view at (ais.js
+  // says why), not one a browser may hold an older copy under. A TIFF's view
+  // is the same at any address.
+  view: "view.png?processed=1&v=2",
 
   init() {
     Dom.get( "ais-export-csv" ).addEventListener( "click" , () => this.exportCsv() );
     Dom.get( "ais-export-zip" ).addEventListener( "click" , () => this.exportZip() );
     this.optionsModal = bootstrap.Modal.getOrCreateInstance( Dom.get( "export-options-modal" ) );
+    Dom.get( "export-options-table" ).addEventListener( "change" , ( e ) => this.tickColumn( e.target ) );
     Dom.get( "export-options-names" ).addEventListener( "change" , () => this.renderOptions() );
+    Dom.get( "export-options-unrandomize" ).addEventListener( "change" , () => this.renderOptions() );
     Dom.get( "export-options-go" ).addEventListener( "click" , () => this.goOptions() );
   },
 
   // --- the Export dialog (a ZIP from the Batches screen) -------------------------
 
   // list: the batches (Batches rows), label for the dialog; onGo( options )
-  // runs the export with { traces, originals, processed, channels, names:
-  // null | "symlink" | "shortcut" | "copy" }.
+  // runs the export with { traces, originals, originalsPng, processed,
+  // processedPng, channels, channelsPng (channel names), unrandomize,
+  // names: null | "symlink" | "shortcut" | "copy" }.
   openOptions( list , label , onGo ) {
     this.optionsGo = onGo;
     Dom.text( Dom.get( "export-options-batch" ) , label );
-    [ "traces" , "originals" , "processed" , "channels" ].forEach( ( key ) => {
-      Dom.get( "export-options-" + key ).checked = key === "traces";
+    this.optionBoxes( "file" ).concat( this.optionBoxes( "png" ) ).forEach( ( box ) => {
+      box.checked = box.id === "export-options-traces";
     } );
+    Dom.get( "export-options-channels" ).replaceChildren();
     const blinded = Batches.admin() && list.some( ( b ) => b.randomized );
     Dom.show( Dom.get( "export-options-blind" ) , blinded );
     Dom.get( "export-options-names" ).checked = false;
+    Dom.get( "export-options-unrandomize" ).checked = false;
     let links = null;
     try {
       links = window.localStorage.getItem( this.linkKey );
@@ -49,6 +61,77 @@ const AisExport = {
     Dom.get( "export-options-links" ).value = links || this.defaultLinks();
     this.renderOptions();
     this.optionsModal.show();
+    this.loadChannels( list );
+  },
+
+  // The boxes of a column of the dialog: "file" (Original) or "png".
+  optionBoxes( kind ) {
+    return Array.from( Dom.get( "export-options-table" ).querySelectorAll( "tbody .export-" + kind ) );
+  },
+
+  // A column's header box ticks the whole column.
+  tickColumn( box ) {
+    const kind = { "export-options-all-file": "file" , "export-options-all-png": "png" }[ box.id ];
+    if ( kind ) this.optionBoxes( kind ).forEach( ( b ) => { b.checked = box.checked; } );
+    this.renderOptions();
+  },
+
+  channelNote( text ) {
+    const note = Dom.get( "export-options-channels-note" );
+    Dom.text( note , text );
+    Dom.show( note , Boolean( text ) );
+  },
+
+  // A row per channel name found in these batches; the dialog works without
+  // them until they come, and a reply for an earlier opening is dropped.
+  async loadChannels( list ) {
+    this.optionsToken = ( this.optionsToken || 0 ) + 1;
+    const token = this.optionsToken;
+    this.channelNote( I18n.get( "batches.export_channels_looking" ) );
+    let found = null;
+    try {
+      found = await Promise.all( list.map( ( b ) => Api.request( "/api/ais/batches/" + b.id + "/channels" ) ) );
+    } catch ( error ) { /* said below */ }
+    if ( token !== this.optionsToken ) return;
+    if ( !found ) {
+      this.channelNote( I18n.get( "batches.export_channels_failed" ) );
+      return;
+    }
+    const channels = new Map();
+    found.forEach( ( batch ) => batch.channels.forEach( ( c ) => {
+      if ( channels.has( c.name ) ) channels.get( c.name ).files += c.files;
+      else channels.set( c.name , Object.assign( {} , c ) );
+    } ) );
+    const total = found.reduce( ( sum , batch ) => sum + batch.czis , 0 );
+    const unread = found.reduce( ( sum , batch ) => sum + batch.unread , 0 );
+    this.renderChannels( Array.from( channels.values() ) , total );
+    if ( unread ) this.channelNote( I18n.get( "batches.export_channels_unread" ).replace( "{n}" , unread ) );
+    else this.channelNote( channels.size ? "" : I18n.get( "batches.export_channels_none" ) );
+  },
+
+  // New rows follow a column already ticked as a whole.
+  renderChannels( channels , total ) {
+    const box = ( c , kind ) => {
+      const input = Dom.el( "input" , { class: "form-check-input export-" + kind ,
+        attrs: { type: "checkbox" , "data-channel": c.name , "aria-label": c.name } } );
+      input.checked = Dom.get( "export-options-all-" + kind ).checked;
+      return Dom.el( "td" , { class: "text-center" , children: [ input ] } );
+    };
+    const row = ( c ) => {
+      // The dot's color through the DOM: the CSP has no inline style attributes.
+      const dot = Dom.el( "span" , { class: "ais-channel-dot me-1" } );
+      dot.style.backgroundColor = c.color;
+      const count = I18n.get( "batches.export_channel_count" ).replace( "{n}" , c.files ).replace( "{total}" , total );
+      return Dom.el( "tr" , { children: [
+        Dom.el( "td" , { children: [ dot , Dom.el( "span" , { text: c.name } ) ,
+          Dom.el( "span" , { class: "small text-body-secondary ms-2" , text: count } ) ] } ),
+        box( c , "file" ) , box( c , "png" ),
+      ] } );
+    };
+    const heading = Dom.el( "tr" , { children: [ Dom.el( "th" , { class: "small text-body-secondary fw-normal" ,
+      text: I18n.get( "batches.export_channels" ) , attrs: { colspan: "3" , scope: "colgroup" } } ) ] } );
+    Dom.get( "export-options-channels" ).replaceChildren( ...( channels.length ? [ heading ].concat( channels.map( row ) ) : [] ) );
+    this.renderOptions();
   },
 
   // Shortcuts for a Windows computer, symbolic links for the others.
@@ -57,8 +140,18 @@ const AisExport = {
     return /win/i.test( platform ) ? "shortcut" : "symlink";
   },
 
+  // Under the original names, a folder of links to them has nothing to add.
   renderOptions() {
-    Dom.get( "export-options-links" ).disabled = !Dom.get( "export-options-names" ).checked;
+    const unrandomize = Dom.get( "export-options-unrandomize" ).checked;
+    Dom.get( "export-options-names" ).disabled = unrandomize;
+    Dom.get( "export-options-links" ).disabled = unrandomize || !Dom.get( "export-options-names" ).checked;
+    [ "file" , "png" ].forEach( ( kind ) => {
+      const boxes = this.optionBoxes( kind );
+      const ticked = boxes.filter( ( box ) => box.checked ).length;
+      const all = Dom.get( "export-options-all-" + kind );
+      all.checked = ticked === boxes.length;
+      all.indeterminate = ticked > 0 && ticked < boxes.length;
+    } );
   },
 
   goOptions() {
@@ -68,8 +161,13 @@ const AisExport = {
     try {
       window.localStorage.setItem( this.linkKey , links );
     } catch ( error ) { /* storage blocked */ }
-    const options = { traces: checked( "traces" ) , originals: checked( "originals" ) , processed: checked( "processed" ) ,
-      channels: checked( "channels" ) , names: blinded && checked( "names" ) ? links : null };
+    const unrandomize = blinded && checked( "unrandomize" );
+    const channels = ( kind ) => this.optionBoxes( kind ).filter( ( box ) => box.checked && box.dataset.channel )
+      .map( ( box ) => box.dataset.channel );
+    const options = { traces: checked( "traces" ) , originals: checked( "originals" ) , originalsPng: checked( "originals-png" ) ,
+      processed: checked( "processed" ) , processedPng: checked( "processed-png" ) , channels: channels( "file" ) , channelsPng: channels( "png" ) ,
+      unrandomize: unrandomize , names: blinded && !unrandomize && checked( "names" ) ? links : null };
+    this.optionsToken = ( this.optionsToken || 0 ) + 1;
     this.optionsModal.hide();
     if ( this.optionsGo ) this.optionsGo( options );
   },
@@ -191,10 +289,10 @@ const AisExport = {
   // per image, per assignee, and every accepted AIS as the CSV has it.
   sheets( items ) {
     const date = ( iso ) => iso ? new Date( iso ).toLocaleString() : "";
-    const summary = items.map( ( { batch: b , rows } ) => {
+    const summary = items.map( ( { batch: b , images: list , rows } ) => {
       const s = this.stats( rows.map( ( r ) => r.length_um ) );
       return [ b.name , b.id , b.created_by_name || "" , date( b.created_at ) , b.archived_at ? date( b.archived_at ) : "" ,
-        b.images , b.completed , b.duplicates || 0 , rows.length , s.mean , s.median , s.sd , s.min , s.max ,
+        ( list || [] ).length , b.completed , b.duplicates || 0 , rows.length , s.mean , s.median , s.sd , s.min , s.max ,
         b.completed ? Math.round( 1000 * rows.length / b.completed ) / 1000 : null ];
     } );
     const images = [];
@@ -235,8 +333,24 @@ const AisExport = {
   // "xlsx": the report on its own; "zip": the report, its summary as CSV,
   // results.csv, the traced PNGs and the files options asks for (see
   // openOptions; none given: the traces only).
-  async exportReport( items , label , kind , progress , options ) {
+  async exportReport( items , label , kind , report , options ) {
+    let at = [ 0 , 0 ];
+    const progress = ( done , total ) => {
+      at = [ done , total ];
+      report( done , total );
+    };
+    this.onWait = () => report( at[ 0 ] , at[ 1 ] , true );
+    try {
+      await this.buildReport( items , label , kind , progress , options );
+    } finally {
+      this.onWait = null;
+    }
+  },
+
+  async buildReport( items , label , kind , progress , options ) {
     const base = "ais_" + this.safe( label ) + "_" + new Date().toISOString().slice( 0 , 10 );
+    const opts = options || { traces: true };
+    if ( opts.unrandomize ) items = await this.unrandomized( items );
     const sheets = this.sheets( items );
     const workbook = Xlsx.build( sheets );
     if ( kind === "xlsx" ) {
@@ -244,7 +358,6 @@ const AisExport = {
       return;
     }
     const rows = items.flatMap( ( item ) => item.rows );
-    const opts = options || { traces: true };
     const files = await this.imageFiles( items , opts , progress );
     if ( files === null ) return;
     await this.zip( rows , base , progress , [
@@ -253,10 +366,45 @@ const AisExport = {
     ].concat( files ) , opts.traces !== false );
   },
 
+  // items with every blinded image and file under what it was called before
+  // (admins see that in the batch: original_key, a file's original), so the
+  // report, results.csv and the traced PNGs use those names; each item keeps
+  // its whole batch as full for imageFiles. Images with no original name
+  // keep the random one. A row keeps its random key as random_image (shaFor).
+  async unrandomized( items ) {
+    return Promise.all( items.map( async ( item ) => {
+      const full = await Api.request( "/api/ais/batches/" + item.batch.id );
+      const keys = new Map();
+      const files = new Map();
+      full.images.forEach( ( image ) => {
+        if ( image.original_key ) keys.set( image.key , image.original_key );
+        Object.values( image.files ).forEach( ( f ) => {
+          if ( !f.original ) return;
+          files.set( f.name , f.original.name );
+          files.set( f.rel , f.original.rel );
+        } );
+      } );
+      return Object.assign( {} , item , {
+        full: full,
+        images: ( item.images || [] ).map( ( image ) => Object.assign( {} , image , { key: keys.get( image.key ) || image.key } ) ),
+        rows: item.rows.map( ( row ) => Object.assign( {} , row , { random_image: row.image , image: keys.get( row.image ) || row.image ,
+          file: files.get( row.file ) || row.file } ) ),
+      } );
+    } ) );
+  },
+
   // --- the image files of a ZIP ------------------------------------------------------
 
+  // A long export can outrun the server's request limit: wait as it says, and
+  // try again.
   async bytes( url ) {
-    const response = await fetch( url , { credentials: "same-origin" } );
+    let response = await fetch( url , { credentials: "same-origin" } );
+    for ( let tries = 0 ; response.status === 429 && tries < this.retries ; tries += 1 ) {
+      if ( this.onWait ) this.onWait();
+      const seconds = Number( response.headers.get( "retry-after" ) ) || 60;
+      await new Promise( ( resolve ) => window.setTimeout( resolve , seconds * 1000 ) );
+      response = await fetch( url , { credentials: "same-origin" } );
+    }
     if ( !response.ok ) {
       let message = response.statusText;
       try {
@@ -270,15 +418,24 @@ const AisExport = {
   // What to fetch for one image: [{ folder, name, url, size }] -- originals:
   // its .czi, or its raw TIFF (or the processed one when that is all there
   // is); processed: a pair's processed TIFF, a .czi's processed AIS channel;
-  // channels: each of a .czi's channels.
-  async planImage( image , opts ) {
+  // channels: the .czi's channels named. Each with a PNG of it in a folder of
+  // its own if asked (a .czi's original: its channels merged). fail( error )
+  // when its channels cannot be listed: the rest of it still goes.
+  async planImage( image , opts , fail ) {
     const out = [];
     const f = image.files;
-    const file = ( folder , x ) => out.push( { folder: folder , name: x.name , url: "/api/ais/files/" + x.sha + "/file" , size: x.size || 0 } );
-    if ( opts.originals ) {
-      if ( f.czi ) file( "originals" , f.czi );
-      else if ( f.raw ) file( "originals" , f.raw );
-      else if ( f.processed ) file( "originals" , f.processed );
+    const url = ( sha , tail ) => "/api/ais/files/" + sha + "/" + tail;
+    const file = ( folder , x ) => out.push( { folder: folder , name: x.name , url: url( x.sha , "file" ) , size: x.size || 0 } );
+    const png = ( folder , name , address ) => out.push( { folder: folder , name: name , url: address , size: 0 } );
+    const original = f.czi || f.raw || f.processed;
+    if ( opts.originals && original ) file( "originals" , original );
+    if ( opts.originalsPng && original ) {
+      png( "originals_png" , image.cell + ".png" , url( original.sha , f.czi ? "composite.png" : "view.png" ) );
+    }
+    if ( opts.processedPng ) {
+      const name = image.cell + "_processed.png";
+      if ( f.czi ) png( "processed_png" , name , url( f.czi.sha , this.view ) );
+      else if ( f.processed && f.raw ) png( "processed_png" , name , url( f.processed.sha , "view.png" ) );
     }
     if ( opts.processed ) {
       if ( f.czi ) {
@@ -288,33 +445,54 @@ const AisExport = {
         file( "processed" , f.processed );
       }
     }
-    if ( opts.channels && f.czi ) {
-      const channels = ( await Api.request( "/api/ais/files/" + f.czi.sha + "/channels" ) ).channels;
-      channels.forEach( ( c , i ) => out.push( { folder: "channels" , name: image.cell + "_c" + ( i + 1 ) + "_" + this.safe( c.name ) + ".tif" ,
-        url: "/api/ais/files/" + f.czi.sha + "/channel/" + c.index + ".tif" , size: 0 } ) );
+    const tiffs = new Set( opts.channels || [] );
+    const pngs = new Set( opts.channelsPng || [] );
+    if ( ( tiffs.size || pngs.size ) && f.czi ) {
+      try {
+        const listed = await this.bytes( url( f.czi.sha , "channels" ) );
+        JSON.parse( new TextDecoder().decode( listed ) ).channels.forEach( ( c , i ) => {
+          const name = image.cell + "_c" + ( i + 1 ) + "_" + this.safe( c.name );
+          if ( tiffs.has( c.name ) ) png( "channels" , name + ".tif" , url( f.czi.sha , "channel/" + c.index + ".tif" ) );
+          if ( pngs.has( c.name ) ) png( "channels_png" , name + ".png" , url( f.czi.sha , "channel/" + c.index + ".png" ) );
+        } );
+      } catch ( error ) {
+        fail( error );
+      }
     }
     return out;
   },
 
   // The ZIP entries of every included image's files, in a folder per batch
-  // when there are several, each kind of file in its own folder; and with
-  // names, an "original names" folder pointing at them and __Translation.txt.
-  // null when it would be too big and the person says not to go on.
+  // when there are several, each kind of file in its own folder, under their
+  // original names with unrandomize; with names, an "original names" folder
+  // pointing at them. __Translation.txt with either; missing_files.txt when
+  // some could not be had. null when it would be too big and the person says
+  // not to go on.
   async imageFiles( items , opts , progress ) {
-    if ( !opts.originals && !opts.processed && !opts.channels ) return [];
+    const wantFiles = opts.originals || opts.originalsPng || opts.processed || opts.processedPng ||
+      ( opts.channels || [] ).length || ( opts.channelsPng || [] ).length;
+    if ( !wantFiles && !opts.unrandomize ) return [];
     const multi = items.length > 1;
     const plan = [];
     const extra = [];
+    const missing = [];
     for ( const item of items ) {
       const prefix = multi ? this.safe( item.batch.name ) + "/" : "";
-      const batch = await Api.request( "/api/ais/batches/" + item.batch.id );
+      const batch = item.full || await Api.request( "/api/ais/batches/" + item.batch.id );
       const excluded = new Set( batch.excluded || [] );
-      for ( const image of batch.images ) {
+      for ( const image of wantFiles ? batch.images : [] ) {
         if ( excluded.has( image.key ) ) continue;
         const dir = image.dir ? image.dir + "/" : "";
-        ( await this.planImage( image , opts ) ).forEach( ( p ) => plan.push( Object.assign( p , { prefix: prefix , dir: dir , image: image } ) ) );
+        const shown = prefix + ( opts.unrandomize && image.original_key || image.key );
+        const fail = ( error ) => missing.push( shown + ": " + error.message );
+        ( await this.planImage( image , opts , fail ) ).forEach( ( p ) => {
+          if ( opts.unrandomize && image.original_cell && p.name.startsWith( image.cell ) ) {
+            p.name = image.original_cell + p.name.slice( image.cell.length );
+          }
+          plan.push( Object.assign( p , { prefix: prefix , dir: dir , image: image } ) );
+        } );
       }
-      if ( opts.names && batch.images.some( ( image ) => image.original_key ) ) {
+      if ( ( opts.names || opts.unrandomize ) && batch.images.some( ( image ) => image.original_key ) ) {
         extra.push( { name: prefix + "__Translation.txt" , data: await this.bytes( "/api/ais/batches/" + batch.id + "/translation.txt" ) } );
       }
     }
@@ -324,15 +502,20 @@ const AisExport = {
     let done = 0;
     progress( 0 , plan.length );
     await Ais.pool( plan , Ais.concurrency , async ( p , i ) => {
-      files[ i ] = { name: p.prefix + p.folder + "/" + p.dir + p.name , data: await this.bytes( p.url ) };
+      const name = p.prefix + p.folder + "/" + p.dir + p.name;
+      try {
+        files[ i ] = { name: name , data: await this.bytes( p.url ) };
+      } catch ( error ) {
+        missing.push( name + ": " + error.message );
+      }
       done += 1;
       progress( done , plan.length );
     } );
-    const out = files.slice();
+    const out = files.filter( Boolean );
     if ( opts.names ) {
       plan.forEach( ( p , i ) => {
         const image = p.image;
-        if ( !image.original_key || !p.name.startsWith( image.cell ) ) return;
+        if ( !files[ i ] || !image.original_key || !p.name.startsWith( image.cell ) ) return;
         const original = image.original_cell + p.name.slice( image.cell.length );
         // From original names/<folder>/<dir> back up to the batch's top.
         const depth = 2 + ( p.dir ? p.dir.split( "/" ).length - 1 : 0 );
@@ -343,31 +526,27 @@ const AisExport = {
         else out.push( { name: at , data: files[ i ].data } );
       } );
     }
+    if ( missing.length ) extra.push( { name: "missing_files.txt" , data: missing.join( "\n" ) + "\n" } );
     return out.concat( extra );
   },
 
   // The traced image's id on the server, stored with the row. If this
   // browser picked that image and has not uploaded it yet, it does now.
   async shaFor( row ) {
-    const entry = Ais.batch && row.batch_id === Ais.batch.id ? Ais.images.find( ( e ) => e.key === row.image ) : null;
+    const key = row.random_image || row.image;
+    const entry = Ais.batch && row.batch_id === Ais.batch.id ? Ais.images.find( ( e ) => e.key === key ) : null;
     if ( entry ) await Ais.upload( entry );
     return row.sha || ( entry ? Ais.sha( entry ) : null );
   },
 
-  loadImage( url ) {
-    return new Promise( ( resolve , reject ) => {
-      const img = new Image();
-      img.onload = () => resolve( img );
-      img.onerror = () => reject( new Error( "image not available" ) );
-      img.src = url;
-    } );
-  },
-
   async render( sha , rows ) {
-    const img = await this.loadImage( "/api/ais/files/" + sha + "/view.png" );
+    // Through bytes(), for its waiting: the files before these may have used
+    // up the request limit.
+    const data = await this.bytes( "/api/ais/files/" + sha + "/" + this.view );
+    const img = await createImageBitmap( new Blob( [ data ] , { type: "image/png" } ) );
     const canvas = document.createElement( "canvas" );
-    canvas.width = img.naturalWidth;
-    canvas.height = img.naturalHeight;
+    canvas.width = img.width;
+    canvas.height = img.height;
     const ctx = canvas.getContext( "2d" );
     ctx.drawImage( img , 0 , 0 );
     const unit = Math.max( 1 , Math.max( canvas.width , canvas.height ) / 700 );

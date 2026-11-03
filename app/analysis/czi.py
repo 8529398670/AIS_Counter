@@ -163,9 +163,9 @@ def _colors(meta: ET.Element | None, names: list[str]) -> dict[str, str]:
     return {n: found.get(n) or FALLBACK_COLORS[i % len(FALLBACK_COLORS)] for i, n in enumerate(names)}
 
 
-def read_czi(data: bytes) -> Czi:
-    """Every channel of a CZI as a 2-D array; ImageError for anything this
-    does not read (see the module docstring)."""
+def _contents(data: bytes) -> tuple[list[dict], ET.Element | None]:
+    """The checked directory entries and the metadata; ImageError for
+    anything this does not read (see the module docstring)."""
     if not is_czi(data):
         raise ImageError("not a .czi file")
     try:
@@ -189,11 +189,31 @@ def read_czi(data: bytes) -> Czi:
         x, y = e["dims"].get("X"), e["dims"].get("Y")
         if not x or not y or x[1] != x[2] or y[1] != y[2]:
             raise ImageError("damaged .czi file")
+    return entries, meta
+
+
+def _starts(entries: list[dict]) -> list[int]:
+    """The channels' C coordinates, in the file's order."""
+    return sorted({e["dims"].get("C", (0, 1, 1))[0] for e in entries})
+
+
+def read_channels(data: bytes) -> dict[str, str]:
+    """A CZI's channels as name -> "#rrggbb", in the file's order, from its
+    directory and metadata alone: no pixels are read, so data can be a mmap."""
+    entries, meta = _contents(data)
+    names = _names(meta, len(_starts(entries)))
+    return _colors(meta, names)
+
+
+def read_czi(data: bytes) -> Czi:
+    """Every channel of a CZI as a 2-D array; ImageError for anything this
+    does not read (see the module docstring)."""
+    entries, meta = _contents(data)
     x0 = min(e["dims"]["X"][0] for e in entries)
     y0 = min(e["dims"]["Y"][0] for e in entries)
     width = max(e["dims"]["X"][0] + e["dims"]["X"][1] for e in entries) - x0
     height = max(e["dims"]["Y"][0] + e["dims"]["Y"][1] for e in entries) - y0
-    starts = sorted({e["dims"].get("C", (0, 1, 1))[0] for e in entries})
+    starts = _starts(entries)
     dtype = PIXEL_TYPES[entries[0]["pixel_type"]]
     planes = {c: np.zeros((height, width), dtype) for c in starts}
     for e in entries:

@@ -62,13 +62,31 @@ def preview_png(arr: np.ndarray, percentiles: tuple[float, float] | None = None)
     lo, hi = (a.min(), a.max()) if percentiles is None else np.percentile(a, percentiles)
     a = np.clip(a, lo, hi)
     scaled = np.zeros(a.shape, np.uint8) if hi == lo else np.floor((a - lo) / (hi - lo) * 255 + 0.5).astype(np.uint8)
-    h, w = scaled.shape
+    return _png(scaled)
+
+
+def composite_png(planes: list[np.ndarray], colors: list[str], percentiles: tuple[float, float]) -> bytes:
+    """Channels merged as ZEN shows them, an RGB PNG: each between its two
+    percentiles, clipped, in its "#rrggbb" color, added up."""
+    rgb = np.zeros((*planes[0].shape, 3))
+    for plane, color in zip(planes, colors):
+        a = plane.astype(np.float64)
+        lo, hi = np.percentile(a, percentiles)
+        if hi > lo:
+            shade = np.array([int(color[i:i + 2], 16) for i in (1, 3, 5)], np.float64)
+            rgb += (np.clip(a, lo, hi) - lo)[..., None] / (hi - lo) * shade
+    return _png(np.floor(np.clip(rgb, 0, 255) + 0.5).astype(np.uint8))
+
+
+def _png(scaled: np.ndarray) -> bytes:
+    """A PNG of 8-bit pixels: greyscale (h, w) or RGB (h, w, 3)."""
+    h, w = scaled.shape[:2]
     raw = b"".join(b"\x00" + scaled[r].tobytes() for r in range(h))
 
     def chunk(tag: bytes, body: bytes) -> bytes:
         return struct.pack(">I", len(body)) + tag + body + struct.pack(">I", zlib.crc32(tag + body) & 0xFFFFFFFF)
 
-    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 0, 0, 0, 0))
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2 if scaled.ndim == 3 else 0, 0, 0, 0))
             + chunk(b"IDAT", zlib.compress(raw, 6)) + chunk(b"IEND", b""))
 
 

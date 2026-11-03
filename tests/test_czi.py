@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from app.analysis.czi import is_czi, read_czi
+from app.analysis.czi import is_czi, read_channels, read_czi
 from app.analysis.images import ImageError
 from tests.czidata import write_czi
 
@@ -91,3 +91,10 @@ def test_matches_bioio():
     assert list(image.channels) == [str(n) for n in reference.channel_names]
     for c, name in enumerate(image.channels):
         assert np.array_equal(image.channels[name], reference.get_image_data("YX", C=c, T=0, Z=0))
+
+
+def test_channel_names_and_colors_read_without_the_pixels():
+    data = write_czi(planes(), colors={"AMCA": "#000eff"})
+    got = read_czi(data)
+    assert read_channels(data) == got.colors
+    assert list(read_channels(data)) == list(got.channels)

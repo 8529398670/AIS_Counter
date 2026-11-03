@@ -509,3 +509,103 @@ def test_earlier_random_names_are_only_for_admins():
          "original": {"name": "DOSE.czi", "rel": "f/DOSE.czi"}}
     assert "earlier" not in routes._unnamed_file(f)
     assert routes._unnamed_image({"key": "4-5-6", "earlier_keys": ["1-2-3"]}) == {"key": "4-5-6"}
+
+
+# --- names given by a __Translation.txt from RandomNames.bat ---------------------
+
+BAT = "Original Name/Random Name \r\n------------------------- \r\nDOSE A.czi/1-2-3.czi\r\nDOSE B.tif/4-5-6.tif\r\n"
+
+
+def test_a_translation_reads_like_the_bat_wrote_it_and_like_ours():
+    assert ais.parse_translation("﻿" + BAT) == {"1-2-3.czi": "DOSE A.czi", "4-5-6.tif": "DOSE B.tif"}
+    ours = "Original Name/Random Name\r\n---\r\nA.czi/7-8-9.czi\r\n\r\nEarlier Random Name/Random Name\r\n---\r\n1-1-1.czi/7-8-9.czi\r\n"
+    assert ais.parse_translation(ours) == {"7-8-9.czi": "A.czi"}
+    for bad in ("Original Name/Random Name\n----\n", "", None, 5):
+        with pytest.raises(ais.BatchError):
+            ais.parse_translation(bad)
+
+
+def test_an_upload_with_its_translation_keeps_the_original_names(store):
+    batch = ais.create_batch(store, "f", "upload", files(
+        ("f/1-2-3.czi", "a"),
+        ("f/4-5-6.tif", "b raw"), ("f/4-5-6" + P, "b proc"),
+        ("f/sub/1-2-3.czi", "c"),                            # same random name, another folder
+        ("f/7-7-7.czi", "d"),                                # not in the translation
+    ), 1, randomize_names=True, translations=[
+        {"dir": "", "text": BAT}, {"dir": "sub", "text": "Original Name/Random Name\n---\nDOSE C.czi/1-2-3.czi\n"}])
+    by_key = {im["key"]: im for im in batch["images"]}
+    assert set(by_key) == {"1-2-3", "4-5-6", "sub/1-2-3", "7-7-7"}    # randomize kept the names
+    assert (by_key["1-2-3"]["original_cell"], by_key["1-2-3"]["original_key"]) == ("DOSE A", "DOSE A")
+    assert by_key["sub/1-2-3"]["original_key"] == "sub/DOSE C"
+    pair = by_key["4-5-6"]
+    assert pair["original_cell"] == "DOSE B"
+    assert pair["files"]["raw"]["original"] == {"name": "DOSE B.tif", "rel": "f/DOSE B.tif"}
+    assert "original" not in pair["files"]["processed"]               # the .bat named only the raw file
+    assert "original_cell" not in by_key["7-7-7"]
+    assert batch["adds"][0]["randomized"] is True
+    listed = ais.list_batches(store)[0]
+    assert listed["randomized"] and listed["unnamed"] == 1
+    assert "DOSE A.czi/1-2-3.czi\r\n" in ais.translation(batch)
+    with pytest.raises(ais.BatchError):
+        ais.create_batch(store, "f", "upload", files(("f/a.czi", "a")), 1, translations="nope")
+
+
+def test_a_translation_loaded_later_names_the_images_it_knows(store):
+    batch = ais.create_batch(store, "f", "upload", files(("f/1-2-3.czi", "a"), ("f/4-5-6.tif", "b"), ("f/9-9-9.czi", "c")), 1)
+    bid = batch["id"]
+    ais.add_result(store, bid, "1-2-3", row(), 1)
+    assert ais.list_batches(store)[0]["unnamed"] == 3 and not batch["adds"][0]["randomized"]
+    after, named, left = ais.apply_translation(store, bid, BAT)
+    assert (named, left) == (2, 1)
+    assert [im["key"] for im in after["images"]] == ["1-2-3", "4-5-6", "9-9-9"]   # keys stay
+    assert {im["key"]: im.get("original_key") for im in after["images"]} == {"1-2-3": "DOSE A", "4-5-6": "DOSE B", "9-9-9": None}
+    assert after["adds"][0]["randomized"] is True
+    assert ais.list_results(store, bid)[0]["image"] == "1-2-3"
+    # Loaded again: what was named stays as it was.
+    _, again, _ = ais.apply_translation(store, bid, BAT.replace("DOSE A", "OTHER"))
+    assert again == 0 and ais.get_batch(store, bid)["images"][0]["original_cell"] == "DOSE A"
+    assert ais.apply_translation(store, 999, BAT) is None
+
+
+def test_a_server_folder_finds_its_translations(tmp_path):
+    from app.analysis import local
+
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "__Translation.txt").write_text(BAT)
+    (tmp_path / "sub" / "__translation.TXT").write_bytes("Original Name/Random Name\r\n---\r\nDOSÉ.czi/1-2-3.czi\r\n".encode("cp1252"))
+    (tmp_path / "notes.txt").write_text("x")
+    found = sorted(local.translations_under(str(tmp_path)), key=lambda t: t["dir"])
+    assert [t["dir"] for t in found] == ["", "sub"]
+    assert ais.parse_translation(found[1]["text"]) == {"1-2-3.czi": "DOSÉ.czi"}
+
+
+def test_the_export_dialog_lists_the_channels_of_stored_included_czis(store, tmp_path):
+    import numpy as np
+
+    from app.analysis.service import Library
+    from app.routes.ais import _batch_channels
+    from tests.czidata import write_czi
+
+    plane = np.arange(24 * 32, dtype=np.uint16).reshape(24, 32)
+    library = Library(tmp_path)
+    both = write_czi({"Alexa Fluor 488": plane, "AMCA": plane + 1})
+    other = write_czi({"Alexa Fluor 594": plane, "AMCA": plane + 2})
+    left_out = write_czi({"Cy5": plane})
+
+    def entry(rel, data):
+        return {"name": rel.split("/")[-1], "rel": rel, "sha": library.add(data)["sha256"], "size": len(data)}
+
+    batch = ais.create_batch(store, "c", "upload", [
+        entry("c/a.czi", both), entry("c/b.czi", other), entry("c/out.czi", left_out),
+        {"name": "gone.czi", "rel": "c/gone.czi", "sha": sha("gone"), "size": 1},
+        {"name": "t.tif", "rel": "c/t.tif", "sha": sha("t"), "size": 1},
+    ], user_id=1)
+    batch["excluded"] = ["out"]
+    # A file known at a path elsewhere is not fetched in to list it.
+    asked = []
+    library.resolver = lambda digest: asked.append(digest)
+
+    out = _batch_channels(library, batch)
+    assert [(c["name"], c["files"]) for c in out["channels"]] == [("Alexa Fluor 488", 1), ("AMCA", 2), ("Alexa Fluor 594", 1)]
+    assert (out["czis"], out["unread"]) == (3, 1)
+    assert not asked

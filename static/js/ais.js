@@ -319,12 +319,19 @@ const Ais = {
   // Picked in the browser: the images (TIFF or .czi) hashed, as a batch is
   // created or added to from names and hashes alone. onProgress(done, total)
   // follows the reading. null when none of the files is an image. bySha
-  // finds each File again: the server may have blinded its name.
+  // finds each File again: the server may have blinded its name. A folder
+  // blinded by RandomNames.bat brings its __Translation.txt along:
+  // translations, [{ dir , text }] with dir its folder as an image's dir.
   async hashFiles( fileList , onProgress ) {
-    const files = Array.from( fileList ).filter( ( f ) => /\.(tiff?|czi)$/i.test( f.name ) && !f.name.startsWith( "." ) );
+    const all = Array.from( fileList );
+    const files = all.filter( ( f ) => /\.(tiff?|czi)$/i.test( f.name ) && !f.name.startsWith( "." ) );
     if ( !files.length ) return null;
     const rel = files[ 0 ].webkitRelativePath || "";
     const root = rel.includes( "/" ) ? rel.split( "/" )[ 0 ] : "";
+    const translations = await Promise.all( all.filter( ( f ) => /^__Translation.*\.txt$/i.test( f.name ) ).map( async ( f ) => {
+      const parts = ( f.webkitRelativePath || f.name ).split( "/" );
+      return { dir: parts.slice( 1 , -1 ).join( "/" ) , text: await f.text() };
+    } ) );
     const described = new Array( files.length );
     const bySha = new Map();
     let done = 0;
@@ -339,7 +346,7 @@ const Ais = {
       done += 1;
       onProgress( done , files.length );
     } );
-    return { name: root || I18n.get( "ais.loose_files" ) || "Files" , files: described , bySha: bySha };
+    return { name: root || I18n.get( "ais.loose_files" ) || "Files" , files: described , bySha: bySha , translations: translations };
   },
 
   // Open folder / Open files: hash every image, create the batch from names
@@ -353,7 +360,7 @@ const Ais = {
         return;
       }
       const batch = await Api.post( "/api/ais/batches/upload" , { name: picked.name , files: picked.files ,
-        randomize: Batches.randomize() } );
+        randomize: Batches.randomize() , translations: picked.translations } );
       this.status( "" );
       Dom.toast( I18n.get( "batches.created" ).replace( "{name}" , batch.name ) );
       await this.loadBatch( batch , picked.bySha , { fresh: true } );

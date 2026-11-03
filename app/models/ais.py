@@ -21,7 +21,10 @@ RandomNames.bat did: each image's cell becomes "<n>-<n>-<n>" (0..32767 each,
 like %RANDOM%), a Zen "_c2_ORG" ending kept, and every file of the image
 renamed to match, so pairs still pair. What a file was called before is kept
 on it (original) for admins: the routes strip it for everyone else, and
-translation() writes it out as the .bat's __Translation.txt.
+translation() writes it out as the .bat's __Translation.txt. A folder blinded
+before it got here brings the .bat's __Translation.txt along (or one is loaded
+later, apply_translation): its names are kept on the files and images the
+same way (name_images), as if this app had blinded them.
 
 Each add (a folder or files picked, a server folder) is recorded in the
 batch's adds, and its images carry its add_id, so the Images dialog can show
@@ -64,6 +67,8 @@ MAX_SHARES = 100
 RANDOM_RE = re.compile(r"^\d{1,5}-\d{1,5}-\d{1,5}(?!\d)")
 ZEN_SUFFIX_RE = re.compile(r"_c\d+_ORG$", re.IGNORECASE)
 MAX_DATE = 40
+MAX_TRANSLATION = 1_000_000     # characters of one __Translation.txt
+MAX_TRANSLATIONS = 500          # of them in one add (one per folder)
 
 # The Measure tool's AIS start -> soma distance (static/js/ais_measure.js):
 # µm and px, then its two ends (AIS start, soma) in MATLAB axes like click_x.
@@ -241,6 +246,123 @@ def translation(batch: Record) -> str:
     return "\r\n".join(lines) + "\r\n"
 
 
+def parse_translation(text: Any) -> dict[str, str]:
+    """A __Translation.txt (RandomNames.bat or .sh, or translation()) as
+    random name -> original name: its "original/random" lines, the header
+    skipped, up to the first blank line after them (translation() lists the
+    earlier random names after one)."""
+    if not isinstance(text, str) or len(text) > MAX_TRANSLATION:
+        raise BatchError("translation must be text")
+    names: dict[str, str] = {}
+    for line in text.lstrip("\ufeff").splitlines():
+        line = line.strip()
+        if not line:
+            if names:
+                break
+            continue
+        if line == "Original Name/Random Name" or set(line) == {"-"}:
+            continue
+        original, sep, random = line.partition("/")
+        if sep and original.strip() and random.strip():
+            names[random.strip()] = original.strip()
+    if not names:
+        raise BatchError("the translation has no original/random names")
+    return names
+
+
+def clean_translations(value: Any) -> list[tuple[str, dict[str, str]]]:
+    """The __Translation.txt files that came with an add, [{dir, text}] with
+    dir the folder they were in (as an image's dir), parsed."""
+    if value is None:
+        return []
+    if not isinstance(value, list) or len(value) > MAX_TRANSLATIONS:
+        raise BatchError(f"translations must be a list of at most {MAX_TRANSLATIONS}")
+    out = []
+    for t in value:
+        if not isinstance(t, dict):
+            raise BatchError("each translation must be an object")
+        folder = _text(t.get("dir", ""), "dir", empty=True).replace("\\", "/").strip("/")
+        out.append((folder, parse_translation(t.get("text"))))
+    return out
+
+
+def _name_image(image: dict[str, Any], names: dict[str, str]) -> dict[str, Any]:
+    """The image with the original names a translation gives its files, kept
+    as randomize keeps them (original, original_cell, original_key). The same
+    image when it has originals already or none of its files is named."""
+    if "original_cell" in image:
+        return image
+    cell = image["cell"]
+    files = {}
+    cells = {}
+    for role, f in image["files"].items():
+        old = names.get(f["name"])
+        if old is None:
+            files[role] = f
+            continue
+        head, sep, _ = f["rel"].replace("\\", "/").rpartition("/")
+        files[role] = f | {"original": {"name": old, "rel": head + sep + old}}
+        # A file's name is its cell and an ending (group): the original's
+        # cell is the original name without that ending.
+        ending = f["name"][len(cell):]
+        cells[role] = (old[: -len(ending)] if ending and old.lower().endswith(ending.lower())
+                       else re.sub(r"\.[^.]*$", "", old))
+    if not cells:
+        return image
+    original = next(cells[role] for role in ("czi", "raw", "processed") if role in cells)
+    return image | {"files": files, "original_cell": original,
+                    "original_key": f"{image['dir']}/{original}" if image["dir"] else original}
+
+
+def name_images(images: list[dict[str, Any]], translations: list[tuple[str, dict[str, str]]]) -> list[dict[str, Any]]:
+    """Grouped images with the names translations (clean_translations) give
+    them. A translation is for its folder and the folders inside it, the
+    nearest one first, as RandomNames.bat works one folder at a time."""
+    if not translations:
+        return images
+    ordered = sorted(translations, key=lambda t: len(t[0]))
+    out = []
+    for image in images:
+        d = image["dir"]
+        names: dict[str, str] = {}
+        for folder, given in ordered:
+            if not folder or d == folder or d.startswith(folder + "/"):
+                names |= given
+        out.append(_name_image(image, names) if names else image)
+    return out
+
+
+def unnamed(batch: Record) -> int:
+    """Images with a random name and nothing saying what they were called:
+    blinded somewhere else, their __Translation.txt not loaded."""
+    return sum(1 for im in batch["images"] if is_random(im["cell"]) and "original_cell" not in im)
+
+
+def apply_translation(store: Store, batch_id: int, text: Any) -> tuple[Record, int, int] | None:
+    """A __Translation.txt for a batch already here: every image not named
+    yet whose files it names, wherever in the batch. Keys stay, so nothing
+    that names an image moves. Returns (batch, images named, images still
+    unnamed), None when the batch is gone."""
+    names = parse_translation(text)
+    with store.transaction() as tx:
+        batch = tx.get(BUCKET_AIS_BATCHES, batch_id)
+        if batch is None:
+            return None
+        named = 0
+        for i, image in enumerate(batch["images"]):
+            new = _name_image(image, names)
+            if new is not image:
+                batch["images"][i] = new
+                named += 1
+        if named:
+            for a in batch.get("adds", []):
+                if any(im.get("add_id") == a["id"] and "original_cell" in im for im in batch["images"]):
+                    a["randomized"] = True
+            _stamp(batch)
+            tx.put(BUCKET_AIS_BATCHES, batch_id, batch)
+    return batch, named, unnamed(batch)
+
+
 def rerandomize(store: Store, batch_id: int, add_id: Any) -> tuple[Record, int, int] | None:
     """New random names for every image of one add (add_id, or "earlier"
     for images from before adds were kept), blinding any that were not.
@@ -299,7 +421,7 @@ def rerandomize(store: Store, batch_id: int, add_id: Any) -> tuple[Record, int, 
 
 
 def _add(record: Record, images: list[dict[str, Any]], source: str, path: str | None,
-         user_id: int | None, name: str | None, randomize_: bool) -> None:
+         user_id: int | None, name: str | None) -> None:
     """images (grouped, maybe blinded) into the batch record as one add:
     recorded in adds, each image tagged with its add_id, new duplicates
     excluded."""
@@ -313,7 +435,7 @@ def _add(record: Record, images: list[dict[str, Any]], source: str, path: str | 
     record["excluded"] = excluded
     adds.append({"id": add_id, "name": (name or "").strip()[:200] or record["name"], "source": source,
                  "path": path, "added_at": to_iso(utc_now()), "added_by": user_id,
-                 "randomized": randomize_ and any("original_cell" in im for im in added),
+                 "randomized": any("original_cell" in im for im in added),
                  "count": len(added)})
 
 
@@ -411,9 +533,11 @@ def _signature(image: dict[str, Any]) -> tuple[str, ...]:
 
 
 def add_files(store: Store, batch_id: int, source: str, files: Any, path: str | None = None, *,
-              randomize_names: bool = False, user_id: int | None = None, name: str | None = None) -> Record | None:
-    """More files into a batch: a folder or files picked later, blinded with
-    randomize_names, recorded as one add called name. None when the batch is
+              randomize_names: bool = False, user_id: int | None = None, name: str | None = None,
+              translations: Any = None) -> Record | None:
+    """More files into a batch: a folder or files picked later, named by the
+    __Translation.txt files that came with them (clean_translations), blinded
+    with randomize_names, recorded as one add called name. None when the batch is
     gone. A batch fed from both the browser and a server folder becomes
     source "mixed"."""
     if source not in SOURCES:
@@ -421,6 +545,7 @@ def add_files(store: Store, batch_id: int, source: str, files: Any, path: str | 
     images = group(clean_files(files))
     if not images:
         raise BatchError("no TIFF or CZI files")
+    images = name_images(images, clean_translations(translations))
 
     def mutate(record: Record) -> None:
         if record["images"] and record["source"] != source:
@@ -430,23 +555,24 @@ def add_files(store: Store, batch_id: int, source: str, files: Any, path: str | 
         if path and not record.get("path"):
             record["path"] = path
         added = randomize(images, {im["key"] for im in record["images"]}) if randomize_names else images
-        _add(record, added, source, path, user_id, name, randomize_names)
+        _add(record, added, source, path, user_id, name)
         _stamp(record)
 
     return store.update_value(BUCKET_AIS_BATCHES, batch_id, mutate)
 
 
 def create_batch(store: Store, name: str, source: str, files: list[dict[str, Any]], user_id: int,
-                 path: str | None = None, *, randomize_names: bool = False) -> Record:
-    """A batch with its files in one go (Open folder, Open path)."""
+                 path: str | None = None, *, randomize_names: bool = False, translations: Any = None) -> Record:
+    """A batch with its files in one go (Open folder, Open path), named by
+    the __Translation.txt files that came with them."""
     if source not in SOURCES:
         raise BatchError("unknown source")
     images = group(clean_files(files))
     if not images:
         raise BatchError("no TIFF or CZI files")
+    images = name_images(images, clean_translations(translations))
     record = new_batch(store, name, source, user_id, path)
-    _add(record, randomize(images, set()) if randomize_names else images, source, path, user_id, name,
-         randomize_names)
+    _add(record, randomize(images, set()) if randomize_names else images, source, path, user_id, name)
     store.put(BUCKET_AIS_BATCHES, record["id"], record)
     return record
 
@@ -543,6 +669,7 @@ def list_batches(store: Store, viewer_id: int | None = None,
                    "adds": list(batch.get("adds", [])),
                    "earlier": sum(1 for im in batch["images"] if "add_id" not in im),
                    "randomized": any("original_cell" in im for im in batch["images"]),
+                   "unnamed": unnamed(batch),
                    "duplicates": sum(1 for im in batch["images"] if "dup_of" in im),
                    "ais": sum(len(v) for v in by_image.values()),
                    "auto": sum(1 for v in by_image.values() for r in v if r.get("origin") == "auto"),

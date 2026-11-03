@@ -22,6 +22,7 @@ auto mode starts from (soma.py), if it has one.
 from __future__ import annotations
 
 import hashlib
+import mmap
 import os
 import re
 import tempfile
@@ -38,8 +39,8 @@ from app.analysis import detect as auto
 from app.analysis import mlcompat as ml
 from app.analysis import preprocess
 from app.analysis import soma as somata
-from app.analysis.czi import is_czi, read_czi
-from app.analysis.images import ImageError, preview_png, read_tiff, thumbnail_png, tiff_bytes
+from app.analysis.czi import is_czi, read_channels, read_czi
+from app.analysis.images import ImageError, composite_png, preview_png, read_tiff, thumbnail_png, tiff_bytes
 
 class NotStored(ImageError):
     """The server does not have the file (yet), as opposed to having one it
@@ -64,6 +65,7 @@ class Library:
         self._bright: dict[str, float] = {}
         self._somata: OrderedDict[str, somata.Somata | None] = OrderedDict()
         self._previews: OrderedDict[str, bytes] = OrderedDict()
+        self._channels: dict[str, list[dict[str, Any]]] = {}
 
     def _path(self, sha: str, czi: bool = False) -> Path:
         if not isinstance(sha, str) or not SHA_RE.match(sha):
@@ -204,12 +206,20 @@ class Library:
         return png
 
     def channels(self, sha: str) -> list[dict[str, Any]]:
-        """A CZI's channels, [{index, name, color}], for the channel buttons;
-        [] for a TIFF."""
+        """A CZI's channels, [{index, name, color}], for the channel buttons
+        and the Export dialog; [] for a TIFF. Kept: a sha's bytes never change,
+        and the dialog asks for every file of a batch."""
+        with self._lock:
+            if sha in self._channels:
+                return self._channels[sha]
         if not self.is_czi(sha):
             return []
-        image = read_czi(self.file_path(sha).read_bytes())
-        return [{"index": i, "name": name, "color": image.colors[name]} for i, name in enumerate(image.channels)]
+        with self.file_path(sha).open("rb") as file, mmap.mmap(file.fileno(), 0, access=mmap.ACCESS_READ) as data:
+            found = read_channels(data)
+        out = [{"index": i, "name": name, "color": color} for i, (name, color) in enumerate(found.items())]
+        with self._lock:
+            self._channels[sha] = out
+        return out
 
     def channel_png(self, sha: str, index: int) -> bytes:
         """One CZI channel, greyscale between its 0.1th and 99.9th percentile."""
@@ -219,6 +229,13 @@ class Library:
         if not 0 <= index < len(planes):
             raise ImageError("no such channel")
         return preview_png(planes[index], CHANNEL_PERCENTILES)
+
+    def composite_png(self, sha: str) -> bytes:
+        """A CZI's channels merged in their display colors, its PNG for an export."""
+        if not self.is_czi(sha):
+            raise ImageError("only a .czi has channels")
+        image = read_czi(self.file_path(sha).read_bytes())
+        return composite_png(list(image.channels.values()), [image.colors[n] for n in image.channels], CHANNEL_PERCENTILES)
 
     def channel_tiff(self, sha: str, index: int) -> bytes:
         """One CZI channel's data as it is (16-bit), as a TIFF."""

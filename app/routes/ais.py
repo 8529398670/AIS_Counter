@@ -120,6 +120,15 @@ async def channel(request: Request) -> Response:
     return Response(png, media_type="image/png", headers={"Cache-Control": "private, max-age=86400"})
 
 
+async def composite(request: Request) -> Response:
+    """A .czi's channels merged in their display colors, for exports."""
+    try:
+        png = await run(_library(request).composite_png, request.path_params["sha"])
+    except ImageError as exc:
+        return _unshown(exc)
+    return Response(png, media_type="image/png", headers={"Cache-Control": "private, max-age=86400"})
+
+
 async def thumb(request: Request) -> Response:
     try:
         png = await run(_library(request).thumbnail, request.path_params["sha"])
@@ -410,9 +419,10 @@ def _add_name(body: dict[str, Any]) -> str | None:
 
 
 async def batch_add(request: Request) -> Response:
-    """Body: {files: [{name, rel, sha, size, modified?}], randomize?, add_name?}:
-    more files picked in the browser for an existing batch, blinded unless
-    randomize is false. Upload them afterwards as for a new one."""
+    """Body: {files: [{name, rel, sha, size, modified?}], randomize?, add_name?,
+    translations?: [{dir, text}]}: more files picked in the browser for an
+    existing batch, named by any __Translation.txt picked with them, blinded
+    unless randomize is false. Upload them afterwards as for a new one."""
     body, refused = await _body(request)
     if refused:
         return refused
@@ -421,7 +431,8 @@ async def batch_add(request: Request) -> Response:
         return not_found("no such batch")
     try:
         batch = await run(batches.add_files, get_store(request), batch_id, "upload", body.get("files"),
-                          randomize_names=_randomize(body), user_id=_user_id(request), name=_add_name(body))
+                          randomize_names=_randomize(body), user_id=_user_id(request), name=_add_name(body),
+                          translations=body.get("translations"))
     except batches.BatchError as exc:
         return bad_request(str(exc))
     if batch is None:
@@ -496,6 +507,25 @@ async def batch_translation(request: Request) -> Response:
                     headers={"Content-Disposition": 'attachment; filename="__Translation.txt"'})
 
 
+async def batch_translation_load(request: Request) -> Response:
+    """Body: {text}: a __Translation.txt for a batch blinded somewhere else
+    (admins): the original names of the files it names."""
+    body, refused = await _body(request)
+    if refused:
+        return refused
+    batch_id = parse_id(request.path_params["batch_id"])
+    if not batch_id:
+        return not_found("no such batch")
+    try:
+        out = await run(batches.apply_translation, get_store(request), batch_id, body.get("text"))
+    except batches.BatchError as exc:
+        return bad_request(str(exc))
+    if out is None:
+        return not_found("no such batch")
+    batch, named, unnamed = out
+    return JSONResponse(await run(_batch_json, request, batch) | {"named": named, "unnamed": unnamed})
+
+
 async def batch_activity(request: Request) -> Response:
     """Body: {kind: "auto", state, done, total}: how far this person's auto
     run on the batch has got, so everyone's Batches screen can show it."""
@@ -520,15 +550,50 @@ async def batch_get(request: Request) -> Response:
     return JSONResponse(await run(_batch_json, request, batch))
 
 
+def _batch_channels(library: Library, batch: dict[str, Any]) -> dict[str, Any]:
+    """The channels of a batch's included .czi files by name, in the order
+    first met, each with how many files have it, for the Export dialog. Only
+    what the server holds is looked at, so opening the dialog does not copy
+    in an Open-path batch; unread counts the rest and files it cannot read."""
+    found: dict[str, dict[str, Any]] = {}
+    excluded = batches.excluded_keys(batch)
+    czis = unread = 0
+    for image in batch["images"]:
+        czi = image["files"].get("czi")
+        if not czi or image["key"] in excluded:
+            continue
+        czis += 1
+        try:
+            channels = library.channels(czi["sha"]) if library.has(czi["sha"]) else None
+        except ImageError:
+            channels = None
+        if channels is None:
+            unread += 1
+            continue
+        for channel in channels:
+            entry = found.setdefault(channel["name"], {"name": channel["name"], "color": channel["color"], "files": 0})
+            entry["files"] += 1
+    return {"channels": list(found.values()), "czis": czis, "unread": unread}
+
+
+async def batch_channels(request: Request) -> Response:
+    batch_id = parse_id(request.path_params["batch_id"])
+    batch = await run(batches.get_batch, get_store(request), batch_id) if batch_id else None
+    if batch is None:
+        return not_found("no such batch")
+    return JSONResponse(await run(_batch_channels, _library(request), batch))
+
+
 async def batch_upload(request: Request) -> Response:
-    """Body: {name, files: [{name, rel, sha, size}]} -- a folder picked in the
-    browser, hashed there. Upload the files afterwards with POST /api/ais/files."""
+    """Body: {name, files: [{name, rel, sha, size}], translations?: [{dir,
+    text}]} -- a folder picked in the browser, hashed there. Upload the files afterwards with POST /api/ais/files."""
     body, refused = await _body(request)
     if refused:
         return refused
     try:
         batch = await run(batches.create_batch, get_store(request), body.get("name"), "upload",
-                          body.get("files"), _user_id(request), randomize_names=_randomize(body))
+                          body.get("files"), _user_id(request), randomize_names=_randomize(body),
+                          translations=body.get("translations"))
     except batches.BatchError as exc:
         return bad_request(str(exc))
     return JSONResponse(await run(_batch_json, request, batch))
@@ -752,8 +817,9 @@ async def batch_path(request: Request) -> Response:
     try:
         folder, files = await run(local.hashed_files, body.get("path"))
         name = folder.rstrip("/\\").replace("\\", "/").split("/")[-1] or folder
+        translations = await run(local.translations_under, folder)
         batch = await run(batches.create_batch, get_store(request), name, "path", files, _user_id(request), folder,
-                          randomize_names=_randomize(body))
+                          randomize_names=_randomize(body), translations=translations)
     except (ImageError, batches.BatchError) as exc:
         return bad_request(str(exc))
     return JSONResponse(await run(_batch_json, request, batch))
@@ -770,8 +836,10 @@ async def batch_add_path(request: Request) -> Response:
     try:
         folder, files = await run(local.hashed_files, body.get("path"))
         name = folder.rstrip("/\\").replace("\\", "/").split("/")[-1] or folder
+        translations = await run(local.translations_under, folder)
         batch = await run(batches.add_files, get_store(request), batch_id, "path", files, folder,
-                          randomize_names=_randomize(body), user_id=_user_id(request), name=name)
+                          randomize_names=_randomize(body), user_id=_user_id(request), name=name,
+                          translations=translations)
     except (ImageError, batches.BatchError) as exc:
         return bad_request(str(exc))
     if batch is None:

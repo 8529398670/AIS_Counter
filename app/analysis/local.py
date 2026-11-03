@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -21,6 +22,7 @@ from app.analysis.images import ImageError
 TIFF_SUFFIXES = (".tif", ".tiff", ".czi")   # the images: TIFFs and CZI mode's .czi
 CHOOSE_TIMEOUT_SECONDS = 600
 MAX_FILES = 5000                            # as many as a batch takes (app/models/ais.py)
+TRANSLATION_RE = re.compile(r"^__Translation.*\.txt$", re.IGNORECASE)
 
 
 def platform() -> str:
@@ -90,6 +92,28 @@ def images_under(base: Path, limit: int = MAX_FILES) -> list[Path]:
                 found.append(Path(root) / name)
                 if len(found) >= limit:
                     return found
+    return found
+
+
+def translations_under(raw: Any) -> list[dict[str, str]]:
+    """The __Translation.txt files of a folder blinded by RandomNames.bat
+    (subfolders too): [{dir, text}], dir the folder they are in below it, as
+    an image's dir (app/models/ais.name_images)."""
+    base = folder(raw)
+    found = []
+    for root, dirs, names in os.walk(base):
+        dirs[:] = sorted(d for d in dirs if not d.startswith("."))
+        for name in names:
+            if TRANSLATION_RE.match(name):
+                try:
+                    data = (Path(root) / name).read_bytes()
+                except OSError:
+                    continue
+                try:
+                    text = data.decode("utf-8")
+                except UnicodeDecodeError:
+                    text = data.decode("cp1252", errors="replace")    # the .bat on Windows
+                found.append({"dir": "/".join(Path(root).relative_to(base).parts), "text": text})
     return found
 
 

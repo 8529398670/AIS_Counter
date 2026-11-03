@@ -215,3 +215,52 @@ def test_a_czi_exports_its_channels_and_processed_image_as_tiffs(tmp_path):
     tiff = library.add(library.channel_tiff(sha, 0))["sha256"]
     with pytest.raises(ImageError):
         library.processed_tiff(tiff)
+
+
+def _rgb(png: bytes) -> np.ndarray:
+    """The pixels of an RGB PNG as composite_png writes it."""
+    import zlib
+
+    w, h = struct.unpack(">II", png[16:24])
+    assert png[24:26] == bytes([8, 2])   # 8-bit RGB
+    size = struct.unpack(">I", png[33:37])[0]
+    rows = np.frombuffer(zlib.decompress(png[41:41 + size]), np.uint8).reshape(h, 1 + 3 * w)
+    return rows[:, 1:].reshape(h, w, 3)
+
+
+def test_a_composite_shows_each_channel_in_its_color():
+    from app.analysis.images import composite_png
+
+    green = np.zeros((20, 30), np.uint16)
+    blue = np.zeros((20, 30), np.uint16)
+    green[:10] = 4000
+    blue[:, :15] = 4000
+    pixels = _rgb(composite_png([green, blue], ["#00ff00", "#0000ff"], (0.1, 99.9)))
+    assert pixels.shape == (20, 30, 3)
+    assert pixels[0, 29].tolist() == [0, 255, 0]      # green only
+    assert pixels[19, 0].tolist() == [0, 0, 255]      # blue only
+    assert pixels[0, 0].tolist() == [0, 255, 255]     # both add up
+    assert pixels[19, 29].tolist() == [0, 0, 0]
+    # A flat channel adds nothing rather than dividing by zero.
+    assert not _rgb(composite_png([np.ones((5, 5), np.uint16)], ["#ffffff"], (0.1, 99.9))).any()
+
+
+def test_a_library_composites_a_czi_and_keeps_its_channel_list(tmp_path):
+    import pytest
+
+    from app.analysis.images import ImageError
+    from app.analysis.service import Library
+    from tests.czidata import write_czi
+
+    rng = np.random.default_rng(2)
+    planes = {name: rng.integers(0, 4096, (24, 32), dtype=np.uint16) for name in ("Alexa Fluor 488", "AMCA")}
+    library = Library(tmp_path)
+    sha = library.add(write_czi(planes))["sha256"]
+    assert _rgb(library.composite_png(sha)).shape == (24, 32, 3)
+    found = library.channels(sha)
+    assert [c["name"] for c in found] == list(planes)
+    library.file_path(sha).unlink()
+    assert library.channels(sha) == found   # a sha's channels never change
+    tiff = library.add(_tiff(synthetic()[0]))["sha256"]
+    with pytest.raises(ImageError):
+        library.composite_png(tiff)

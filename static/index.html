@@ -433,7 +433,8 @@
           <div id="batches-list" class="batches-list"></div>
           <!-- Pickers for Add images; batches.js remembers which batch asked. -->
           <input id="batches-add-folder" type="file" webkitdirectory multiple hidden />
-          <input id="batches-add-files" type="file" accept=".tif,.tiff,.czi" multiple hidden />
+          <input id="batches-add-files" type="file" accept=".tif,.tiff,.czi,.txt" multiple hidden />
+          <input id="batches-translation" type="file" accept=".txt,text/plain" hidden />
 
           <!-- Reset results: an admin deletes a batch's AIS to run it again, a backup first (static/js/batches.js). -->
           <div class="modal fade" id="batches-reset-modal" tabindex="-1" aria-labelledby="batches-reset-title" aria-hidden="true">
@@ -477,7 +478,7 @@
         <!-- Dialogs both the Process and Batches screens open. -->
           <!-- Export: what a batch ZIP holds besides the report (static/js/ais_export.js). -->
           <div class="modal fade" id="export-options-modal" tabindex="-1" aria-labelledby="export-options-title" aria-hidden="true">
-            <div class="modal-dialog">
+            <div class="modal-dialog modal-dialog-scrollable">
               <div class="modal-content">
                 <div class="modal-header">
                   <div class="me-auto ais-images-heading">
@@ -488,23 +489,47 @@
                 </div>
                 <div class="modal-body">
                   <p class="small text-body-secondary" data-i18n="batches.export_help"></p>
-                  <div class="form-check">
-                    <input class="form-check-input" type="checkbox" id="export-options-traces" checked />
-                    <label class="form-check-label" for="export-options-traces" data-i18n="batches.export_traces"></label>
-                  </div>
-                  <div class="form-check">
-                    <input class="form-check-input" type="checkbox" id="export-options-originals" />
-                    <label class="form-check-label" for="export-options-originals" data-i18n="batches.export_originals"></label>
-                  </div>
-                  <div class="form-check">
-                    <input class="form-check-input" type="checkbox" id="export-options-processed" />
-                    <label class="form-check-label" for="export-options-processed" data-i18n="batches.export_processed"></label>
-                  </div>
-                  <div class="form-check">
-                    <input class="form-check-input" type="checkbox" id="export-options-channels" />
-                    <label class="form-check-label" for="export-options-channels" data-i18n="batches.export_channels"></label>
-                  </div>
+                  <table id="export-options-table" class="table table-sm align-middle mb-2">
+                    <thead>
+                      <tr>
+                        <th scope="col"></th>
+                        <th scope="col" class="text-center text-nowrap">
+                          <input class="form-check-input me-1" type="checkbox" id="export-options-all-file" data-i18n-attr="title:batches.export_col_all" />
+                          <label for="export-options-all-file" data-i18n="batches.export_col_original"></label>
+                        </th>
+                        <th scope="col" class="text-center text-nowrap">
+                          <input class="form-check-input me-1" type="checkbox" id="export-options-all-png" data-i18n-attr="title:batches.export_col_all" />
+                          <label for="export-options-all-png" data-i18n="batches.export_col_png"></label>
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        <td><label for="export-options-traces" data-i18n="batches.export_traces"></label></td>
+                        <td></td>
+                        <td class="text-center"><input class="form-check-input export-png" type="checkbox" id="export-options-traces" checked /></td>
+                      </tr>
+                      <tr>
+                        <td data-i18n="batches.export_originals"></td>
+                        <td class="text-center"><input class="form-check-input export-file" type="checkbox" id="export-options-originals" data-i18n-attr="aria-label:batches.export_originals" /></td>
+                        <td class="text-center"><input class="form-check-input export-png" type="checkbox" id="export-options-originals-png" data-i18n-attr="aria-label:batches.export_originals" /></td>
+                      </tr>
+                      <tr>
+                        <td data-i18n="batches.export_processed"></td>
+                        <td class="text-center"><input class="form-check-input export-file" type="checkbox" id="export-options-processed" data-i18n-attr="aria-label:batches.export_processed" /></td>
+                        <td class="text-center"><input class="form-check-input export-png" type="checkbox" id="export-options-processed-png" data-i18n-attr="aria-label:batches.export_processed" /></td>
+                      </tr>
+                    </tbody>
+                    <tbody id="export-options-channels"></tbody>
+                  </table>
+                  <p id="export-options-channels-note" class="small text-body-secondary mb-2" hidden></p>
+                  <p class="small text-body-secondary mb-0" data-i18n="batches.export_png_help"></p>
                   <div id="export-options-blind" class="mt-3 pt-3 border-top" hidden>
+                    <div class="form-check">
+                      <input class="form-check-input" type="checkbox" id="export-options-unrandomize" />
+                      <label class="form-check-label" for="export-options-unrandomize" data-i18n="batches.export_unrandomize"></label>
+                    </div>
+                    <p class="small text-body-secondary mt-1 mb-2 ms-4" data-i18n="batches.export_unrandomize_help"></p>
                     <div class="form-check">
                       <input class="form-check-input" type="checkbox" id="export-options-names" />
                       <label class="form-check-label" for="export-options-names" data-i18n="batches.export_names"></label>
