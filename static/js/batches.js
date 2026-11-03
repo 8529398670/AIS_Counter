@@ -77,14 +77,21 @@ const Batches = {
   },
 
   async refresh( quiet ) {
+    // A poll that started before a newer refresh must not draw its older list
+    // over it (a batch just made would vanish until the next poll).
+    const ask = this.asked = ( this.asked || 0 ) + 1;
+    let list;
     try {
-      this.list = ( await Api.request( "/api/ais/batches" ) ).batches;
+      list = ( await Api.request( "/api/ais/batches" ) ).batches;
     } catch ( error ) {
       if ( !quiet ) App.showError( error.message );
       return;
     }
+    if ( ask !== this.asked ) return;
+    this.list = list;
     // The open image lists follow along too.
     await Promise.all( Array.from( this.expanded ).map( ( id ) => this.loadStatus( id ) ) );
+    if ( ask !== this.asked ) return;
     // Not under a name being typed, a card being dragged or an open menu
     // (that one catches up when it closes).
     if ( this.editing || this.dragging || document.querySelector( "#batches-panel .dropdown-menu.show" ) ) return;
@@ -574,7 +581,7 @@ const Batches = {
       const card = Dom.get( "batches-card-" + this.fresh );
       if ( card ) {
         card.scrollIntoView( { block: "nearest" } );
-        Dom.flash( card , 1500 );
+        card.classList.add( "batches-card-fresh" );
       }
       this.fresh = null;
     }
@@ -824,22 +831,54 @@ const Batches = {
 
   // One chip per folder (or set of files) added to the batch, each opening
   // the Images dialog on just those; "Earlier images" for what came in
-  // before adds were recorded.
+  // before adds were recorded. Admins also get a menu on each to give its
+  // images new random names (or random names at all).
   folderChips( b ) {
     const adds = b.adds || [];
     if ( !adds.length ) return null;
-    const chip = ( icon , label , title , addId ) => Dom.el( "button" , {
-      class: "btn btn-sm btn-light border batches-folder text-truncate",
-      attrs: { type: "button" , title: title },
-      on: { click: () => AisImages.openBatch( b , addId ) },
-      children: [ Dom.el( "i" , { class: "bi " + icon + " me-1" } ) , Dom.el( "span" , { text: label } ) ],
-    } );
-    const chips = adds.map( ( a ) => chip( a.source === "path" ? "bi-hdd" : "bi-folder2" ,
-      a.name + " (" + a.count + ")" ,
+    const chip = ( icon , name , count , title , addId , randomized ) => {
+      const button = Dom.el( "button" , {
+        class: "btn btn-sm btn-light border batches-folder text-truncate",
+        attrs: { type: "button" , title: title },
+        on: { click: () => AisImages.openBatch( b , addId ) },
+        children: [ Dom.el( "i" , { class: "bi " + icon + " me-1" } ) , Dom.el( "span" , { text: name + " (" + count + ")" } ) ],
+      } );
+      if ( !this.admin() ) return button;
+      return Dom.el( "div" , { class: "btn-group btn-group-sm batches-folder-group" , children: [ button ,
+        Dom.el( "button" , {
+          class: "btn btn-sm btn-light border dropdown-toggle dropdown-toggle-split",
+          attrs: { type: "button" , "data-bs-toggle": "dropdown" , "aria-expanded": "false" , "aria-label": I18n.get( "batches.more" ) + ": " + name },
+        } ),
+        Dom.el( "ul" , { class: "dropdown-menu" , children: [
+          this.menuItem( "bi-grid-3x3-gap" , I18n.get( "batches.open_folder" ) , () => AisImages.openBatch( b , addId ) ),
+          this.menuItem( "bi-shuffle" , I18n.get( randomized ? "batches.rerandomize_folder" : "batches.randomize_folder" ) ,
+            () => this.rerandomize( b , addId , name , count ) ),
+        ] } ),
+      ] } );
+    };
+    const chips = adds.map( ( a ) => chip( a.source === "path" ? "bi-hdd" : "bi-folder2" , a.name , a.count ,
       [ a.path || a.name , I18n.get( "batches.by" ).replace( "{name}" , a.added_by_name || "?" ) , new Date( a.added_at ).toLocaleString() ]
-        .concat( a.randomized ? [ I18n.get( "batches.randomized" ) ] : [] ).join( " · " ) , a.id ) );
-    if ( b.earlier ) chips.unshift( chip( "bi-clock-history" , I18n.get( "batches.earlier" ) + " (" + b.earlier + ")" , I18n.get( "batches.earlier" ) , "earlier" ) );
+        .concat( a.randomized ? [ I18n.get( "batches.randomized" ) ] : [] ).join( " · " ) , a.id , a.randomized ) );
+    if ( b.earlier ) chips.unshift( chip( "bi-clock-history" , I18n.get( "batches.earlier" ) , b.earlier , I18n.get( "batches.earlier" ) , "earlier" , false ) );
     return Dom.el( "div" , { class: "batches-folders mt-2" , children: chips } );
+  },
+
+  // New random names for one folder's images (admins). Their AIS, done
+  // marks, inclusion and assignment follow on the server; the Process
+  // screen reloads the batch when it shows it again.
+  async rerandomize( b , addId , name , count ) {
+    const question = I18n.get( "batches.rerandomize_confirm" ).replace( "{n}" , count ).replace( "{folder}" , name );
+    if ( question && !window.confirm( question ) ) return;
+    let out;
+    try {
+      out = await Api.post( "/api/ais/batches/" + b.id + "/adds/" + addId + "/randomize" , {} );
+    } catch ( error ) {
+      App.showError( error.message );
+      return;
+    }
+    Dom.toast( I18n.get( "batches.rerandomized" ).replace( "{n}" , out.renamed ).replace( "{folder}" , name ).replace( "{m}" , out.measured ) );
+    Ais.batchChanged( out , true );
+    await this.refresh( true );
   },
 
   renderLocalInto( line , id ) {

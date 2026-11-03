@@ -125,6 +125,7 @@ def build_routes(static_server: StaticServer, cfg: Config) -> list[BaseRoute]:
         admins("/api/ais/batches/{batch_id}/assign", ais.batch_assign, ["POST"]),
         admins("/api/ais/batches/{batch_id}/reset", ais.batch_reset, ["POST"]),
         admins("/api/ais/batches/{batch_id}/translation.txt", ais.batch_translation),
+        admins("/api/ais/batches/{batch_id}/adds/{add_id}/randomize", ais.batch_rerandomize, ["POST"]),
         signed_in("/api/ais/results", ais.result_list),
         signed_in("/api/ais/results", ais.result_add, ["POST"]),
         signed_in("/api/ais/results/import", ais.result_import, ["POST"], max_body_size=ais.UPLOAD_LIMIT_BYTES),

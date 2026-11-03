@@ -172,30 +172,44 @@ def randomize(images: list[dict[str, Any]], taken: set[str]) -> list[dict[str, A
     original (files) and original_cell / original_key (images)."""
     out = []
     for image in images:
-        cell = image["cell"]
-        if is_random(cell):
+        if is_random(image["cell"]):
             taken.add(image["key"])
             out.append(image)
-            continue
-        ending = ZEN_SUFFIX_RE.search(cell)
-        suffix = ending.group(0) if ending else ""
-        while True:
-            new = "-".join(str(secrets.randbelow(32768)) for _ in range(3)) + suffix
-            key = f"{image['dir']}/{new}" if image["dir"] else new
-            if key not in taken:
-                break
-        taken.add(key)
-        files = {}
-        for role, f in image["files"].items():
-            # A file's name starts with its cell (group cuts the ending off).
-            name = new + f["name"][len(cell):]
-            head, sep, _ = f["rel"].replace("\\", "/").rpartition("/")
-            files[role] = f | {"name": name, "rel": head + sep + name,
-                               "original": {"name": f["name"], "rel": f["rel"]}}
-        out.append(image | {"key": key, "cell": new, "files": files,
-                            "original_cell": cell, "original_key": image["key"]})
+        else:
+            out.append(_blind_image(image, taken))
     # In the order of the new names, so the old order gives nothing away.
     return sorted(out, key=lambda im: (im["dir"].lower(), im["cell"].lower(), im["key"]))
+
+
+def _blind_image(image: dict[str, Any], taken: set[str]) -> dict[str, Any]:
+    """The image under a new "<n>-<n>-<n>" name (plus any Zen ending),
+    unique against taken (which grows), its files renamed to match. The
+    first time, what it was called is kept as original; an image blinded
+    before keeps that and lists the name it leaves behind as earlier."""
+    cell = image["cell"]
+    ending = ZEN_SUFFIX_RE.search(cell)
+    suffix = ending.group(0) if ending else ""
+    while True:
+        new = "-".join(str(secrets.randbelow(32768)) for _ in range(3)) + suffix
+        key = f"{image['dir']}/{new}" if image["dir"] else new
+        if key not in taken:
+            break
+    taken.add(key)
+    blinded = "original_cell" in image
+    files = {}
+    for role, f in image["files"].items():
+        # A file's name starts with its cell (group cuts the ending off).
+        name = new + f["name"][len(cell):]
+        head, sep, _ = f["rel"].replace("\\", "/").rpartition("/")
+        kept = ({"earlier": f.get("earlier", []) + [f["name"]]} if blinded
+                else {"original": {"name": f["name"], "rel": f["rel"]}})
+        files[role] = f | {"name": name, "rel": head + sep + name} | kept
+    out = image | {"key": key, "cell": new, "files": files}
+    if blinded:
+        out["earlier_keys"] = image.get("earlier_keys", []) + [image["key"]]
+    else:
+        out |= {"original_cell": cell, "original_key": image["key"]}
+    return out
 
 
 def excluded_keys(batch: Record) -> set[str]:
@@ -214,11 +228,74 @@ def translation(batch: Record) -> str:
     """The batch's blinded names as RandomNames.bat wrote them: a
     __Translation.txt of "original/random" lines, one per renamed file."""
     lines = ["Original Name/Random Name", "-------------------------"]
+    earlier = []
     for image in batch["images"]:
         for f in image["files"].values():
             if "original" in f:
                 lines.append(f"{f['original']['name']}/{f['name']}")
+            earlier += [f"{old}/{f['name']}" for old in f.get("earlier", [])]
+    # Names given before a folder was randomized again, so exports made
+    # under them can still be read.
+    if earlier:
+        lines += ["", "Earlier Random Name/Random Name", "-------------------------------"] + earlier
     return "\r\n".join(lines) + "\r\n"
+
+
+def rerandomize(store: Store, batch_id: int, add_id: Any) -> tuple[Record, int, int] | None:
+    """New random names for every image of one add (add_id, or "earlier"
+    for images from before adds were kept), blinding any that were not.
+    Everything that names an image by its key follows: accepted AIS (image,
+    cell, file), done marks, the team's exclusions and the assignment.
+    Returns (batch, images renamed, how many of them had AIS or a done
+    mark), None when the batch is gone."""
+    if add_id != "earlier" and (not isinstance(add_id, int) or isinstance(add_id, bool)):
+        raise BatchError("add_id must be a folder's id or earlier")
+    with store.transaction() as tx:
+        batch = tx.get(BUCKET_AIS_BATCHES, batch_id)
+        if batch is None:
+            return None
+        adds = batch.get("adds", [])
+        if add_id != "earlier" and not any(a["id"] == add_id for a in adds):
+            raise BatchError("no such folder in this batch")
+        want = None if add_id == "earlier" else add_id
+        picked = [i for i, im in enumerate(batch["images"]) if im.get("add_id") == want]
+        if not picked:
+            raise BatchError("no images in this folder")
+        excluded = excluded_keys(batch)
+        taken = {im["key"] for im in batch["images"]}
+        keys: dict[str, tuple[str, str]] = {}
+        files: dict[str, str] = {}
+        for i in picked:
+            old = batch["images"][i]
+            new = _blind_image(old, taken)
+            batch["images"][i] = new
+            keys[old["key"]] = (new["key"], new["cell"])
+            for role, f in old["files"].items():
+                files[f["name"]] = new["files"][role]["name"]
+                files[f["rel"]] = new["files"][role]["rel"]
+
+        def rekey(k: str) -> str:
+            return keys[k][0] if k in keys else k
+
+        measured = {k for k in batch["skipped"] if k in keys}
+        batch["skipped"] = [rekey(k) for k in batch["skipped"]]
+        moved = {rekey(k) for k in excluded}
+        batch["excluded"] = [im["key"] for im in batch["images"] if im["key"] in moved]
+        if batch.get("assignment"):
+            batch["assignment"]["images"] = {rekey(k): u for k, u in batch["assignment"]["images"].items()}
+        for _, row in tx.all(BUCKET_AIS_RESULTS):
+            if row["batch_id"] == batch_id and row["image"] in keys:
+                measured.add(row["image"])
+                key, cell = keys[row["image"]]
+                tx.put(BUCKET_AIS_RESULTS, row["id"], row | {"image": key, "cell": cell,
+                                                             "file": files.get(row.get("file", ""), row.get("file", ""))})
+        for a in adds:
+            if a["id"] == add_id:
+                a["randomized"] = True
+                a["rerandomized_at"] = to_iso(utc_now())
+        _stamp(batch)
+        tx.put(BUCKET_AIS_BATCHES, batch_id, batch)
+    return batch, len(picked), len(measured)
 
 
 def _add(record: Record, images: list[dict[str, Any]], source: str, path: str | None,

@@ -368,6 +368,10 @@ th { color: var(--bs-secondary-color); font-size: 0.8rem; text-transform: upperc
 .batches-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 30rem), 1fr)); gap: 1rem; align-items: start; }
 .batches-card-mine { border-color: var(--bs-primary-border-subtle); }
 .batches-card-archived { opacity: 0.6; }
+/* A batch just made: a brief glow, so the eye finds it. */
+.batches-card-fresh { animation: batches-fresh 1.5s ease-out; }
+@keyframes batches-fresh { from { box-shadow: 0 0 0 0.25rem var(--bs-primary-border-subtle); } to { box-shadow: 0 0 0 0 transparent; } }
+@media (prefers-reduced-motion: reduce) { .batches-card-fresh { animation: none; } }
 .batches-card-archived:hover, .batches-card-archived:focus-within { opacity: 1; }
 /* The rename pencil shows on hover; Rename is in the card's menu too. */
 .batches-rename { opacity: 0; transition: opacity 0.15s; }

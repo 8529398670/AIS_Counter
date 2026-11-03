@@ -277,15 +277,16 @@ def _blind(request: Request) -> bool:
 
 
 def _unnamed_file(f: dict[str, Any]) -> dict[str, Any]:
-    """A blinded file without what it was called: its original name, and the
-    path on this machine (which has that name in it)."""
+    """A blinded file without what it was called: its original name, the
+    path on this machine (which has that name in it) and the random names it
+    had before (which old exports could be matched against)."""
     if "original" not in f:
         return f
-    return {k: v for k, v in f.items() if k not in ("original", "path")}
+    return {k: v for k, v in f.items() if k not in ("original", "path", "earlier")}
 
 
 def _unnamed_image(image: dict[str, Any]) -> dict[str, Any]:
-    return {k: v for k, v in image.items() if k not in ("original_cell", "original_key")}
+    return {k: v for k, v in image.items() if k not in ("original_cell", "original_key", "earlier_keys")}
 
 
 def _batch_json(request: Request, batch: dict[str, Any]) -> dict[str, Any]:
@@ -462,6 +463,27 @@ async def batch_include(request: Request) -> Response:
     if batch is None:
         return not_found("no such batch")
     return JSONResponse(await run(_batch_json, request, batch))
+
+
+async def batch_rerandomize(request: Request) -> Response:
+    """New random names for one folder of the batch (admins); its results,
+    done marks, exclusions and assignment move with them."""
+    body, refused = await _body(request)
+    if refused:
+        return refused
+    batch_id = parse_id(request.path_params["batch_id"])
+    raw = request.path_params["add_id"]
+    add_id: Any = "earlier" if raw == "earlier" else parse_id(raw)
+    if not batch_id or not add_id:
+        return not_found("no such folder")
+    try:
+        out = await run(batches.rerandomize, get_store(request), batch_id, add_id)
+    except batches.BatchError as exc:
+        return bad_request(str(exc))
+    if out is None:
+        return not_found("no such batch")
+    batch, renamed, measured = out
+    return JSONResponse(await run(_batch_json, request, batch) | {"renamed": renamed, "measured": measured})
 
 
 async def batch_translation(request: Request) -> Response:

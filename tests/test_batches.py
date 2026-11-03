@@ -436,3 +436,76 @@ def test_originals_are_only_for_admins():
     plain = {"name": "a.czi", "rel": "f/a.czi", "sha": sha("a"), "path": "/f/a.czi"}
     assert routes._unnamed_file(plain) == plain
     assert routes._unnamed_image({"key": "1-2-3", "original_key": "DOSE", "original_cell": "DOSE"}) == {"key": "1-2-3"}
+
+
+def test_rerandomize_renames_one_folder_and_everything_that_names_its_images(store):
+    batch = ais.new_batch(store, "f", "upload", 1)
+    bid = batch["id"]
+    ais.add_files(store, bid, "upload", files(("one/DOSE A_c2_ORG.tif", "a raw"), ("one/DOSE A_c2_ORG" + P, "a proc"),
+                                              ("one/DOSE B.czi", "b"), ("one/DOSE C.czi", "b")),
+                  randomize_names=True, user_id=1, name="one")
+    other = ais.add_files(store, bid, "upload", files(("two/plain.czi", "p")), user_id=1, name="two")
+    by_original = {im.get("original_key"): im for im in other["images"]}
+    pair = by_original["DOSE A_c2_ORG"]
+    dup = next(im for im in other["images"] if "dup_of" in im)          # DOSE B or C, whichever sorts later
+    czi = next(im for im in other["images"] if im.get("original_key") in ("DOSE B", "DOSE C") and "dup_of" not in im)
+    ais.assign(store, bid, [{"user_id": 1, "percent": 100}], 1)
+    row_ = ais.add_result(store, bid, pair["key"], row() | {"file": pair["files"]["processed"]["rel"]}, 1)
+    ais.set_done(store, bid, czi["key"], True)
+    before = ais.list_batches(store)[0]
+
+    after, renamed, measured = ais.rerandomize(store, bid, 1)
+    assert (renamed, measured) == (3, 2)
+    moved = {im.get("original_key"): im for im in after["images"]}
+    new_pair, new_czi, new_dup = moved["DOSE A_c2_ORG"], moved[czi["original_key"]], moved[dup["original_key"]]
+    assert new_pair["key"] != pair["key"] and new_pair["cell"].endswith("_c2_ORG")
+    assert new_pair["files"]["processed"]["name"] == new_pair["cell"] + P
+    assert new_pair["files"]["raw"]["original"] == {"name": "DOSE A_c2_ORG.tif", "rel": "one/DOSE A_c2_ORG.tif"}
+    assert new_pair["files"]["raw"]["earlier"] == [pair["files"]["raw"]["name"]]
+    assert new_pair["earlier_keys"] == [pair["key"]]
+    assert moved[None]["key"] == "plain"                              # the other folder is untouched
+    assert [im["add_id"] for im in after["images"]] == [im["add_id"] for im in other["images"]]
+
+    result = ais.get_result(store, row_["id"])
+    assert (result["image"], result["cell"], result["n"]) == (new_pair["key"], new_pair["cell"], 1)
+    assert result["file"] == new_pair["files"]["processed"]["rel"]
+    assert after["skipped"] == [new_czi["key"]]
+    assert after["excluded"] == [new_dup["key"]]
+    assert set(after["assignment"]["images"]) == {new_pair["key"], new_czi["key"], "plain"}
+    now = ais.list_batches(store)[0]
+    assert {k: now[k] for k in ("images", "included", "completed", "ais")} == {k: before[k] for k in ("images", "included", "completed", "ais")}
+    assert [a["randomized"] for a in now["adds"]] == [True, False]
+
+    again, _, _ = ais.rerandomize(store, bid, 1)
+    twice = next(im for im in again["images"] if im.get("original_key") == czi["original_key"])
+    assert twice["files"]["czi"]["original"]["name"] == czi["original_key"] + ".czi"
+    assert twice["earlier_keys"] == [czi["key"], new_czi["key"]]
+    text = ais.translation(again)
+    assert f"{czi['original_key']}.czi/{twice['cell']}.czi\r\n" in text
+    assert "\r\n\r\nEarlier Random Name/Random Name\r\n" in text
+    assert f"{czi['cell']}.czi/{twice['cell']}.czi\r\n" in text and f"{new_czi['cell']}.czi/{twice['cell']}.czi\r\n" in text
+
+
+def test_rerandomize_blinds_an_unblinded_folder_and_earlier_images(store):
+    batch = ais.create_batch(store, "f", "upload", files(("f/a.czi", "a"), ("f/19891-24785-20711.czi", "b")), 1)
+    legacy = batch | {"adds": []}
+    legacy["images"] = [{k: v for k, v in im.items() if k != "add_id"} for im in batch["images"]]
+    store.put(db.BUCKET_AIS_BATCHES, batch["id"], legacy)
+    after, renamed, measured = ais.rerandomize(store, batch["id"], "earlier")
+    assert (renamed, measured) == (2, 0)
+    originals = sorted(im["original_key"] for im in after["images"])
+    assert originals == ["19891-24785-20711", "a"]
+    assert all(ais.RANDOM_RE.match(im["key"]) and "earlier_keys" not in im for im in after["images"])
+    assert ais.rerandomize(store, 999, 1) is None
+    for bad in (7, True, "x"):
+        with pytest.raises(ais.BatchError):
+            ais.rerandomize(store, batch["id"], bad)
+
+
+def test_earlier_random_names_are_only_for_admins():
+    from app.routes import ais as routes
+
+    f = {"name": "4-5-6.czi", "rel": "f/4-5-6.czi", "sha": sha("x"), "earlier": ["1-2-3.czi"],
+         "original": {"name": "DOSE.czi", "rel": "f/DOSE.czi"}}
+    assert "earlier" not in routes._unnamed_file(f)
+    assert routes._unnamed_image({"key": "4-5-6", "earlier_keys": ["1-2-3"]}) == {"key": "4-5-6"}
