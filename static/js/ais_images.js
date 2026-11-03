@@ -1,13 +1,20 @@
-// The Process screen's dialogs: Images (which of the batch to step through,
-// with previews and duplicates) and Open path (a folder on this machine, read
-// by the server, for a new batch or one the Batches screen adds to). Ais
-// (ais.js) owns the images; this file only edits their `included` flag, and
-// only when the selection is confirmed.
+// The Images dialog and Open path. Images: which of a batch's images the
+// team works on (stepped through, assigned, counted and exported), folder by
+// folder as they were added, as preview cards or a details list, with
+// duplicates. It opens on the Process screen's batch (open) or any batch
+// from its card on the Batches screen (openBatch), and saves the choice to
+// the server only when it is confirmed. Open path: a folder on this machine,
+// read by the server, for a new batch or one the Batches screen adds to.
 const AisImages = {
+  ctx: null,             // what the dialog shows: see open / openBatch
   staged: [],            // the selection being edited, one boolean per image
   anchor: -1,            // last plain/Ctrl click, for Shift ranges
   hideDuplicates: true,
   thumbSide: 256,
+  folder: null,          // the add shown (its id, or "earlier"), null for all
+  mode: "grid",          // "grid" (cards) or "list" (details)
+  sort: { col: "index" , dir: 1 },
+  modeKey: "ais-images-view",
 
   init() {
     this.modalEl = Dom.get( "ais-images-modal" );
@@ -19,19 +26,23 @@ const AisImages = {
         this.loadThumb( Number( item.target.dataset.index ) , item.target.querySelector( ".ais-thumb" ) );
       }
     } ) , { root: this.grid.closest( ".modal-body" ) , rootMargin: "200px" } );
+    try {
+      if ( window.localStorage.getItem( this.modeKey ) === "list" ) this.mode = "list";
+    } catch ( error ) { /* storage blocked: cards */ }
 
     Dom.get( "ais-images-open" ).addEventListener( "click" , () => this.open() );
     Dom.get( "ais-images-all" ).addEventListener( "click" , () => this.setVisible( true ) );
     Dom.get( "ais-images-none" ).addEventListener( "click" , () => this.setVisible( false ) );
-    Dom.get( "ais-images-mine" ).addEventListener( "click" , () => this.selectMine() );
     Dom.get( "ais-images-use" ).addEventListener( "click" , () => this.confirm() );
     Dom.get( "ais-images-filter" ).addEventListener( "input" , () => this.applyFilter() );
     Dom.get( "ais-images-hide-dups" ).addEventListener( "change" , ( e ) => this.setHideDuplicates( e.target.checked ) );
+    Dom.all( "[data-images-mode]" ).forEach( ( button ) => button.addEventListener( "click" ,
+      () => this.setMode( button.getAttribute( "data-images-mode" ) ) ) );
     this.grid.addEventListener( "keydown" , ( e ) => {
-      if ( ( e.ctrlKey || e.metaKey ) && ( e.key === "a" || e.key === "A" ) ) { e.preventDefault(); this.setVisible( true ); }
+      if ( Shortcuts.is( e , "images.select_all" ) ) { e.preventDefault(); this.setVisible( true ); }
     } );
     this.modalEl.addEventListener( "keydown" , ( e ) => {
-      if ( e.key === "Enter" && e.target.tagName !== "BUTTON" ) { e.preventDefault(); this.confirm(); }
+      if ( Shortcuts.is( e , "images.use_selected" ) && e.target.tagName !== "BUTTON" ) { e.preventDefault(); this.confirm(); }
     } );
 
     this.initPath();
@@ -39,61 +50,218 @@ const AisImages = {
 
   // --- Images ----------------------------------------------------------------
 
+  entries() {
+    return this.ctx ? this.ctx.entries : [];
+  },
+
+  // The Process screen's batch, its live rows and done marks.
   open() {
     if ( !Ais.images.length ) return;
-    this.staged = Ais.images.map( ( entry ) => entry.included );
+    this.ctx = {
+      batch: Ais.batch,
+      entries: Ais.images,
+      process: true,
+      count: ( entry ) => Ais.acceptedCount( entry ),
+      complete: ( entry ) => Ais.isComplete( entry ),
+      assignee: ( entry ) => {
+        const id = Ais.assigneeOf( entry );
+        return id == null ? null : { id: id , name: Ais.assigneeName( id ) };
+      },
+    };
+    this.show( null );
+  },
+
+  // Any batch (a Batches row or record), fetched now; addId opens it on that
+  // add (a folder), "earlier" on images from before adds were kept.
+  async openBatch( b , addId ) {
+    let batch;
+    let status;
+    try {
+      [ batch , status ] = await Promise.all( [ Api.request( "/api/ais/batches/" + b.id ) ,
+        Api.request( "/api/ais/batches/" + b.id + "/status" ) ] );
+    } catch ( error ) {
+      App.showError( error.message );
+      return;
+    }
+    if ( !batch.images.length ) return;
+    const byKey = new Map( status.images.map( ( image ) => [ image.key , image ] ) );
+    const of = ( entry ) => byKey.get( entry.key ) || {};
+    this.ctx = {
+      batch: batch,
+      entries: batch.images.map( ( image ) => ( { key: image.key , cell: image.cell , dir: image.dir , dup_of: image.dup_of ,
+        add_id: image.add_id , original_key: image.original_key , files: image.files } ) ),
+      process: false,
+      count: ( entry ) => of( entry ).ais || 0,
+      complete: ( entry ) => Boolean( of( entry ).ais || of( entry ).done ),
+      assignee: ( entry ) => of( entry ).assignee != null ? { id: of( entry ).assignee , name: of( entry ).assignee_name || "" } : null,
+    };
+    this.show( addId == null ? null : addId );
+  },
+
+  show( folder ) {
+    const entries = this.entries();
+    const excluded = new Set( this.ctx.batch.excluded || [] );
+    this.staged = entries.map( ( entry ) => !excluded.has( entry.key ) );
     this.anchor = -1;
+    this.folder = folder;
     Dom.get( "ais-images-filter" ).value = "";
-    const batch = Ais.batch || { name: "" };
+    const batch = this.ctx.batch;
     Dom.text( Dom.get( "ais-images-batch" ) , batch.path || batch.name );
-    const dups = Ais.images.filter( ( entry ) => entry.dup_of != null ).length;
+    const dups = entries.filter( ( entry ) => entry.dup_of != null ).length;
     Dom.show( Dom.get( "ais-images-dups" ) , dups > 0 );
     Dom.text( Dom.get( "ais-images-dups-count" ) , I18n.get( "ais.n_duplicates" ).replace( "{n}" , dups ) );
     // Hidden by default when the batch has duplicates nobody has included.
-    Dom.show( Dom.get( "ais-images-mine" ) , Boolean( Ais.myKeys() ) );
-    this.hideDuplicates = dups > 0 && Ais.images.every( ( entry ) => entry.dup_of == null || !entry.included );
+    this.hideDuplicates = dups > 0 && entries.every( ( entry , i ) => entry.dup_of == null || !this.staged[ i ] );
     Dom.get( "ais-images-hide-dups" ).checked = this.hideDuplicates;
+    Dom.get( "ais-images-use" ).disabled = false;
+    this.renderFolders();
     this.render();
-    this.modal.show();
-    this.modalEl.addEventListener( "shown.bs.modal" , () => this.grid.focus() , { once: true } );
+    if ( !this.modalEl.classList.contains( "show" ) ) {
+      this.modal.show();
+      this.modalEl.addEventListener( "shown.bs.modal" , () => this.grid.focus() , { once: true } );
+    }
   },
 
-  confirm( showIndex ) {
-    Ais.images.forEach( ( entry , i ) => { entry.included = this.staged[ i ]; } );
+  // The adds as chips: All, then each folder (or set of files) in the order
+  // it came in.
+  renderFolders() {
+    const holder = Dom.get( "ais-images-folders" );
+    Dom.clear( holder );
+    const entries = this.entries();
+    const adds = this.ctx.batch.adds || [];
+    const earlier = entries.filter( ( entry ) => entry.add_id == null ).length;
+    Dom.show( holder , adds.length > 0 );
+    if ( !adds.length ) {
+      this.folder = null;
+      return;
+    }
+    const chip = ( value , icon , label , n , title ) => holder.appendChild( Dom.el( "button" , {
+      class: "btn btn-sm text-truncate ais-folder " + ( this.folder === value ? "btn-primary" : "btn-outline-secondary" ),
+      attrs: { type: "button" , title: title || label , "aria-pressed": String( this.folder === value ) },
+      on: { click: () => { this.folder = value; this.renderFolders(); this.applyFilter(); } },
+      children: [ Dom.el( "i" , { class: "bi " + icon + " me-1" } ) , Dom.el( "span" , { text: label } ) ,
+        Dom.el( "span" , { class: "ms-1 opacity-75" , text: "(" + n + ")" } ) ],
+    } ) );
+    chip( null , "bi-collection" , I18n.get( "ais.folders_all" ) , entries.length );
+    if ( earlier ) chip( "earlier" , "bi-clock-history" , I18n.get( "batches.earlier" ) , earlier );
+    adds.forEach( ( a ) => chip( a.id , a.source === "path" ? "bi-hdd" : "bi-folder2" , a.name ,
+      entries.filter( ( entry ) => entry.add_id === a.id ).length ,
+      [ a.path || a.name , a.added_by_name , new Date( a.added_at ).toLocaleString() ].filter( Boolean ).join( " · " ) ) );
+  },
+
+  addOf( entry ) {
+    return ( this.ctx.batch.adds || [] ).find( ( a ) => a.id === entry.add_id ) || null;
+  },
+
+  setMode( mode ) {
+    this.mode = mode === "list" ? "list" : "grid";
+    try {
+      window.localStorage.setItem( this.modeKey , this.mode );
+    } catch ( error ) { /* storage blocked: this visit only */ }
+    this.render();
+  },
+
+  // Save what changed (both ways) for the team. showIndex: the image a
+  // double-click opens.
+  async confirm( showIndex ) {
+    const ctx = this.ctx;
+    if ( !ctx ) return;
+    const excluded = new Set( ctx.batch.excluded || [] );
+    const on = [];
+    const off = [];
+    ctx.entries.forEach( ( entry , i ) => {
+      if ( this.staged[ i ] && excluded.has( entry.key ) ) on.push( entry.key );
+      if ( !this.staged[ i ] && !excluded.has( entry.key ) ) off.push( entry.key );
+    } );
+    const use = Dom.get( "ais-images-use" );
+    use.disabled = true;
+    let batch = null;
+    try {
+      if ( on.length ) batch = await Api.post( "/api/ais/batches/" + ctx.batch.id + "/include" , { keys: on , included: true } );
+      if ( off.length ) batch = await Api.post( "/api/ais/batches/" + ctx.batch.id + "/include" , { keys: off , included: false } );
+    } catch ( error ) {
+      use.disabled = false;
+      App.showError( error.message );
+      return;
+    }
     this.modal.hide();
-    Ais.inclusionChanged( showIndex != null ? showIndex : Ais.index );
-    Ais.uploadAll();
+    const now = batch ? batch.excluded : ( ctx.batch.excluded || [] );
+    ctx.batch.excluded = now;
+    if ( ctx.process ) {
+      Ais.excludedChanged( now , showIndex != null ? showIndex : null );
+    } else {
+      if ( batch ) Ais.batchChanged( batch , false );
+      if ( showIndex != null ) window.location.hash = Ais.urlFor( ctx.batch , ctx.entries[ showIndex ] );
+    }
+    if ( batch && Batches.showing() ) Batches.refresh( true );
   },
 
   render() {
     this.observer.disconnect();
     Dom.clear( this.grid );
-    Ais.images.forEach( ( entry , i ) => {
+    this.grid.classList.toggle( "ais-images-list" , this.mode === "list" );
+    Dom.all( "[data-images-mode]" ).forEach( ( button ) => {
+      const on = button.getAttribute( "data-images-mode" ) === this.mode;
+      button.classList.toggle( "active" , on );
+      button.setAttribute( "aria-pressed" , String( on ) );
+    } );
+    if ( this.mode === "list" ) this.renderList();
+    else this.renderGrid();
+    this.applyFilter();
+  },
+
+  // Click and double-click are the same on a card and a row.
+  itemHandlers( i ) {
+    return {
+      click: ( e ) => this.onClick( i , e ),
+      // Double-click opens the image: undo what its first click did to
+      // the selection, include it, and confirm.
+      dblclick: () => {
+        if ( this.beforeClick ) this.staged = this.beforeClick;
+        this.staged[ i ] = true;
+        this.confirm( i );
+      },
+    };
+  },
+
+  badges( entry ) {
+    const ctx = this.ctx;
+    const pair = Ais.kind( entry ) === "pair";
+    const czi = Ais.kind( entry ) === "czi";
+    const count = ctx.count( entry );
+    const badges = [
+      Dom.el( "span" , { class: "badge " + ( pair || czi ? "text-bg-secondary" : "text-bg-warning" ) ,
+        text: I18n.get( czi ? "ais.czi" : pair ? "ais.pair" : "ais.single" ) } ),
+    ];
+    if ( entry.dup_of != null ) {
+      badges.push( Dom.el( "span" , { class: "badge text-bg-danger" , text: I18n.get( "ais.duplicate_of" ).replace( "{n}" , entry.dup_of + 1 ) } ) );
+    }
+    if ( count ) badges.push( Dom.el( "span" , { class: "badge text-bg-success" , text: count + " AIS" } ) );
+    if ( ctx.complete( entry ) ) badges.push( Dom.el( "i" , { class: "bi bi-check-circle-fill text-success" , attrs: { title: I18n.get( "ais.complete" ) } } ) );
+    return badges;
+  },
+
+  assigneeBadge( entry ) {
+    const owner = this.ctx.assignee( entry );
+    if ( !owner ) return null;
+    const me = Ais.me && owner.id === Ais.me.id;
+    return Dom.el( "span" , { class: "ais-card-assignee " + ( me ? "text-primary fw-semibold" : "text-body-secondary" ) , children: [
+      Dom.el( "i" , { class: "bi bi-person me-1" } ) , Dom.el( "span" , { text: owner.name } ) ] } );
+  },
+
+  renderGrid() {
+    this.entries().forEach( ( entry , i ) => {
       const main = entry.files[ Ais.traced( entry ) ];
       const name = Ais.splitName( main.name );
       const pair = Ais.kind( entry ) === "pair";
-      const czi = Ais.kind( entry ) === "czi";
-      const count = Ais.acceptedCount( entry );
       const box = Dom.el( "input" , { class: "form-check-input ais-card-check" , attrs: { type: "checkbox" , tabindex: "-1" , "aria-label": main.name } } );
-      const badges = [
-        Dom.el( "span" , { class: "badge " + ( pair || czi ? "text-bg-secondary" : "text-bg-warning" ) ,
-          text: I18n.get( czi ? "ais.czi" : pair ? "ais.pair" : "ais.single" ) } ),
-      ];
-      if ( entry.dup_of != null ) {
-        badges.push( Dom.el( "span" , { class: "badge text-bg-danger" , text: I18n.get( "ais.duplicate_of" ).replace( "{n}" , entry.dup_of + 1 ) } ) );
-      }
-      if ( count ) badges.push( Dom.el( "span" , { class: "badge text-bg-success" , text: count + " AIS" } ) );
-      if ( Ais.isComplete( entry ) ) badges.push( Dom.el( "i" , { class: "bi bi-check-circle-fill text-success" , attrs: { title: I18n.get( "ais.complete" ) } } ) );
-      const owner = Ais.assigneeOf( entry );
-      if ( owner != null ) {
-        const me = Ais.me && owner === Ais.me.id;
-        badges.push( Dom.el( "span" , { class: "ais-card-assignee " + ( me ? "text-primary fw-semibold" : "text-body-secondary" ) , children: [
-          Dom.el( "i" , { class: "bi bi-person me-1" } ) , Dom.el( "span" , { text: Ais.assigneeName( owner ) } ) ] } ) );
-      }
-      if ( Ais.local.matlab ) badges.push( this.matlabMenu( entry , main.name ) );
+      const badges = this.badges( entry );
+      const owner = this.assigneeBadge( entry );
+      if ( owner ) badges.push( owner );
+      if ( this.ctx.process && Ais.local.matlab ) badges.push( this.matlabMenu( entry , main.name ) );
       const card = Dom.el( "div" , {
-        class: "ais-image-card" + ( i === Ais.index ? " ais-current" : "" ),
-        attrs: { role: "option" , "data-index": String( i ) , title: main.name },
+        class: "ais-image-card ais-item" + ( this.ctx.process && i === Ais.index ? " ais-current" : "" ),
+        attrs: { role: "option" , "data-index": String( i ) , title: main.name + ( entry.original_key ? " · " + entry.original_key : "" ) },
         children: [
           Dom.el( "div" , { class: "ais-thumb" , children: [ Dom.el( "i" , { class: "bi bi-image text-body-tertiary" } ) ] } ),
           box,
@@ -104,24 +272,118 @@ const AisImages = {
               Dom.el( "span" , { class: "text-body-secondary" , text: name.ext } ),
             ] } ),
             pair ? Dom.el( "div" , { class: "small text-body-secondary text-truncate" , text: "+ " + entry.files.raw.name } ) : Dom.el( "span" ),
+            entry.original_key ? Dom.el( "div" , { class: "small text-body-tertiary text-truncate ais-card-original" ,
+              text: I18n.get( "ais.original_name" ) + ": " + entry.original_key } ) : Dom.el( "span" ),
             Dom.el( "div" , { class: "d-flex flex-wrap align-items-center gap-1 mt-1" , children: badges } ),
           ] } ),
         ],
-        on: {
-          click: ( e ) => this.onClick( i , e ),
-          // Double-click opens the image: undo what its first click did to
-          // the selection, include it, and confirm.
-          dblclick: () => {
-            if ( this.beforeClick ) this.staged = this.beforeClick;
-            this.staged[ i ] = true;
-            this.confirm( i );
-          },
-        },
+        on: this.itemHandlers( i ),
       } );
       this.grid.appendChild( card );
       this.observer.observe( card );
     } );
-    this.applyFilter();
+  },
+
+  // --- the details list ------------------------------------------------------
+
+  // The list's columns: [ key , label key , value for sorting ]; Original
+  // name only when the server sent originals (admins).
+  columns() {
+    const main = ( entry ) => entry.files[ Ais.traced( entry ) ];
+    const size = ( entry ) => Object.values( entry.files ).reduce( ( sum , f ) => sum + ( f.size || 0 ) , 0 );
+    const add = ( entry ) => this.addOf( entry );
+    const cols = [
+      [ "index" , "ais.col_number" , ( entry , i ) => i ],
+      [ "name" , "ais.col_name" , ( entry ) => main( entry ).name.toLowerCase() ],
+      [ "folder" , "ais.col_folder" , ( entry ) => ( add( entry ) ? add( entry ).name : "" ).toLowerCase() ],
+      [ "dir" , "ais.col_subfolder" , ( entry ) => ( entry.dir || "" ).toLowerCase() ],
+      [ "kind" , "ais.col_kind" , ( entry ) => Ais.kind( entry ) ],
+      [ "size" , "ais.col_size" , size ],
+      [ "modified" , "ais.col_modified" , ( entry ) => main( entry ).modified || "" ],
+      [ "created" , "ais.col_created" , ( entry ) => main( entry ).created || "" ],
+      [ "added" , "ais.col_added" , ( entry ) => ( add( entry ) ? add( entry ).added_at : "" ) ],
+      [ "state" , "ais.col_state" , ( entry ) => ( this.ctx.complete( entry ) ? 1e6 : 0 ) + this.ctx.count( entry ) ],
+      [ "assignee" , "ais.col_assignee" , ( entry ) => ( this.ctx.assignee( entry ) || { name: "" } ).name.toLowerCase() ],
+    ];
+    if ( this.entries().some( ( entry ) => entry.original_key ) ) {
+      cols.push( [ "original" , "ais.original_name" , ( entry ) => ( entry.original_key || "" ).toLowerCase() ] );
+    }
+    return cols;
+  },
+
+  date( iso ) {
+    return iso ? new Date( iso ).toLocaleString( [] , { dateStyle: "short" , timeStyle: "short" } ) : "";
+  },
+
+  size( bytes ) {
+    if ( !bytes ) return "";
+    const units = [ "B" , "KB" , "MB" , "GB" ];
+    let n = bytes;
+    let u = 0;
+    while ( n >= 1024 && u < units.length - 1 ) { n /= 1024; u += 1; }
+    return ( u ? n.toFixed( n < 10 ? 1 : 0 ) : n ) + " " + units[ u ];
+  },
+
+  renderList() {
+    const cols = this.columns();
+    const sortBy = cols.find( ( c ) => c[ 0 ] === this.sort.col ) || cols[ 0 ];
+    const entries = this.entries();
+    const order = entries.map( ( _ , i ) => i ).sort( ( a , b ) => {
+      const x = sortBy[ 2 ]( entries[ a ] , a );
+      const y = sortBy[ 2 ]( entries[ b ] , b );
+      return ( x < y ? -1 : x > y ? 1 : a - b ) * this.sort.dir;
+    } );
+    const head = Dom.el( "tr" , { children: [ Dom.el( "th" , { class: "ais-list-check" } ) ].concat( cols.map( ( [ key , label ] ) => {
+      const on = key === sortBy[ 0 ];
+      return Dom.el( "th" , { class: "text-nowrap" , attrs: { "aria-sort": on ? ( this.sort.dir > 0 ? "ascending" : "descending" ) : "none" } , children: [
+        Dom.el( "button" , { class: "btn btn-link btn-sm p-0 text-reset text-decoration-none fw-semibold" , attrs: { type: "button" } ,
+          on: { click: () => {
+            this.sort = { col: key , dir: on ? -this.sort.dir : 1 };
+            this.render();
+          } },
+          children: [ Dom.el( "span" , { text: I18n.get( label ) } ) ].concat( on
+            ? [ Dom.el( "i" , { class: "bi ms-1 " + ( this.sort.dir > 0 ? "bi-caret-up-fill" : "bi-caret-down-fill" ) } ) ] : [] ) } ),
+      ] } );
+    } ) ) } );
+    const rows = order.map( ( i ) => {
+      const entry = entries[ i ];
+      const main = entry.files[ Ais.traced( entry ) ];
+      const add = this.addOf( entry );
+      const total = Object.values( entry.files ).reduce( ( sum , f ) => sum + ( f.size || 0 ) , 0 );
+      const owner = this.ctx.assignee( entry );
+      const cells = {
+        index: String( i + 1 ),
+        name: [ Dom.el( "div" , { class: "fw-semibold text-truncate" , text: main.name } ) ].concat( Ais.kind( entry ) === "pair"
+          ? [ Dom.el( "div" , { class: "small text-body-secondary text-truncate" , text: "+ " + entry.files.raw.name } ) ] : [] ),
+        folder: add ? add.name : ( ( this.ctx.batch.adds || [] ).length ? I18n.get( "batches.earlier" ) : "" ),
+        dir: entry.dir || "",
+        kind: this.badges( entry ).slice( 0 , 2 ),
+        size: this.size( total ),
+        modified: this.date( main.modified ),
+        created: this.date( main.created ),
+        added: add ? [ this.date( add.added_at ) , add.added_by_name ].filter( Boolean ).join( " · " ) : "",
+        state: this.badges( entry ).slice( 2 ),
+        assignee: owner ? owner.name : "",
+        original: entry.original_key || "",
+      };
+      const box = Dom.el( "input" , { class: "form-check-input ais-card-check" , attrs: { type: "checkbox" , tabindex: "-1" , "aria-label": main.name } } );
+      return Dom.el( "tr" , {
+        class: "ais-item ais-image-row" + ( this.ctx.process && i === Ais.index ? " ais-row-current" : "" ),
+        attrs: { role: "option" , "data-index": String( i ) , title: main.name },
+        on: this.itemHandlers( i ),
+        children: [ Dom.el( "td" , { class: "ais-list-check" , children: [ box ] } ) ].concat( cols.map( ( [ key ] ) => {
+          const value = cells[ key ];
+          const td = Dom.el( "td" , { class: "ais-list-" + key } );
+          if ( Array.isArray( value ) ) value.forEach( ( node ) => td.appendChild( node ) );
+          else Dom.text( td , value );
+          return td;
+        } ) ),
+      } );
+    } );
+    this.grid.appendChild( Dom.el( "table" , { class: "table table-sm table-hover align-middle small mb-0 ais-images-table" , children: [
+      Dom.el( "thead" , { class: "sticky-top" , children: [ head ] } ),
+      Dom.el( "tbody" , { children: rows } ),
+    ] } ) );
   },
 
   // The card's MATLAB menu: its own action, never the selection or opening.
@@ -153,7 +415,7 @@ const AisImages = {
   // -- which can for an Open-path file or one already uploaded (a .czi
   // always: tiff.js does not read them).
   async loadThumb( i , holder ) {
-    const entry = Ais.images[ i ];
+    const entry = this.entries()[ i ];
     if ( !entry || !holder ) return;
     const f = entry.files[ Ais.traced( entry ) ];
     // Picked on the Batches screen and still waiting to upload: read here too.
@@ -197,15 +459,17 @@ const AisImages = {
   },
 
   visible() {
-    return Dom.all( ".ais-image-card" , this.grid ).filter( ( card ) => !card.hidden ).map( ( card ) => Number( card.dataset.index ) );
+    return Dom.all( ".ais-item" , this.grid ).filter( ( card ) => !card.hidden ).map( ( card ) => Number( card.dataset.index ) );
   },
 
   applyFilter() {
     const q = Dom.get( "ais-images-filter" ).value.trim().toLowerCase();
-    Dom.all( ".ais-image-card" , this.grid ).forEach( ( card ) => {
-      const entry = Ais.images[ Number( card.dataset.index ) ];
-      const names = ( entry.dir + " " + Object.values( entry.files ).map( ( f ) => f.name ).join( " " ) ).toLowerCase();
-      card.hidden = ( Boolean( q ) && !names.includes( q ) ) || ( this.hideDuplicates && entry.dup_of != null );
+    const folder = this.folder;
+    Dom.all( ".ais-item" , this.grid ).forEach( ( card ) => {
+      const entry = this.entries()[ Number( card.dataset.index ) ];
+      const names = ( entry.dir + " " + ( entry.original_key || "" ) + " " + Object.values( entry.files ).map( ( f ) => f.name ).join( " " ) ).toLowerCase();
+      const elsewhere = folder != null && ( folder === "earlier" ? entry.add_id != null : entry.add_id !== folder );
+      card.hidden = elsewhere || ( Boolean( q ) && !names.includes( q ) ) || ( this.hideDuplicates && entry.dup_of != null );
     } );
     this.refresh();
   },
@@ -214,7 +478,7 @@ const AisImages = {
   // them back by itself.
   setHideDuplicates( on ) {
     this.hideDuplicates = on;
-    if ( on ) Ais.images.forEach( ( entry , i ) => { if ( entry.dup_of != null ) this.staged[ i ] = false; } );
+    if ( on ) this.entries().forEach( ( entry , i ) => { if ( entry.dup_of != null ) this.staged[ i ] = false; } );
     this.applyFilter();
   },
 
@@ -247,14 +511,6 @@ const AisImages = {
     this.refresh();
   },
 
-  // Exactly the images assigned to whoever is signed in.
-  selectMine() {
-    const mine = Ais.myKeys();
-    if ( !mine ) return;
-    Ais.images.forEach( ( entry , i ) => { this.staged[ i ] = mine.has( entry.key ); } );
-    this.refresh();
-  },
-
   setVisible( on ) {
     this.visible().forEach( ( k ) => { this.staged[ k ] = on; } );
     this.refresh();
@@ -262,7 +518,7 @@ const AisImages = {
 
   // Update checkboxes and counts without rebuilding the cards.
   refresh() {
-    Dom.all( ".ais-image-card" , this.grid ).forEach( ( card ) => {
+    Dom.all( ".ais-item" , this.grid ).forEach( ( card ) => {
       const on = this.staged[ Number( card.dataset.index ) ];
       card.classList.toggle( "ais-selected" , on );
       card.setAttribute( "aria-selected" , String( on ) );
@@ -270,7 +526,7 @@ const AisImages = {
     } );
     const n = this.staged.filter( Boolean ).length;
     Dom.text( Dom.get( "ais-images-selected" ) , I18n.get( "ais.n_selected" ).replace( "{n}" , n ).replace( "{total}" , this.staged.length ) );
-    const done = Ais.images.filter( ( entry , i ) => this.staged[ i ] && Ais.isComplete( entry ) ).length;
+    const done = this.entries().filter( ( entry , i ) => this.staged[ i ] && this.ctx.complete( entry ) ).length;
     Dom.text( Dom.get( "ais-images-progress" ) , I18n.get( "ais.completed" ).replace( "{done}" , done ).replace( "{total}" , n ) );
     const use = Dom.get( "ais-images-use" );
     Dom.text( use , I18n.get( "ais.use_n" ).replace( "{n}" , n ) );

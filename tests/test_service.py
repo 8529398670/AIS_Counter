@@ -187,3 +187,31 @@ def _tiff(arr: np.ndarray) -> bytes:
     buffer = io.BytesIO()
     tifffile.imwrite(buffer, arr)
     return buffer.getvalue()
+
+
+def test_a_czi_exports_its_channels_and_processed_image_as_tiffs(tmp_path):
+    import io
+
+    import pytest
+    import tifffile
+
+    from app.analysis import preprocess
+    from app.analysis.czi import read_czi
+    from app.analysis.images import ImageError
+    from app.analysis.service import Library
+    from tests.czidata import write_czi
+
+    ais_channel = (synthetic()[0] >> 4).astype(np.uint16)
+    data = write_czi({"Alexa Fluor 488": ais_channel, "AMCA": ais_channel[::-1].copy()})
+    library = Library(tmp_path)
+    sha = library.add(data)["sha256"]
+    planes = list(read_czi(data).channels.values())
+    for i, plane in enumerate(planes):
+        out = tifffile.imread(io.BytesIO(library.channel_tiff(sha, i)))
+        assert out.dtype == np.uint16 and np.array_equal(out, plane)
+    assert np.array_equal(tifffile.imread(io.BytesIO(library.processed_tiff(sha))), preprocess.processed(library.array(sha)))
+    with pytest.raises(ImageError):
+        library.channel_tiff(sha, len(planes))
+    tiff = library.add(library.channel_tiff(sha, 0))["sha256"]
+    with pytest.raises(ImageError):
+        library.processed_tiff(tiff)

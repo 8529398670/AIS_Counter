@@ -19,8 +19,17 @@ const I18n = {
     return this.data;
   },
 
-  // Resolve a dotted key like "admin.create_button".
+  // Resolve a dotted key like "admin.create_button". {key:group.action} in
+  // the text becomes that action's keys as they are now bound
+  // (static/js/shortcuts.js), so no text names a key that has moved.
   get( key ) {
+    const value = this.raw( key );
+    if ( value.indexOf( "{key:" ) < 0 || typeof Shortcuts === "undefined" ) return value;
+    return value.replace( /\{key:([a-z0-9_.]+)\}/g , ( match , id ) => Shortcuts.label( id ) );
+  },
+
+  // The text as language.yaml has it.
+  raw( key ) {
     let cursor = this.data;
     const parts = String( key ).split( "." );
     for ( let index = 0; index < parts.length; index += 1 ) {
@@ -30,10 +39,12 @@ const I18n = {
     return typeof cursor === "string" ? cursor : "";
   },
 
-  apply( root ) {
+  // only( key ), if given, picks the keys to stamp (Shortcuts.refreshText).
+  apply( root , only ) {
     const scope = root || document;
 
     Dom.all( "[data-i18n]" , scope ).forEach( function ( element ) {
+      if ( only && !only( element.getAttribute( "data-i18n" ) ) ) return;
       const value = I18n.get( element.getAttribute( "data-i18n" ) );
       if ( value === "" ) {
         element.hidden = true;
@@ -51,6 +62,7 @@ const I18n = {
       element.getAttribute( "data-i18n-attr" ).split( "," ).forEach( function ( pair ) {
         const halves = pair.split( ":" );
         if ( halves.length !== 2 ) return;
+        if ( only && !only( halves[ 1 ].trim() ) ) return;
         const value = I18n.get( halves[ 1 ].trim() );
         if ( value !== "" ) element.setAttribute( halves[ 0 ].trim() , value );
       } );

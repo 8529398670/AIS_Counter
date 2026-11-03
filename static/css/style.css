@@ -207,6 +207,15 @@ th { color: var(--bs-secondary-color); font-size: 0.8rem; text-transform: upperc
 .about-report code { color: inherit; }
 .about-report table { width: auto; }
 
+/* The Keyboard shortcuts screen: an action per row, its keys as chips. */
+.shortcuts-table { max-width: 48rem; }
+.shortcuts-table th { width: 40%; color: inherit; font-size: inherit; text-transform: none; letter-spacing: normal; }
+.shortcuts-keys { display: flex; flex-wrap: wrap; align-items: center; gap: 0.375rem; }
+.shortcut-key { display: inline-flex; align-items: center; gap: 0.125rem; }
+.shortcut-key .btn { color: var(--bs-secondary-color); line-height: 1; }
+.shortcut-press { color: var(--app-accent); font-style: italic; }
+.shortcut-changed th { font-weight: 600 !important; }
+
 /* The Appearance screen's presets, each drawn in its own colours. */
 .theme-picker { display: flex; flex-wrap: wrap; gap: 0.5rem; }
 .theme-choice {
@@ -334,6 +343,21 @@ th { color: var(--bs-secondary-color); font-size: 0.8rem; text-transform: upperc
 .ais-card-check { position: absolute; top: 0.5rem; left: 0.5rem; width: 1.25rem; height: 1.25rem; margin: 0; }
 .ais-card-body { padding: 0.4rem 0.6rem 0.5rem; font-size: 0.8rem; }
 .ais-card-name { overflow-wrap: anywhere; line-height: 1.25; }
+.ais-card-original { overflow-wrap: anywhere; }
+/* Its folder bar (one chip per add) and the details list. */
+.ais-images-folders { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+.ais-folder { max-width: 18rem; }
+.ais-images-grid.ais-images-list { display: block; overflow-x: auto; }
+.ais-images-table thead { background: var(--bs-body-bg); }
+.ais-image-row { cursor: pointer; user-select: none; opacity: 0.55; }
+.ais-image-row.ais-selected { opacity: 1; }
+.ais-image-row.ais-selected > td { background: var(--bs-primary-bg-subtle); }
+.ais-image-row.ais-row-current > td:first-child { box-shadow: inset 3px 0 0 var(--bs-warning); }
+.ais-list-check { width: 2rem; }
+.ais-list-check .ais-card-check { position: static; }
+.ais-list-name { max-width: 22rem; }
+.ais-list-index, .ais-list-size, .ais-list-modified, .ais-list-created, .ais-list-added { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.ais-list-kind > *, .ais-list-state > * { margin-right: 0.25rem; }
 
 /* Open path. */
 .ais-path-list { max-height: 50vh; overflow-y: auto; }
@@ -363,6 +387,8 @@ th { color: var(--bs-secondary-color); font-size: 0.8rem; text-transform: upperc
 .batches-measures { display: flex; flex-direction: column; gap: 0.25rem; margin-top: 0.75rem; }
 .batches-measure { display: grid; grid-template-columns: 5.5rem 1fr auto; align-items: center; gap: 0.5rem; font-variant-numeric: tabular-nums; }
 .batches-bar { height: 0.5rem; }
+.batches-folders { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+.batches-folder { max-width: 16rem; }
 .batches-status { margin-top: 0.25rem; }
 .batches-status-scroll { max-height: 22rem; overflow-y: auto; }
 .min-w-0 { min-width: 0; }

@@ -77,6 +77,7 @@ const Api = {
 
   rename( displayName )        { return this.post( "/api/account/rename" , { display_name: displayName } ); },
   setPin( pin )                { return this.post( "/api/account/pin" , { pin: pin } ); },
+  saveShortcuts( map )         { return this.post( "/api/account/shortcuts" , { shortcuts: map } ); },
   createMyLoginLink()          { return this.post( "/api/account/login-link" ); },
   logout()                     { return this.post( "/api/logout" ); },
   listTeam()                   { return this.request( "/api/team" ); },

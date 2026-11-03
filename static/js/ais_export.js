@@ -3,7 +3,11 @@
 // with every accepted trace drawn and numbered as the Saved layer draws it.
 // Rendering happens here from the server's preview of each image, so it
 // works at any point in a batch. The Batches screen's reports (one batch or
-// all) come from here too: an Excel workbook (xlsx.js), or a ZIP with it.
+// all) come from here too: an Excel workbook (xlsx.js), or a ZIP with it and
+// what the Export dialog asks for -- the traced PNGs (as before), the
+// original files, the processed images, a .czi's channels as 16-bit TIFFs,
+// and (admins, blinded batches) an Original-names folder of links to them
+// with the batch's __Translation.txt.
 const AisExport = {
   cols: [ "batch_name" , "batch_id" , "image" , "n" , "file" , "source" , "length_um" , "start_um" , "end_um" , "mid_um" , "max_um" , "arc_um" ,
     "threshold_initial" , "threshold" , "click_x" , "click_y" , "click2_x" , "click2_y" , "profile_points" ,
@@ -13,9 +17,61 @@ const AisExport = {
   // were saved leave them blank.
   settingCols: [ "smooth" , "pixconv" , "f" , "kernel" , "sigma" , "strel" , "min_pixels" , "max_path" , "max_passes" , "spline_p" , "window_um" ],
 
+  linkKey: "ais-export-links",
+  bigBytes: 2 * 1024 * 1024 * 1024,
+
   init() {
     Dom.get( "ais-export-csv" ).addEventListener( "click" , () => this.exportCsv() );
     Dom.get( "ais-export-zip" ).addEventListener( "click" , () => this.exportZip() );
+    this.optionsModal = bootstrap.Modal.getOrCreateInstance( Dom.get( "export-options-modal" ) );
+    Dom.get( "export-options-names" ).addEventListener( "change" , () => this.renderOptions() );
+    Dom.get( "export-options-go" ).addEventListener( "click" , () => this.goOptions() );
+  },
+
+  // --- the Export dialog (a ZIP from the Batches screen) -------------------------
+
+  // list: the batches (Batches rows), label for the dialog; onGo( options )
+  // runs the export with { traces, originals, processed, channels, names:
+  // null | "symlink" | "shortcut" | "copy" }.
+  openOptions( list , label , onGo ) {
+    this.optionsGo = onGo;
+    Dom.text( Dom.get( "export-options-batch" ) , label );
+    [ "traces" , "originals" , "processed" , "channels" ].forEach( ( key ) => {
+      Dom.get( "export-options-" + key ).checked = key === "traces";
+    } );
+    const blinded = Batches.admin() && list.some( ( b ) => b.randomized );
+    Dom.show( Dom.get( "export-options-blind" ) , blinded );
+    Dom.get( "export-options-names" ).checked = false;
+    let links = null;
+    try {
+      links = window.localStorage.getItem( this.linkKey );
+    } catch ( error ) { /* storage blocked: the default */ }
+    Dom.get( "export-options-links" ).value = links || this.defaultLinks();
+    this.renderOptions();
+    this.optionsModal.show();
+  },
+
+  // Shortcuts for a Windows computer, symbolic links for the others.
+  defaultLinks() {
+    const platform = ( navigator.userAgentData && navigator.userAgentData.platform ) || navigator.platform || "";
+    return /win/i.test( platform ) ? "shortcut" : "symlink";
+  },
+
+  renderOptions() {
+    Dom.get( "export-options-links" ).disabled = !Dom.get( "export-options-names" ).checked;
+  },
+
+  goOptions() {
+    const checked = ( key ) => Dom.get( "export-options-" + key ).checked;
+    const blinded = !Dom.get( "export-options-blind" ).hidden;
+    const links = Dom.get( "export-options-links" ).value;
+    try {
+      window.localStorage.setItem( this.linkKey , links );
+    } catch ( error ) { /* storage blocked */ }
+    const options = { traces: checked( "traces" ) , originals: checked( "originals" ) , processed: checked( "processed" ) ,
+      channels: checked( "channels" ) , names: blinded && checked( "names" ) ? links : null };
+    this.optionsModal.hide();
+    if ( this.optionsGo ) this.optionsGo( options );
   },
 
   csv( rows ) {
@@ -61,10 +117,10 @@ const AisExport = {
       ? I18n.get( "ais.exporting" ).replace( "{done}" , done ).replace( "{total}" , total ) : "" ) );
   },
 
-  // The ZIP: results.csv, extra (more files, e.g. a batch report) and one PNG
-  // per image, rows grouped by batch and image. progress( done , total ) per
-  // image, then ( 0 , 0 ) when done.
-  async zip( rows , base , progress , extra ) {
+  // The ZIP: results.csv, extra (more files, e.g. a batch report) and, with
+  // traces (the default), one PNG per image, rows grouped by batch and image.
+  // progress( done , total ) per image, then ( 0 , 0 ) when done.
+  async zip( rows , base , progress , extra , traces ) {
     const groups = new Map();
     rows.forEach( ( row ) => {
       const key = row.batch_id + "\n" + row.image;
@@ -74,7 +130,7 @@ const AisExport = {
     const multiBatch = new Set( rows.map( ( row ) => row.batch_id ) ).size > 1;
     const files = [ { name: "results.csv" , data: this.csv( rows ) } ].concat( extra || [] );
     // A few images at a time, each put back in its place once drawn.
-    const list = Array.from( groups.values() );
+    const list = traces === false ? [] : Array.from( groups.values() );
     const pngs = new Array( list.length );
     const missing = new Array( list.length );
     let done = 0;
@@ -177,8 +233,9 @@ const AisExport = {
   },
 
   // "xlsx": the report on its own; "zip": the report, its summary as CSV,
-  // results.csv and the traced PNGs.
-  async exportReport( items , label , kind , progress ) {
+  // results.csv, the traced PNGs and the files options asks for (see
+  // openOptions; none given: the traces only).
+  async exportReport( items , label , kind , progress , options ) {
     const base = "ais_" + this.safe( label ) + "_" + new Date().toISOString().slice( 0 , 10 );
     const sheets = this.sheets( items );
     const workbook = Xlsx.build( sheets );
@@ -187,10 +244,106 @@ const AisExport = {
       return;
     }
     const rows = items.flatMap( ( item ) => item.rows );
+    const opts = options || { traces: true };
+    const files = await this.imageFiles( items , opts , progress );
+    if ( files === null ) return;
     await this.zip( rows , base , progress , [
       { name: "report.xlsx" , data: new Uint8Array( await workbook.arrayBuffer() ) },
       { name: "summary.csv" , data: this.sheetCsv( sheets[ 0 ] ) },
-    ] );
+    ].concat( files ) , opts.traces !== false );
+  },
+
+  // --- the image files of a ZIP ------------------------------------------------------
+
+  async bytes( url ) {
+    const response = await fetch( url , { credentials: "same-origin" } );
+    if ( !response.ok ) {
+      let message = response.statusText;
+      try {
+        message = ( await response.json() ).error || message;
+      } catch ( error ) { /* not JSON */ }
+      throw new Error( message );
+    }
+    return new Uint8Array( await response.arrayBuffer() );
+  },
+
+  // What to fetch for one image: [{ folder, name, url, size }] -- originals:
+  // its .czi, or its raw TIFF (or the processed one when that is all there
+  // is); processed: a pair's processed TIFF, a .czi's processed AIS channel;
+  // channels: each of a .czi's channels.
+  async planImage( image , opts ) {
+    const out = [];
+    const f = image.files;
+    const file = ( folder , x ) => out.push( { folder: folder , name: x.name , url: "/api/ais/files/" + x.sha + "/file" , size: x.size || 0 } );
+    if ( opts.originals ) {
+      if ( f.czi ) file( "originals" , f.czi );
+      else if ( f.raw ) file( "originals" , f.raw );
+      else if ( f.processed ) file( "originals" , f.processed );
+    }
+    if ( opts.processed ) {
+      if ( f.czi ) {
+        out.push( { folder: "processed" , name: image.cell + Ais.processedSuffix , url: "/api/ais/files/" + f.czi.sha + "/processed.tif" ,
+          size: f.czi.size || 0 } );
+      } else if ( f.processed && f.raw ) {
+        file( "processed" , f.processed );
+      }
+    }
+    if ( opts.channels && f.czi ) {
+      const channels = ( await Api.request( "/api/ais/files/" + f.czi.sha + "/channels" ) ).channels;
+      channels.forEach( ( c , i ) => out.push( { folder: "channels" , name: image.cell + "_c" + ( i + 1 ) + "_" + this.safe( c.name ) + ".tif" ,
+        url: "/api/ais/files/" + f.czi.sha + "/channel/" + c.index + ".tif" , size: 0 } ) );
+    }
+    return out;
+  },
+
+  // The ZIP entries of every included image's files, in a folder per batch
+  // when there are several, each kind of file in its own folder; and with
+  // names, an "original names" folder pointing at them and __Translation.txt.
+  // null when it would be too big and the person says not to go on.
+  async imageFiles( items , opts , progress ) {
+    if ( !opts.originals && !opts.processed && !opts.channels ) return [];
+    const multi = items.length > 1;
+    const plan = [];
+    const extra = [];
+    for ( const item of items ) {
+      const prefix = multi ? this.safe( item.batch.name ) + "/" : "";
+      const batch = await Api.request( "/api/ais/batches/" + item.batch.id );
+      const excluded = new Set( batch.excluded || [] );
+      for ( const image of batch.images ) {
+        if ( excluded.has( image.key ) ) continue;
+        const dir = image.dir ? image.dir + "/" : "";
+        ( await this.planImage( image , opts ) ).forEach( ( p ) => plan.push( Object.assign( p , { prefix: prefix , dir: dir , image: image } ) ) );
+      }
+      if ( opts.names && batch.images.some( ( image ) => image.original_key ) ) {
+        extra.push( { name: prefix + "__Translation.txt" , data: await this.bytes( "/api/ais/batches/" + batch.id + "/translation.txt" ) } );
+      }
+    }
+    const total = plan.reduce( ( sum , p ) => sum + p.size , 0 ) * ( opts.names === "copy" ? 2 : 1 );
+    if ( total > this.bigBytes && !window.confirm( I18n.get( "batches.export_big" ).replace( "{size}" , AisImages.size( total ) ) ) ) return null;
+    const files = new Array( plan.length );
+    let done = 0;
+    progress( 0 , plan.length );
+    await Ais.pool( plan , Ais.concurrency , async ( p , i ) => {
+      files[ i ] = { name: p.prefix + p.folder + "/" + p.dir + p.name , data: await this.bytes( p.url ) };
+      done += 1;
+      progress( done , plan.length );
+    } );
+    const out = files.slice();
+    if ( opts.names ) {
+      plan.forEach( ( p , i ) => {
+        const image = p.image;
+        if ( !image.original_key || !p.name.startsWith( image.cell ) ) return;
+        const original = image.original_cell + p.name.slice( image.cell.length );
+        // From original names/<folder>/<dir> back up to the batch's top.
+        const depth = 2 + ( p.dir ? p.dir.split( "/" ).length - 1 : 0 );
+        const target = "../".repeat( depth ) + p.folder + "/" + p.dir + p.name;
+        const at = p.prefix + "original names/" + p.folder + "/" + p.dir + original;
+        if ( opts.names === "symlink" ) out.push( { name: at , data: target , link: true } );
+        else if ( opts.names === "shortcut" ) out.push( { name: at + ".lnk" , data: Lnk.build( target ) } );
+        else out.push( { name: at , data: files[ i ].data } );
+      } );
+    }
+    return out.concat( extra );
   },
 
   // The traced image's id on the server, stored with the row. If this

@@ -748,25 +748,26 @@ const AisAuto = {
   },
 
   // Keys while a run is on: true when handled. A hand trace or an edit
-  // waiting for Enter / N keeps those keys; Esc reaches here only when no
-  // edit or Edit / Delete tool is on (ais.js).
+  // waiting to be accepted keeps the next and skip keys; stop reaches here
+  // only when no edit is being cancelled (ais.js).
   onKey( event ) {
     if ( !this.run ) return false;
-    const key = event.key;
-    if ( key === "Escape" ) {
+    const is = ( action ) => Shortcuts.is( event , "auto." + action );
+    if ( is( "stop" ) ) {
       event.preventDefault();
       this.stop();
       return true;
     }
     if ( Ais.pending() ) return false;
-    // Saving in the background: Enter and N are the hand tracing's.
+    // Saving in the background: the next and skip keys are the hand tracing's.
     if ( this.phase === "finding" && this.run.mode !== "each" ) return false;
-    if ( key === "Enter" || key === " " ) {
+    if ( is( "next" ) ) {
       event.preventDefault();
       this.next();
       return true;
     }
-    if ( key === "n" || key === "N" ) {
+    if ( is( "skip" ) ) {
+      event.preventDefault();
       this.skip();
       return true;
     }

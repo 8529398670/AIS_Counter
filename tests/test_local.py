@@ -7,6 +7,7 @@ import dataclasses
 import hashlib
 import io
 import json
+from datetime import datetime
 from types import SimpleNamespace
 
 import numpy as np
@@ -65,6 +66,9 @@ def test_hashed_files_gives_each_tiff_its_sha(tmp_path):
     assert [f["name"] for f in files] == ["a.tif"]
     assert files[0]["sha"] == hashlib.sha256((tmp_path / "a.tif").read_bytes()).hexdigest()
     assert files[0]["path"] == str(tmp_path.resolve() / "a.tif")
+    # When it was last changed (and made, where the system keeps that), as ISO text.
+    modified = datetime.fromisoformat(files[0]["modified"])
+    assert abs(modified.timestamp() - (tmp_path / "a.tif").stat().st_mtime) < 1
 
 
 def test_hashed_files_reads_subfolders_with_the_folder_name_first(tmp_path):

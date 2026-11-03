@@ -16,6 +16,20 @@ the batch's assignment. Changing the split leaves finished images with
 whoever had them and deals out only the rest. Progress is then counted per
 person as well as for the whole batch.
 
+Names can be blinded as they are added (randomize), the way the lab's
+RandomNames.bat did: each image's cell becomes "<n>-<n>-<n>" (0..32767 each,
+like %RANDOM%), a Zen "_c2_ORG" ending kept, and every file of the image
+renamed to match, so pairs still pair. What a file was called before is kept
+on it (original) for admins: the routes strip it for everyone else, and
+translation() writes it out as the .bat's __Translation.txt.
+
+Each add (a folder or files picked, a server folder) is recorded in the
+batch's adds, and its images carry its add_id, so the Images dialog can show
+them folder by folder. Which images are included is the team's (excluded,
+image keys): left out of stepping through, assigning, progress and exports.
+New duplicates start excluded; a batch from before excluded existed counts
+its duplicates as excluded.
+
 A result is one accepted AIS: the measures, clicks and trace the trace route
 returned, numbered n per image here (max + 1) so two people accepting on the
 same image at once cannot both get the same number. Deleting one renumbers
@@ -29,6 +43,7 @@ from __future__ import annotations
 import hashlib
 import math
 import re
+import secrets
 import threading
 import time
 from typing import Any, Callable
@@ -44,6 +59,11 @@ MAX_FILES = 5000
 MAX_TEXT = 1000
 SOURCES = ("upload", "path")    # "mixed" once a batch has had both
 MAX_SHARES = 100
+# A cell already blinded the RandomNames.bat way, and the ending Zen's Image
+# Export adds (kept when a cell is blinded).
+RANDOM_RE = re.compile(r"^\d{1,5}-\d{1,5}-\d{1,5}(?!\d)")
+ZEN_SUFFIX_RE = re.compile(r"_c\d+_ORG$", re.IGNORECASE)
+MAX_DATE = 40
 
 # The Measure tool's AIS start -> soma distance (static/js/ais_measure.js):
 # µm and px, then its two ends (AIS start, soma) in MATLAB axes like click_x.
@@ -97,6 +117,12 @@ def clean_files(files: Any) -> list[dict[str, Any]]:
         item = {"name": name, "rel": rel, "sha": sha, "size": size}
         if f.get("path") is not None:
             item["path"] = _text(f["path"], "path")
+        # When the file was last changed and (a server folder only) made, as ISO text.
+        for k in ("modified", "created"):
+            if f.get(k) is not None:
+                if not isinstance(f[k], str) or len(f[k]) > MAX_DATE:
+                    raise BatchError(f"{k} must be a date")
+                item[k] = f[k]
         out.append(item)
     return out
 
@@ -135,6 +161,109 @@ def group(files: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return ordered
 
 
+def is_random(cell: str) -> bool:
+    return bool(RANDOM_RE.match(cell))
+
+
+def randomize(images: list[dict[str, Any]], taken: set[str]) -> list[dict[str, Any]]:
+    """Grouped images (group) with every cell not already blinded renamed
+    "<n>-<n>-<n>" plus any Zen ending, unique against taken (which grows),
+    and each file's name and rel to match; what they were is kept as
+    original (files) and original_cell / original_key (images)."""
+    out = []
+    for image in images:
+        cell = image["cell"]
+        if is_random(cell):
+            taken.add(image["key"])
+            out.append(image)
+            continue
+        ending = ZEN_SUFFIX_RE.search(cell)
+        suffix = ending.group(0) if ending else ""
+        while True:
+            new = "-".join(str(secrets.randbelow(32768)) for _ in range(3)) + suffix
+            key = f"{image['dir']}/{new}" if image["dir"] else new
+            if key not in taken:
+                break
+        taken.add(key)
+        files = {}
+        for role, f in image["files"].items():
+            # A file's name starts with its cell (group cuts the ending off).
+            name = new + f["name"][len(cell):]
+            head, sep, _ = f["rel"].replace("\\", "/").rpartition("/")
+            files[role] = f | {"name": name, "rel": head + sep + name,
+                               "original": {"name": f["name"], "rel": f["rel"]}}
+        out.append(image | {"key": key, "cell": new, "files": files,
+                            "original_cell": cell, "original_key": image["key"]})
+    # In the order of the new names, so the old order gives nothing away.
+    return sorted(out, key=lambda im: (im["dir"].lower(), im["cell"].lower(), im["key"]))
+
+
+def excluded_keys(batch: Record) -> set[str]:
+    """The images left out for everyone; a batch from before this was kept
+    leaves its duplicates out, as the Process screen did."""
+    if "excluded" in batch:
+        return set(batch["excluded"])
+    return {im["key"] for im in batch["images"] if "dup_of" in im}
+
+
+def included_keys(batch: Record) -> set[str]:
+    return {im["key"] for im in batch["images"]} - excluded_keys(batch)
+
+
+def translation(batch: Record) -> str:
+    """The batch's blinded names as RandomNames.bat wrote them: a
+    __Translation.txt of "original/random" lines, one per renamed file."""
+    lines = ["Original Name/Random Name", "-------------------------"]
+    for image in batch["images"]:
+        for f in image["files"].values():
+            if "original" in f:
+                lines.append(f"{f['original']['name']}/{f['name']}")
+    return "\r\n".join(lines) + "\r\n"
+
+
+def _add(record: Record, images: list[dict[str, Any]], source: str, path: str | None,
+         user_id: int | None, name: str | None, randomize_: bool) -> None:
+    """images (grouped, maybe blinded) into the batch record as one add:
+    recorded in adds, each image tagged with its add_id, new duplicates
+    excluded."""
+    adds = record.setdefault("adds", [])
+    add_id = max((a["id"] for a in adds), default=0) + 1
+    excluded = list(record.get("excluded", sorted(excluded_keys(record))))
+    before = len(record["images"])
+    record["images"] = merge(record["images"], [im | {"add_id": add_id} for im in images])
+    added = record["images"][before:]
+    excluded += [im["key"] for im in added if "dup_of" in im]
+    record["excluded"] = excluded
+    adds.append({"id": add_id, "name": (name or "").strip()[:200] or record["name"], "source": source,
+                 "path": path, "added_at": to_iso(utc_now()), "added_by": user_id,
+                 "randomized": randomize_ and any("original_cell" in im for im in added),
+                 "count": len(added)})
+
+
+def set_included(store: Store, batch_id: int, keys: Any, included: Any) -> Record | None:
+    """Include (or leave out) these images, for everyone. None when the
+    batch is gone."""
+    if (not isinstance(keys, list) or len(keys) > MAX_FILES
+            or not all(isinstance(k, str) for k in keys)):
+        raise BatchError("keys must be a list of image keys")
+    if not isinstance(included, bool):
+        raise BatchError("included must be true or false")
+
+    def mutate(record: Record) -> None:
+        known = {im["key"] for im in record["images"]}
+        out = excluded_keys(record)
+        for k in keys:
+            if k in known:
+                if included:
+                    out.discard(k)
+                else:
+                    out.add(k)
+        record["excluded"] = [im["key"] for im in record["images"] if im["key"] in out]
+        _stamp(record)
+
+    return store.update_value(BUCKET_AIS_BATCHES, batch_id, mutate)
+
+
 # --- batches -------------------------------------------------------------------
 
 
@@ -161,6 +290,8 @@ def new_batch(store: Store, name: str, source: str, user_id: int, path: str | No
         "archived_at": None,
         "skipped": [],
         "images": [],
+        "adds": [],
+        "excluded": [],
     }
     store.put(BUCKET_AIS_BATCHES, batch_id, record)
     return record
@@ -202,10 +333,12 @@ def _signature(image: dict[str, Any]) -> tuple[str, ...]:
     return tuple(image["files"].get(role, {}).get("sha", "") for role in ("processed", "raw", "czi"))
 
 
-def add_files(store: Store, batch_id: int, source: str, files: Any, path: str | None = None) -> Record | None:
-    """More files into a batch: a folder or files picked later. None when the
-    batch is gone. A batch fed from both the browser and a server folder
-    becomes source "mixed"."""
+def add_files(store: Store, batch_id: int, source: str, files: Any, path: str | None = None, *,
+              randomize_names: bool = False, user_id: int | None = None, name: str | None = None) -> Record | None:
+    """More files into a batch: a folder or files picked later, blinded with
+    randomize_names, recorded as one add called name. None when the batch is
+    gone. A batch fed from both the browser and a server folder becomes
+    source "mixed"."""
     if source not in SOURCES:
         raise BatchError("unknown source")
     images = group(clean_files(files))
@@ -219,14 +352,15 @@ def add_files(store: Store, batch_id: int, source: str, files: Any, path: str | 
             record["source"] = source
         if path and not record.get("path"):
             record["path"] = path
-        record["images"] = merge(record["images"], images)
+        added = randomize(images, {im["key"] for im in record["images"]}) if randomize_names else images
+        _add(record, added, source, path, user_id, name, randomize_names)
         _stamp(record)
 
     return store.update_value(BUCKET_AIS_BATCHES, batch_id, mutate)
 
 
 def create_batch(store: Store, name: str, source: str, files: list[dict[str, Any]], user_id: int,
-                 path: str | None = None) -> Record:
+                 path: str | None = None, *, randomize_names: bool = False) -> Record:
     """A batch with its files in one go (Open folder, Open path)."""
     if source not in SOURCES:
         raise BatchError("unknown source")
@@ -234,7 +368,8 @@ def create_batch(store: Store, name: str, source: str, files: list[dict[str, Any
     if not images:
         raise BatchError("no TIFF or CZI files")
     record = new_batch(store, name, source, user_id, path)
-    record["images"] = merge([], images)
+    _add(record, randomize(images, set()) if randomize_names else images, source, path, user_id, name,
+         randomize_names)
     store.put(BUCKET_AIS_BATCHES, record["id"], record)
     return record
 
@@ -305,6 +440,10 @@ def _complete(batch: Record, by_image: dict[str, Any]) -> set[str]:
     return (set(by_image) | set(batch["skipped"])) & {im["key"] for im in batch["images"]}
 
 
+def _included_complete(batch: Record, by_image: dict[str, Any]) -> set[str]:
+    return _complete(batch, by_image) & included_keys(batch)
+
+
 def list_batches(store: Store, viewer_id: int | None = None,
                  has: Callable[[dict[str, Any]], bool] | None = None) -> list[Record]:
     """In the team's priority order (new batches on top), without the image
@@ -318,10 +457,15 @@ def list_batches(store: Store, viewer_id: int | None = None,
         assignees = progress(batch, by_image)
         mine = next((a for a in assignees if a["user_id"] == viewer_id), None)
         files = [f for im in batch["images"] for f in im["files"].values()]
+        included = included_keys(batch)
         item = ({k: batch[k] for k in ("id", "name", "source", "path", "created_by", "created_at")}
                 | {"updated_at": batch.get("updated_at", batch["created_at"]),
                    "archived_at": batch.get("archived_at"), "position": _position(batch),
-                   "images": len(batch["images"]), "completed": len(_complete(batch, by_image)),
+                   "images": len(batch["images"]), "included": len(included),
+                   "completed": len(_included_complete(batch, by_image)),
+                   "adds": list(batch.get("adds", [])),
+                   "earlier": sum(1 for im in batch["images"] if "add_id" not in im),
+                   "randomized": any("original_cell" in im for im in batch["images"]),
                    "duplicates": sum(1 for im in batch["images"] if "dup_of" in im),
                    "ais": sum(len(v) for v in by_image.values()),
                    "auto": sum(1 for v in by_image.values() for r in v if r.get("origin") == "auto"),
@@ -340,15 +484,20 @@ def image_status(batch: Record, rows: list[Record], has: Callable[[dict[str, Any
     for row in rows:
         by_image.setdefault(row["image"], []).append(row)
     skipped = set(batch["skipped"])
+    excluded = excluded_keys(batch)
     out = []
     for image in batch["images"]:
         files = list(image["files"].values())
         accepted = by_image.get(image["key"], [])
-        out.append({"key": image["key"], "cell": image["cell"], "dir": image["dir"],
-                    "files": len(files), "stored": sum(1 for f in files if has(f)),
-                    "ais": len(accepted), "auto": sum(1 for r in accepted if r.get("origin") == "auto"),
-                    "done": image["key"] in skipped, "dup_of": image.get("dup_of"),
-                    "assignee": assignee_of(batch, image["key"])})
+        item = {"key": image["key"], "cell": image["cell"], "dir": image["dir"],
+                "files": len(files), "stored": sum(1 for f in files if has(f)),
+                "ais": len(accepted), "auto": sum(1 for r in accepted if r.get("origin") == "auto"),
+                "done": image["key"] in skipped, "dup_of": image.get("dup_of"),
+                "assignee": assignee_of(batch, image["key"]),
+                "included": image["key"] not in excluded, "add_id": image.get("add_id")}
+        if "original_key" in image:
+            item["original_key"] = image["original_key"]
+        out.append(item)
     return out
 
 
@@ -453,7 +602,8 @@ def deal(batch: Record, shares: list[dict[str, Any]], complete: set[str]) -> dic
     share ends up as close to its percent as the finished ones allow."""
     ids = [s["user_id"] for s in shares]
     current = (batch.get("assignment") or {}).get("images", {})
-    eligible = [im["key"] for im in batch["images"] if "dup_of" not in im]
+    excluded = excluded_keys(batch)
+    eligible = [im["key"] for im in batch["images"] if im["key"] not in excluded]
     kept = {k: current[k] for k in eligible if k in complete and current.get(k) in ids}
     unfinished = [k for k in eligible if k not in complete]
     targets = split_counts(len(kept) + len(unfinished), [s["percent"] for s in shares])
@@ -501,9 +651,10 @@ def progress(batch: Record, by_image: dict[str, list[Record]]) -> list[dict[str,
     if not assignment:
         return []
     complete = _complete(batch, by_image)
+    included = included_keys(batch)
     out = []
     for share in assignment["shares"]:
-        keys = [k for k, u in assignment["images"].items() if u == share["user_id"]]
+        keys = [k for k, u in assignment["images"].items() if u == share["user_id"] and k in included]
         rows = [r for k in keys for r in by_image.get(k, [])]
         stamps = [t for r in rows for t in (r["accepted_at"], r.get("edited_at")) if t]
         out.append({"user_id": share["user_id"], "percent": share["percent"], "images": len(keys),

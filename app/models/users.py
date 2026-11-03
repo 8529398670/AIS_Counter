@@ -26,7 +26,8 @@ never fires again once an owner exists.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, field
 from datetime import datetime
 
 from app.core.db import BUCKET_META, BUCKET_USERS, Record, Store, Transaction
@@ -56,6 +57,10 @@ class User:
     # invite link. It is not a password: nothing else checks it. See
     # app/models/pins.py.
     pin_hash: str = ""
+    # Keyboard shortcuts this person rebound on the Keyboard shortcuts screen:
+    # action id -> its keys, only where they differ from the defaults
+    # (static/js/shortcuts.js owns the actions and their defaults).
+    shortcuts: dict[str, list[str]] = field(default_factory=dict)
 
     @property
     def disabled(self) -> bool:
@@ -73,6 +78,7 @@ class User:
             "created_at": to_iso(self.created_at),
             "disabled_at": to_iso(self.disabled_at),
             "pin_hash": self.pin_hash,
+            "shortcuts": self.shortcuts,
         }
 
     @classmethod
@@ -84,6 +90,7 @@ class User:
             created_at=from_iso(record["created_at"]),
             disabled_at=from_iso(record.get("disabled_at")),
             pin_hash=record.get("pin_hash", ""),
+            shortcuts=record.get("shortcuts") or {},
         )
 
 
@@ -151,6 +158,40 @@ def rename_user(store: Store, user_id: int, display_name: str) -> bool:
 
     def mutate(record: Record) -> None:
         record["display_name"] = display_name.strip()
+
+    return store.update_value(BUCKET_USERS, user_id, mutate) is not None
+
+
+SHORTCUTS_MAX_ACTIONS = 200
+SHORTCUTS_MAX_KEYS = 4
+SHORTCUT_ID = re.compile(r"^[a-z0-9_]+(\.[a-z0-9_]+)*$")
+# [Mod+][Alt+][Shift+]Key, the key being one character (the + key too) or a
+# name like ArrowLeft. Which keys exist is the browser's business.
+SHORTCUT_KEY = re.compile(r"^(Mod\+)?(Alt\+)?(Shift\+)?([^+\s]|\+|[A-Za-z0-9]{2,20})$")
+
+
+def valid_shortcuts(value: object) -> bool:
+    """Bounds what a person can store as their shortcuts. It does not check
+    the action ids against the screen's list: the frontend ignores ids it does
+    not know, so an older or newer build's map is harmless."""
+    if not isinstance(value, dict) or len(value) > SHORTCUTS_MAX_ACTIONS:
+        return False
+    for action, keys in value.items():
+        if not isinstance(action, str) or len(action) > 64 or not SHORTCUT_ID.match(action):
+            return False
+        if not isinstance(keys, list) or len(keys) > SHORTCUTS_MAX_KEYS:
+            return False
+        if not all(isinstance(key, str) and len(key) <= 40 and SHORTCUT_KEY.match(key) for key in keys):
+            return False
+    return True
+
+
+def set_shortcuts(store: Store, user_id: int, shortcuts: dict[str, list[str]]) -> bool:
+    """Replace the account's rebound shortcuts (an empty map is every default).
+    False if there is no such user."""
+
+    def mutate(record: Record) -> None:
+        record["shortcuts"] = shortcuts
 
     return store.update_value(BUCKET_USERS, user_id, mutate) is not None
 

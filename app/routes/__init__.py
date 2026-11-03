@@ -83,6 +83,7 @@ def build_routes(static_server: StaticServer, cfg: Config) -> list[BaseRoute]:
         # Any signed-in user.
         signed_in("/api/me", account.me),
         signed_in("/api/account/rename", account.rename, ["POST"]),
+        signed_in("/api/account/shortcuts", account.set_shortcuts, ["POST"]),
         # A session only: a PIN lets its holder sign in through an invite
         # link, so a key that could set one could turn itself into a session.
         sessions_only("/api/account/pin", account.set_pin, ["POST"]),
@@ -101,6 +102,9 @@ def build_routes(static_server: StaticServer, cfg: Config) -> list[BaseRoute]:
         signed_in("/api/ais/files/{sha}/channels", ais.channels),
         signed_in("/api/ais/files/{sha}/channel/{index}.png", ais.channel),
         signed_in("/api/ais/files/{sha}/somata", ais.somata),
+        signed_in("/api/ais/files/{sha}/file", ais.file_bytes),
+        signed_in("/api/ais/files/{sha}/processed.tif", ais.processed_tif),
+        signed_in("/api/ais/files/{sha}/channel/{index}.tif", ais.channel_tif),
         signed_in("/api/ais/trace", ais.trace, ["POST"]),
         signed_in("/api/ais/detect", ais.detect, ["POST"]),
         signed_in("/api/ais/batches", ais.batch_list),
@@ -115,10 +119,12 @@ def build_routes(static_server: StaticServer, cfg: Config) -> list[BaseRoute]:
         signed_in("/api/ais/batches/{batch_id}/archive", ais.batch_archive, ["POST"]),
         signed_in("/api/ais/batches/{batch_id}/activity", ais.batch_activity, ["POST"]),
         signed_in("/api/ais/batches/{batch_id}/done", ais.batch_done, ["POST"]),
+        signed_in("/api/ais/batches/{batch_id}/include", ais.batch_include, ["POST"]),
         signed_in("/api/ais/batches/{batch_id}/delete", ais.batch_delete, ["POST"]),
         # Admins: splitting a batch among people, and resetting its results.
         admins("/api/ais/batches/{batch_id}/assign", ais.batch_assign, ["POST"]),
         admins("/api/ais/batches/{batch_id}/reset", ais.batch_reset, ["POST"]),
+        admins("/api/ais/batches/{batch_id}/translation.txt", ais.batch_translation),
         signed_in("/api/ais/results", ais.result_list),
         signed_in("/api/ais/results", ais.result_add, ["POST"]),
         signed_in("/api/ais/results/import", ais.result_import, ["POST"], max_body_size=ais.UPLOAD_LIMIT_BYTES),

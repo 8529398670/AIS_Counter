@@ -24,15 +24,18 @@ const Ais = {
   processedSuffix: ".tif - Processed method 2.5.tif",
   concurrency: 4,        // files hashed, uploaded or exported at once
   legacyResultsKey: "ais-results",
-  includeKey: "ais-include-",
   viewKey: "ais-view",
   lastKey: "ais-last",   // the last batch and image, for a bare #ais or /
   focusKey: "ais-focus",
   hintKey: "ais-hint-hidden",
   noteKey: "ais-note-hidden",   // the batch whose single-image note was closed
-  // An image: { key, cell, dir, dup_of?, included, files: { processed?, raw?, czi? } }
-  // with a file { name, rel, sha, size, stored, path?, file? } -- `file` only
-  // in the browser that picked it, `path` only for Open path.
+  // An image: { key, cell, dir, dup_of?, add_id?, original_key?, included,
+  // files: { processed?, raw?, czi? } } with a file { name, rel, sha, size,
+  // stored, modified?, created?, original?, path?, file? } -- `file` only in
+  // the browser that picked it, `path` only for Open path, `original` (the
+  // name before it was blinded) only for admins. included: stepped through
+  // here -- not left out for the team (batch.excluded), and one of mine when
+  // I have images assigned.
   images: [],
   batch: null,           // the server's batch record
   openFresh: null,       // a batch id the Batches screen just created: opens with the Images dialog
@@ -286,7 +289,7 @@ const Ais = {
     let carried = null;
     if ( this.batch && this.batch.id === want.id && this.stale ) {
       carried = new Map();
-      this.images.forEach( ( entry ) => Object.values( entry.files ).forEach( ( f ) => { if ( f.file ) carried.set( f.rel , f.file ); } ) );
+      this.images.forEach( ( entry ) => Object.values( entry.files ).forEach( ( f ) => { if ( f.file ) carried.set( f.sha , f.file ); } ) );
       if ( !want.key && this.images[ this.index ] ) want.key = this.images[ this.index ].key;
     }
     this.stale = false;
@@ -315,14 +318,15 @@ const Ais = {
 
   // Picked in the browser: the images (TIFF or .czi) hashed, as a batch is
   // created or added to from names and hashes alone. onProgress(done, total)
-  // follows the reading. null when none of the files is an image.
+  // follows the reading. null when none of the files is an image. bySha
+  // finds each File again: the server may have blinded its name.
   async hashFiles( fileList , onProgress ) {
     const files = Array.from( fileList ).filter( ( f ) => /\.(tiff?|czi)$/i.test( f.name ) && !f.name.startsWith( "." ) );
     if ( !files.length ) return null;
     const rel = files[ 0 ].webkitRelativePath || "";
     const root = rel.includes( "/" ) ? rel.split( "/" )[ 0 ] : "";
     const described = new Array( files.length );
-    const byRel = new Map();
+    const bySha = new Map();
     let done = 0;
     // A few at a time: reading one file while another hashes.
     await this.pool( files , this.concurrency , async ( f , i ) => {
@@ -330,11 +334,12 @@ const Ais = {
       const sha = Array.from( new Uint8Array( digest ) , ( b ) => b.toString( 16 ).padStart( 2 , "0" ) ).join( "" );
       const fileRel = f.webkitRelativePath || f.name;
       described[ i ] = { name: f.name , rel: fileRel , sha: sha , size: f.size };
-      byRel.set( fileRel , f );
+      if ( f.lastModified ) described[ i ].modified = new Date( f.lastModified ).toISOString();
+      bySha.set( sha , f );
       done += 1;
       onProgress( done , files.length );
     } );
-    return { name: root || I18n.get( "ais.loose_files" ) || "Files" , files: described , byRel: byRel };
+    return { name: root || I18n.get( "ais.loose_files" ) || "Files" , files: described , bySha: bySha };
   },
 
   // Open folder / Open files: hash every image, create the batch from names
@@ -347,10 +352,11 @@ const Ais = {
         App.showError( I18n.get( "ais.no_tiffs" ) );
         return;
       }
-      const batch = await Api.post( "/api/ais/batches/upload" , { name: picked.name , files: picked.files } );
+      const batch = await Api.post( "/api/ais/batches/upload" , { name: picked.name , files: picked.files ,
+        randomize: Batches.randomize() } );
       this.status( "" );
       Dom.toast( I18n.get( "batches.created" ).replace( "{name}" , batch.name ) );
-      await this.loadBatch( batch , picked.byRel , { fresh: true } );
+      await this.loadBatch( batch , picked.bySha , { fresh: true } );
     } catch ( error ) {
       this.status( "" );
       App.showError( error.message );
@@ -361,7 +367,7 @@ const Ais = {
   async openPath( folder ) {
     this.status( I18n.get( "ais.reading_path" ) );
     try {
-      const batch = await Api.post( "/api/ais/batches/path" , { path: folder } );
+      const batch = await Api.post( "/api/ais/batches/path" , { path: folder , randomize: Batches.randomize() } );
       this.status( "" );
       await this.loadBatch( batch , null , { fresh: true } );
     } catch ( error ) {
@@ -370,10 +376,10 @@ const Ais = {
     }
   },
 
-  // Show a server batch. byRel maps a file's folder-relative path to the
-  // File picked in this browser (only right after Open folder / Open files).
-  // options.key opens that image; options.fresh opens the Images dialog.
-  async loadBatch( batch , byRel , options ) {
+  // Show a server batch. bySha maps a file's sha-256 to the File picked in
+  // this browser (only right after Open folder / Open files). options.key
+  // opens that image; options.fresh opens the Images dialog.
+  async loadBatch( batch , bySha , options ) {
     const opts = options || {};
     AisAuto.reset();
     this.batch = batch;
@@ -383,19 +389,15 @@ const Ais = {
         window.localStorage.removeItem( this.noteKey );
       } catch ( error ) { /* storage blocked */ }
     }
-    const excluded = this.savedExclusions( batch.id );
-    // Someone with images assigned starts on exactly those (theirs first).
-    const mine = this.myKeys();
     this.images = batch.images.map( ( image ) => {
       const files = {};
       Object.entries( image.files ).forEach( ( [ role , f ] ) => {
-        files[ role ] = Object.assign( {} , f , { file: byRel ? byRel.get( f.rel ) || null : null } );
+        files[ role ] = Object.assign( {} , f , { file: bySha ? bySha.get( f.sha ) || null : null } );
       } );
-      // A new import leaves duplicates out until they are shown again.
-      const out = mine ? !mine.has( image.key )
-        : excluded ? excluded.has( image.key ) : ( opts.fresh && image.dup_of != null );
-      return { key: image.key , cell: image.cell , dir: image.dir , dup_of: image.dup_of , files: files , included: !out };
+      return { key: image.key , cell: image.cell , dir: image.dir , dup_of: image.dup_of , add_id: image.add_id ,
+        original_key: image.original_key , files: files , included: false };
     } );
+    this.applyInclusion();
     this.index = -1;
     this.source = null;
     this.bitmap = null;
@@ -445,8 +447,7 @@ const Ais = {
   applyAssignment( batch ) {
     this.batch.assignment = batch.assignment || null;
     this.batch.assignee_names = batch.assignee_names || {};
-    const mine = this.myKeys();
-    if ( mine ) this.images.forEach( ( entry ) => { entry.included = mine.has( entry.key ); } );
+    this.applyInclusion();
     this.inclusionChanged( this.index );
     this.renderCurrent();
   },
@@ -456,6 +457,13 @@ const Ais = {
   batchChanged( batch , added ) {
     if ( !this.batch || this.batch.id !== batch.id ) return;
     this.batch.name = batch.name;
+    if ( batch.excluded ) {
+      this.batch.excluded = batch.excluded;
+      if ( !added ) {
+        this.applyInclusion();
+        this.inclusionChanged( this.index );
+      }
+    }
     if ( added ) this.stale = true;
     this.renderCurrent();
   },
@@ -479,21 +487,23 @@ const Ais = {
     this.draw();
   },
 
-  savedExclusions( batchId ) {
-    try {
-      const raw = window.localStorage.getItem( this.includeKey + batchId );
-      return raw ? new Set( JSON.parse( raw ) ) : null;
-    } catch ( error ) {
-      return null;
-    }
+  // Which images to step through: those the team has not left out
+  // (batch.excluded, set in the Images dialog), and of those only mine when
+  // I have images assigned.
+  applyInclusion() {
+    const excluded = new Set( ( this.batch && this.batch.excluded ) || [] );
+    const mine = this.myKeys();
+    this.images.forEach( ( entry ) => { entry.included = !excluded.has( entry.key ) && ( !mine || mine.has( entry.key ) ); } );
   },
 
-  saveExclusions() {
+  // The Images dialog changed what the team leaves out of this batch.
+  excludedChanged( excluded , prefer ) {
     if ( !this.batch ) return;
-    try {
-      window.localStorage.setItem( this.includeKey + this.batch.id ,
-        JSON.stringify( this.images.filter( ( entry ) => !entry.included ).map( ( entry ) => entry.key ) ) );
-    } catch ( error ) { /* storage blocked: the selection lasts this visit */ }
+    this.batch.excluded = excluded;
+    this.applyInclusion();
+    if ( prefer != null && this.images[ prefer ] ) this.images[ prefer ].included = true;
+    this.inclusionChanged( prefer != null ? prefer : this.index );
+    this.uploadAll();
   },
 
   // The file that is thresholded and traced, and whether a separate raw
@@ -601,7 +611,6 @@ const Ais = {
   // Keep showing the current image while it is included; otherwise move to
   // the preferred image, or the nearest included one.
   inclusionChanged( prefer ) {
-    this.saveExclusions();
     this.renderPicker();
     const shown = this.included();
     if ( shown.includes( prefer ) && prefer !== this.index ) {
@@ -1366,51 +1375,55 @@ const Ais = {
     if ( document.body.classList.contains( "modal-open" ) ) return;
     const tag = ( event.target.tagName || "" ).toLowerCase();
     if ( tag === "input" || tag === "select" || tag === "textarea" ) return;
-    const key = event.key;
-    // Ctrl/⌘+Z undoes, Ctrl/⌘+Y or Ctrl/⌘+Shift+Z redoes.
-    if ( ( event.ctrlKey || event.metaKey ) && !event.altKey && ( key === "z" || key === "Z" || key === "y" || key === "Y" ) ) {
+    // Which key does what is shortcuts.js's (the Keyboard shortcuts screen).
+    const is = ( action ) => Shortcuts.is( event , "ais." + action );
+    if ( is( "undo" ) || is( "redo" ) ) {
       event.preventDefault();
-      if ( key === "y" || key === "Y" || event.shiftKey ) this.redo();
+      if ( is( "redo" ) ) this.redo();
       else this.undo();
       return;
     }
-    if ( event.ctrlKey || event.metaKey ) return;
-    // Measure (ais_measure.js) takes Esc, Enter, N, [ ] and Backspace first.
+    // Measure (ais_measure.js) takes its keys first.
     if ( AisMeasure.onKey( event ) ) return;
-    // Esc: drop an edit, then (auto) the run. It never changes the tool:
-    // only T, E, D and M (or their buttons) do.
-    if ( key === "Escape" && this.editing ) {
+    // Cancelling an edit, then (auto) the run's keys. It never changes the
+    // tool: only the tool keys (or their buttons) do.
+    if ( this.editing && is( "cancel_edit" ) ) {
       event.preventDefault();
       this.reject();
       return;
     }
-    const arrows = { ArrowLeft: [ -1 , 0 ] , ArrowRight: [ 1 , 0 ] , ArrowUp: [ 0 , -1 ] , ArrowDown: [ 0 , 1 ] };
-    if ( event.altKey && !arrows[ key ] ) return;
     if ( AisAuto.onKey( event ) ) return;
-    // Alt+arrows walk a waiting click; plain arrows switch images and drop it.
-    if ( arrows[ key ] && event.altKey ) {
+    // The nudge keys walk a waiting click, 1 px or 5.
+    const nudges = { left: [ -1 , 0 ] , right: [ 1 , 0 ] , up: [ 0 , -1 ] , down: [ 0 , 1 ] };
+    const nudge = Object.keys( nudges ).find( ( way ) => is( "nudge_" + way ) || is( "nudge_big_" + way ) );
+    if ( nudge ) {
       event.preventDefault();
       if ( !this.pending() ) return;
-      const step = event.shiftKey ? 5 : 1;
-      this.nudge( arrows[ key ][ 0 ] * step , arrows[ key ][ 1 ] * step );
+      const step = is( "nudge_big_" + nudge ) ? 5 : 1;
+      this.nudge( nudges[ nudge ][ 0 ] * step , nudges[ nudge ][ 1 ] * step );
       return;
     }
-    if ( event.altKey ) return;
-    if ( ( key === "ArrowLeft" || key === "ArrowRight" ) && this.pending() ) this.reject();
-    if ( key === "Enter" || key === " " ) { event.preventDefault(); this.accept(); }
-    else if ( key === "n" || key === "N" ) this.reject();
-    else if ( key === "ArrowRight" || key === "PageDown" ) { event.preventDefault(); this.step( 1 ); }
-    else if ( key === "ArrowLeft" || key === "PageUp" ) { event.preventDefault(); this.step( -1 ); }
-    else if ( key === "+" || key === "=" ) this.zoomBy( 1.25 );
-    else if ( key === "-" || key === "_" ) this.zoomBy( 0.8 );
-    else if ( key === "0" ) this.resetView();
-    else if ( key === "1" ) this.zoomTo( 1 );
-    else if ( key === "l" || key === "L" ) this.setLocked( !this.locked );
-    else if ( key === "f" || key === "F" ) this.setFocus( !this.focus );
-    else if ( key === "t" || key === "T" ) this.setTool( "trace" );
-    else if ( key === "e" || key === "E" ) this.setTool( "edit" );
-    else if ( key === "d" || key === "D" ) this.setTool( "delete" );
-    else if ( key === "m" || key === "M" ) this.setTool( "measure" );
+    const actions = {
+      accept: () => this.accept(),
+      reject: () => this.reject(),
+      // Switching images drops a click not yet accepted.
+      next_image: () => { if ( this.pending() ) this.reject(); this.step( 1 ); },
+      prev_image: () => { if ( this.pending() ) this.reject(); this.step( -1 ); },
+      zoom_in: () => this.zoomBy( 1.25 ),
+      zoom_out: () => this.zoomBy( 0.8 ),
+      reset_view: () => this.resetView(),
+      actual_size: () => this.zoomTo( 1 ),
+      lock_view: () => this.setLocked( !this.locked ),
+      focus: () => this.setFocus( !this.focus ),
+      tool_trace: () => this.setTool( "trace" ),
+      tool_edit: () => this.setTool( "edit" ),
+      tool_delete: () => this.setTool( "delete" ),
+      tool_measure: () => this.setTool( "measure" ),
+    };
+    const action = Object.keys( actions ).find( is );
+    if ( !action ) return;
+    event.preventDefault();
+    actions[ action ]();
   },
 
   // --- tracing -------------------------------------------------------------
@@ -1655,7 +1668,8 @@ const Ais = {
     const m = r.measures;
     const traced = entry.files[ this.traced( entry ) ];
     const row = {
-      file: traced.path || traced.rel || traced.name,
+      // Not the path of a blinded file: it has the original name in it.
+      file: ( traced.original ? "" : traced.path ) || traced.rel || traced.name,
       sha: traced.sha,
       length_um: m.length_um,
       length_str: m.length_str,

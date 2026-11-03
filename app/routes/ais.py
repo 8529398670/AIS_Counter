@@ -128,6 +128,38 @@ async def thumb(request: Request) -> Response:
     return Response(png, media_type="image/png", headers={"Cache-Control": "private, max-age=86400"})
 
 
+async def file_bytes(request: Request) -> Response:
+    """The stored file itself (a .czi or TIFF as it was added), for exports."""
+    try:
+        path = await run(_library(request).file_path, request.path_params["sha"])
+        data = await run(path.read_bytes)
+    except ImageError as exc:
+        return _unshown(exc)
+    kind = "image/tiff" if path.suffix.lower() in (".tif", ".tiff") else "application/octet-stream"
+    return Response(data, media_type=kind, headers={"Cache-Control": "private, max-age=86400"})
+
+
+async def processed_tif(request: Request) -> Response:
+    """A .czi's processed AIS channel as a TIFF (what tracing uses), for exports."""
+    try:
+        data = await run(_library(request).processed_tiff, request.path_params["sha"])
+    except ImageError as exc:
+        return _unshown(exc)
+    return Response(data, media_type="image/tiff", headers={"Cache-Control": "private, max-age=86400"})
+
+
+async def channel_tif(request: Request) -> Response:
+    """One .czi channel, its data as a 16-bit TIFF, for exports."""
+    try:
+        index = int(request.path_params["index"])
+        data = await run(_library(request).channel_tiff, request.path_params["sha"], index)
+    except ImageError as exc:
+        return _unshown(exc)
+    except ValueError as exc:
+        return not_found(str(exc))
+    return Response(data, media_type="image/tiff", headers={"Cache-Control": "private, max-age=86400"})
+
+
 def _point(value: Any) -> tuple[float, float] | None:
     if (isinstance(value, list) and len(value) == 2
             and all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) for v in value)):
@@ -239,17 +271,43 @@ def _has(request: Request) -> Callable[[dict[str, Any]], bool]:
     return lambda f: bool(by_path and f.get("path")) or library.has(f["sha"])
 
 
+def _blind(request: Request) -> bool:
+    """Whether original names must be kept from whoever asks: everyone but admins."""
+    return not actor_from(request).is_admin
+
+
+def _unnamed_file(f: dict[str, Any]) -> dict[str, Any]:
+    """A blinded file without what it was called: its original name, and the
+    path on this machine (which has that name in it)."""
+    if "original" not in f:
+        return f
+    return {k: v for k, v in f.items() if k not in ("original", "path")}
+
+
+def _unnamed_image(image: dict[str, Any]) -> dict[str, Any]:
+    return {k: v for k, v in image.items() if k not in ("original_cell", "original_key")}
+
+
 def _batch_json(request: Request, batch: dict[str, Any]) -> dict[str, Any]:
-    """The batch with, per file, whether the server can show it already."""
+    """The batch with, per file, whether the server can show it already, and
+    (admins only) the original names of blinded files."""
     has = _has(request)
+    blind = _blind(request)
     images = []
     for image in batch["images"]:
         files = {role: f | {"stored": has(f)} for role, f in image["files"].items()}
+        if blind:
+            files = {role: _unnamed_file(f) for role, f in files.items()}
+            image = _unnamed_image(image)
         images.append(image | {"files": files})
     names = _names(request)
     assigned = {share["user_id"] for share in (batch.get("assignment") or {}).get("shares", [])}
+    adders = {a.get("added_by") for a in batch.get("adds", [])}
     return batch | {"images": images, "created_by_name": names.get(batch["created_by"], ""),
-                    "assignee_names": {str(u): names.get(u, "") for u in assigned}}
+                    "assignee_names": {str(u): names.get(u, "") for u in assigned},
+                    "adds": [a | {"added_by_name": names.get(a.get("added_by"), "")} for a in batch.get("adds", [])],
+                    "excluded": sorted(batches.excluded_keys(batch)),
+                    "adder_names": {str(u): names.get(u, "") for u in adders if u is not None}}
 
 
 def _activity(request: Request) -> batches.Activity:
@@ -267,6 +325,7 @@ async def batch_list(request: Request) -> Response:
         for a in row["assignees"]:
             a["name"] = names.get(a["user_id"], "")
         row["activity"] = [a | {"name": names.get(a["user_id"], "")} for a in live.get(row["id"], [])]
+        row["adds"] = [a | {"added_by_name": names.get(a.get("added_by"), "")} for a in row["adds"]]
     return JSONResponse({"batches": rows})
 
 
@@ -339,9 +398,20 @@ async def batch_order(request: Request) -> Response:
     return JSONResponse({"ok": True})
 
 
+def _randomize(body: dict[str, Any]) -> bool:
+    """Whether an add blinds its names: yes unless the body says false."""
+    return body.get("randomize", True) is not False
+
+
+def _add_name(body: dict[str, Any]) -> str | None:
+    name = body.get("add_name")
+    return name if isinstance(name, str) else None
+
+
 async def batch_add(request: Request) -> Response:
-    """Body: {files: [{name, rel, sha, size}]}: more files picked in the
-    browser for an existing batch. Upload them afterwards as for a new one."""
+    """Body: {files: [{name, rel, sha, size, modified?}], randomize?, add_name?}:
+    more files picked in the browser for an existing batch, blinded unless
+    randomize is false. Upload them afterwards as for a new one."""
     body, refused = await _body(request)
     if refused:
         return refused
@@ -349,7 +419,8 @@ async def batch_add(request: Request) -> Response:
     if not batch_id:
         return not_found("no such batch")
     try:
-        batch = await run(batches.add_files, get_store(request), batch_id, "upload", body.get("files"))
+        batch = await run(batches.add_files, get_store(request), batch_id, "upload", body.get("files"),
+                          randomize_names=_randomize(body), user_id=_user_id(request), name=_add_name(body))
     except batches.BatchError as exc:
         return bad_request(str(exc))
     if batch is None:
@@ -367,9 +438,40 @@ async def batch_status(request: Request) -> Response:
     rows = await run(batches.list_results, store, batch_id)
     images = await run(batches.image_status, batch, rows, _has(request))
     names = await run(_names, request)
+    blind = _blind(request)
     for image in images:
         image["assignee_name"] = names.get(image["assignee"], "") if image["assignee"] else ""
+        if blind:
+            image.pop("original_key", None)
     return JSONResponse({"id": batch["id"], "images": images})
+
+
+async def batch_include(request: Request) -> Response:
+    """Body: {keys, included}: include these images, or leave them out, for
+    the whole team."""
+    body, refused = await _body(request)
+    if refused:
+        return refused
+    batch_id = parse_id(request.path_params["batch_id"])
+    if not batch_id:
+        return not_found("no such batch")
+    try:
+        batch = await run(batches.set_included, get_store(request), batch_id, body.get("keys"), body.get("included"))
+    except batches.BatchError as exc:
+        return bad_request(str(exc))
+    if batch is None:
+        return not_found("no such batch")
+    return JSONResponse(await run(_batch_json, request, batch))
+
+
+async def batch_translation(request: Request) -> Response:
+    """The batch's __Translation.txt (admins): original/random per file."""
+    batch_id = parse_id(request.path_params["batch_id"])
+    batch = await run(batches.get_batch, get_store(request), batch_id) if batch_id else None
+    if batch is None:
+        return not_found("no such batch")
+    return Response(batches.translation(batch), media_type="text/plain; charset=utf-8",
+                    headers={"Content-Disposition": 'attachment; filename="__Translation.txt"'})
 
 
 async def batch_activity(request: Request) -> Response:
@@ -404,7 +506,7 @@ async def batch_upload(request: Request) -> Response:
         return refused
     try:
         batch = await run(batches.create_batch, get_store(request), body.get("name"), "upload",
-                          body.get("files"), _user_id(request))
+                          body.get("files"), _user_id(request), randomize_names=_randomize(body))
     except batches.BatchError as exc:
         return bad_request(str(exc))
     return JSONResponse(await run(_batch_json, request, batch))
@@ -628,7 +730,8 @@ async def batch_path(request: Request) -> Response:
     try:
         folder, files = await run(local.hashed_files, body.get("path"))
         name = folder.rstrip("/\\").replace("\\", "/").split("/")[-1] or folder
-        batch = await run(batches.create_batch, get_store(request), name, "path", files, _user_id(request), folder)
+        batch = await run(batches.create_batch, get_store(request), name, "path", files, _user_id(request), folder,
+                          randomize_names=_randomize(body))
     except (ImageError, batches.BatchError) as exc:
         return bad_request(str(exc))
     return JSONResponse(await run(_batch_json, request, batch))
@@ -644,7 +747,9 @@ async def batch_add_path(request: Request) -> Response:
         return not_found("no such batch")
     try:
         folder, files = await run(local.hashed_files, body.get("path"))
-        batch = await run(batches.add_files, get_store(request), batch_id, "path", files, folder)
+        name = folder.rstrip("/\\").replace("\\", "/").split("/")[-1] or folder
+        batch = await run(batches.add_files, get_store(request), batch_id, "path", files, folder,
+                          randomize_names=_randomize(body), user_id=_user_id(request), name=name)
     except (ImageError, batches.BatchError) as exc:
         return bad_request(str(exc))
     if batch is None:

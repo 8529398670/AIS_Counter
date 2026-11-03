@@ -12,6 +12,7 @@ import hashlib
 import os
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -92,6 +93,25 @@ def images_under(base: Path, limit: int = MAX_FILES) -> list[Path]:
     return found
 
 
+def _dates(path: Path) -> dict[str, str]:
+    """When the file was last changed and, where the system keeps it
+    (macOS, Windows), made: ISO text in UTC."""
+    try:
+        st = path.stat()
+    except OSError:
+        return {}
+    def iso(t: float) -> str:
+        return datetime.fromtimestamp(t, timezone.utc).isoformat()
+
+    out = {"modified": iso(st.st_mtime)}
+    born = getattr(st, "st_birthtime", None)
+    if born is None and os.name == "nt":
+        born = st.st_ctime
+    if born:
+        out["created"] = iso(born)
+    return out
+
+
 def hashed_files(raw: Any) -> tuple[str, list[dict[str, Any]]]:
     """The folder's images, subfolders too, with the sha-256 of each, for an
     Open-path batch: (folder, [{name, rel, sha, size, path}]). rel starts with
@@ -105,8 +125,10 @@ def hashed_files(raw: Any) -> tuple[str, list[dict[str, Any]]]:
         except OSError:
             continue
         rel = "/".join((base.name or str(base), *path.relative_to(base).parts))
-        files.append({"name": path.name, "rel": rel, "sha": hashlib.sha256(data).hexdigest(),
-                      "size": len(data), "path": str(path)})
+        item = {"name": path.name, "rel": rel, "sha": hashlib.sha256(data).hexdigest(),
+                "size": len(data), "path": str(path)}
+        item.update(_dates(path))
+        files.append(item)
     return str(base), files
 
 

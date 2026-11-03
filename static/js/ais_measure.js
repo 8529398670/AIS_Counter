@@ -473,15 +473,15 @@ const AisMeasure = {
 
   onKey( event ) {
     if ( Ais.tool !== "measure" ) return false;
-    const key = event.key;
-    const arrows = { ArrowLeft: [ -1 , 0 ] , ArrowRight: [ 1 , 0 ] , ArrowUp: [ 0 , -1 ] , ArrowDown: [ 0 , 1 ] };
-    if ( arrows[ key ] && this.sel ) {
+    const is = ( action ) => Shortcuts.is( event , "measure." + action );
+    const nudges = { left: [ -1 , 0 ] , right: [ 1 , 0 ] , up: [ 0 , -1 ] , down: [ 0 , 1 ] };
+    const nudge = Object.keys( nudges ).find( ( way ) => is( "nudge_" + way ) || is( "nudge_big_" + way ) );
+    if ( nudge && this.sel ) {
       event.preventDefault();
-      this.nudge( arrows[ key ][ 0 ] , arrows[ key ][ 1 ] , event.shiftKey );
+      this.nudge( nudges[ nudge ][ 0 ] , nudges[ nudge ][ 1 ] , is( "nudge_big_" + nudge ) );
       return true;
     }
-    if ( event.altKey ) return false;
-    if ( key === "Tab" && ( this.sel || this.a || this.b ) ) {
+    if ( is( "switch_end" ) && ( this.sel || this.a || this.b ) ) {
       event.preventDefault();
       const line = this.sel ? this.sel.line : null;
       const other = this.sel && this.sel.end === "b" ? "a" : "b";
@@ -490,7 +490,7 @@ const AisMeasure = {
       this.render();
       return true;
     }
-    if ( key === "Escape" ) {
+    if ( is( "let_go" ) ) {
       if ( this.sel ) this.sel = null;
       else if ( this.a && !this.b && !( this.row && this.options.ais_end === "preset" ) ) this.a = null;
       else return false;
@@ -499,7 +499,7 @@ const AisMeasure = {
       this.render();
       return true;
     }
-    if ( key === "Backspace" || key === "Delete" ) {
+    if ( is( "delete_line" ) ) {
       event.preventDefault();
       if ( this.row ) {
         this.b = null;
@@ -514,15 +514,15 @@ const AisMeasure = {
       this.render();
       return true;
     }
+    const step = is( "next_ais" ) ? 1 : is( "prev_ais" ) ? -1 : 0;
     if ( !this.row ) {
-      if ( key === "]" || key === "[" ) { this.go( key === "]" ? 1 : -1 ); return true; }
+      if ( step ) { event.preventDefault(); this.go( step ); return true; }
       return false;
     }
-    if ( key === "Enter" || key === " " ) { event.preventDefault(); this.saveAndNext(); return true; }
-    if ( key === "n" || key === "N" ) { this.go( 1 ); return true; }
-    if ( key === "s" || key === "S" ) { this.swapEnd(); return true; }
-    if ( key === "]" ) { this.go( 1 ); return true; }
-    if ( key === "[" ) { this.go( -1 ); return true; }
+    if ( is( "save_next" ) ) { event.preventDefault(); this.saveAndNext(); return true; }
+    if ( is( "skip" ) ) { event.preventDefault(); this.go( 1 ); return true; }
+    if ( is( "swap_end" ) ) { event.preventDefault(); this.swapEnd(); return true; }
+    if ( step ) { event.preventDefault(); this.go( step ); return true; }
     return false;
   },
 

@@ -122,6 +122,8 @@ const App = {
 
     // Each screen owns its own file and its own init(). This is the one line
     // that knows the API keys screen exists.
+    // First, so text naming a key shows this person's keys.
+    Shortcuts.init( me );
     Pin.init( me );
     await Keys.init( me );
     Settings.init();

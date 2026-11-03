@@ -220,6 +220,21 @@ class Library:
             raise ImageError("no such channel")
         return preview_png(planes[index], CHANNEL_PERCENTILES)
 
+    def channel_tiff(self, sha: str, index: int) -> bytes:
+        """One CZI channel's data as it is (16-bit), as a TIFF."""
+        if not self.is_czi(sha):
+            raise ImageError("only a .czi has channels")
+        planes = list(read_czi(self.file_path(sha).read_bytes()).channels.values())
+        if not 0 <= index < len(planes):
+            raise ImageError("no such channel")
+        return tiff_bytes(planes[index])
+
+    def processed_tiff(self, sha: str) -> bytes:
+        """A CZI's processed AIS channel (what is traced) as a TIFF."""
+        if not self.is_czi(sha):
+            raise ImageError("only a .czi is processed here")
+        return tiff_bytes(preprocess.processed(self.array(sha)))
+
     def matlab_pair(self, processed: str, raw: str | None) -> tuple[bytes, bytes | None]:
         """The TIFFs ais_auto.m reads for this cell (app/analysis/matlab.py):
         the files themselves, or for a CZI the pair trace() uses -- its

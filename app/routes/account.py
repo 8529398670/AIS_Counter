@@ -45,6 +45,7 @@ def me_row(store: Store, cfg: Config, actor: Actor) -> dict[str, Any]:
         "has_pin": pins.has_pin(actor.user),
         "auth": actor.method,
         "api_keys_enabled": cfg.api_keys_enabled,
+        "shortcuts": actor.user.shortcuts,
     }
     # Only a session has a CSRF token. A key-authenticated request has no
     # ambient credential to protect, so there is nothing to hand back -- see
@@ -70,6 +71,22 @@ async def rename(request: Request) -> Response:
     if not await run(users.rename_user, get_store(request), actor_from(request).user.id, display_name):
         return server_error()
     return JSONResponse({"ok": True, "display_name": display_name.strip()})
+
+
+async def set_shortcuts(request: Request) -> Response:
+    """Replace the caller's rebound keyboard shortcuts with the map sent
+    (static/js/shortcuts.js sends the whole map on every change)."""
+    body = await read_json(request)
+    if body is None:
+        return bad_request("malformed request body")
+    if not check_csrf(request, body.get("csrf_token")):
+        return forbidden("invalid csrf token")
+    shortcuts = body.get("shortcuts")
+    if not users.valid_shortcuts(shortcuts):
+        return bad_request("bad_shortcuts")
+    if not await run(users.set_shortcuts, get_store(request), actor_from(request).user.id, shortcuts):
+        return server_error()
+    return JSONResponse({"ok": True})
 
 
 async def set_pin(request: Request) -> Response:

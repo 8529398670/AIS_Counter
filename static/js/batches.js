@@ -9,6 +9,11 @@
 // card's grip or from its menu. Reports (one batch, or every batch shown) are
 // built in AisExport: an Excel workbook, or a ZIP with it and the traced PNGs.
 //
+// Adding images blinds their names unless the Add menu's Randomize switch is
+// off (app/models/ais.py), then opens the Images dialog on what came in; a
+// card's Images button and folder chips open it at any time, to choose the
+// images the team works on. ZIP exports ask what to put in (AisExport).
+//
 // Images added here upload from this browser in the background, a few files
 // at a time, whichever screen is showing; Ais (ais.js) borrows those files
 // (fileFor) when it needs one before its turn, and hears of each one that
@@ -28,6 +33,7 @@ const Batches = {
   addTarget: null,       // the batch the file pickers add to
   resetting: null,       // the batch the Reset results dialog is for
   pumping: 0,           // upload workers running
+  randomizeKey: "batches-randomize",
 
   init( me ) {
     this.me = me;
@@ -343,7 +349,7 @@ const Batches = {
     return list.map( ( b , i ) => ( { batch: b , images: statuses[ i ] , rows: results.filter( ( r ) => r.batch_id === b.id ) } ) );
   },
 
-  async exportBatch( b , kind ) {
+  async exportBatch( b , kind , options ) {
     const note = ( text ) => {
       if ( text ) this.exports.set( b.id , text );
       else this.exports.delete( b.id );
@@ -353,30 +359,39 @@ const Batches = {
     try {
       const items = await this.gather( [ b ] );
       await AisExport.exportReport( items , b.name , kind , ( done , total ) =>
-        note( total ? I18n.get( "batches.exporting" ).replace( "{done}" , done ).replace( "{total}" , total ) : "" ) );
+        note( total ? I18n.get( "batches.exporting" ).replace( "{done}" , done ).replace( "{total}" , total ) : "" ) , options );
     } catch ( error ) {
       App.showError( error.message );
     }
     note( "" );
   },
 
-  // Every batch the screen shows: the filter, Mine only and Show archived apply.
-  async exportAll( kind ) {
-    const line = Dom.get( "batches-export-status" );
-    const note = ( text ) => {
-      Dom.text( line , text );
-      Dom.show( line , Boolean( text ) );
-    };
+  // Every batch the screen shows: the filter, Mine only and Show archived
+  // apply. A ZIP asks what to put in first.
+  exportAll( kind ) {
     const list = this.list ? this.shown() : [];
     if ( !list.length ) {
       App.showError( I18n.get( "batches.nothing_to_export" ) );
       return;
     }
+    if ( kind === "zip" ) {
+      AisExport.openOptions( list , list.length === 1 ? list[ 0 ].name : "batches" , ( options ) => this.exportShown( list , kind , options ) );
+    } else {
+      this.exportShown( list , kind );
+    }
+  },
+
+  async exportShown( list , kind , options ) {
+    const line = Dom.get( "batches-export-status" );
+    const note = ( text ) => {
+      Dom.text( line , text );
+      Dom.show( line , Boolean( text ) );
+    };
     note( I18n.get( "batches.preparing" ) );
     try {
       const items = await this.gather( list );
       await AisExport.exportReport( items , list.length === 1 ? list[ 0 ].name : "batches" , kind , ( done , total ) =>
-        note( total ? I18n.get( "batches.exporting" ).replace( "{done}" , done ).replace( "{total}" , total ) : "" ) );
+        note( total ? I18n.get( "batches.exporting" ).replace( "{done}" , done ).replace( "{total}" , total ) : "" ) , options );
     } catch ( error ) {
       App.showError( error.message );
     }
@@ -393,6 +408,28 @@ const Batches = {
   pick( b , id ) {
     this.addTarget = b;
     Dom.get( id ).click();
+  },
+
+  // Whether images added from here get blinded names: on unless switched
+  // off in an Add menu, remembered in this browser.
+  randomize() {
+    try {
+      return window.localStorage.getItem( this.randomizeKey ) !== "0";
+    } catch ( error ) {
+      return true;
+    }
+  },
+
+  setRandomize( on ) {
+    try {
+      window.localStorage.setItem( this.randomizeKey , on ? "1" : "0" );
+    } catch ( error ) { /* storage blocked: on for this visit */ }
+  },
+
+  // The newest add of a batch the server returned, to open the Images dialog on.
+  lastAdd( batch ) {
+    const adds = batch.adds || [];
+    return adds.length ? adds[ adds.length - 1 ].id : null;
   },
 
   // Files picked in this browser: hash them, add them to the batch, then
@@ -413,7 +450,8 @@ const Batches = {
         this.render();
         return;
       }
-      const batch = await Api.post( "/api/ais/batches/" + b.id + "/upload" , { files: picked.files } );
+      const batch = await Api.post( "/api/ais/batches/" + b.id + "/upload" , { files: picked.files ,
+        randomize: this.randomize() , add_name: picked.name } );
       Ais.batchChanged( batch , true );
       Dom.toast( I18n.get( "batches.added" ).replace( "{n}" , picked.files.length ).replace( "{name}" , batch.name ) );
       // Only what the server does not have yet, each sha once.
@@ -423,18 +461,19 @@ const Batches = {
       } ) );
       picked.files.forEach( ( f ) => {
         if ( waiting.has( f.sha ) && !this.queue.some( ( q ) => q.sha === f.sha ) ) {
-          this.files.set( f.sha , picked.byRel.get( f.rel ) );
+          this.files.set( f.sha , picked.bySha.get( f.sha ) );
           this.queue.push( { batchId: b.id , sha: f.sha } );
         }
       } );
+      this.local.delete( b.id );
+      this.pump();
+      AisImages.openBatch( batch , this.lastAdd( batch ) );
     } catch ( error ) {
       App.showError( error.message );
       this.local.delete( b.id );
       this.render();
       return;
     }
-    this.local.delete( b.id );
-    this.pump();
     await this.refresh( true );
   },
 
@@ -443,9 +482,10 @@ const Batches = {
     this.local.set( b.id , { reading: true , done: 0 , total: 0 } );
     this.render();
     try {
-      const batch = await Api.post( "/api/ais/batches/" + b.id + "/path" , { path: path } );
+      const batch = await Api.post( "/api/ais/batches/" + b.id + "/path" , { path: path , randomize: this.randomize() } );
       Ais.batchChanged( batch , true );
       Dom.toast( I18n.get( "batches.added_path" ).replace( "{name}" , batch.name ) );
+      AisImages.openBatch( batch , this.lastAdd( batch ) );
     } catch ( error ) {
       App.showError( error.message );
     }
@@ -582,8 +622,8 @@ const Batches = {
         else { this.editing = null; this.render(); }
       };
       input.addEventListener( "keydown" , ( e ) => {
-        if ( e.key === "Enter" ) { e.preventDefault(); finish( true ); }
-        if ( e.key === "Escape" ) { e.preventDefault(); finish( false ); }
+        if ( Shortcuts.is( e , "batches.save_name" ) ) { e.preventDefault(); finish( true ); }
+        else if ( Shortcuts.is( e , "batches.cancel_name" ) ) { e.preventDefault(); finish( false ); }
       } );
       input.addEventListener( "blur" , () => finish( true ) );
       return input;
@@ -628,7 +668,8 @@ const Batches = {
       children: [ Dom.el( "i" , { class: "bi bi-download" } ) ],
     } ) , [
       this.menuItem( "bi-file-earmark-spreadsheet" , I18n.get( "batches.export_xlsx" ) , () => this.exportBatch( b , "xlsx" ) ),
-      this.menuItem( "bi-file-earmark-zip" , I18n.get( "batches.export_zip" ) , () => this.exportBatch( b , "zip" ) ),
+      this.menuItem( "bi-file-earmark-zip" , I18n.get( "batches.export_zip" ) , () => AisExport.openOptions( [ b ] , b.name ,
+        ( options ) => this.exportBatch( b , "zip" , options ) ) ),
     ] , true );
   },
 
@@ -669,9 +710,20 @@ const Batches = {
       class: "dropdown-item" , attrs: { type: "button" } , on: { click: onClick },
       children: [ Dom.el( "i" , { class: "bi " + icon + " me-2" } ) , Dom.el( "span" , { text: I18n.get( key ) } ) ],
     } ) ] } );
+    const id = "batches-randomize-" + b.id;
+    const box = Dom.el( "input" , { class: "form-check-input" , attrs: { type: "checkbox" , role: "switch" , id: id } ,
+      on: { change: ( e ) => this.setRandomize( e.target.checked ) } } );
+    box.checked = this.randomize();
     const items = [
       item( "bi-folder2-open" , "batches.add_folder" , () => this.pick( b , "batches-add-folder" ) ),
       item( "bi-images" , "batches.add_files" , () => this.pick( b , "batches-add-files" ) ),
+      Dom.el( "li" , { children: [ Dom.el( "hr" , { class: "dropdown-divider" } ) ] } ),
+      // Its own click must not close the menu (Bootstrap closes on any click inside).
+      Dom.el( "li" , { class: "px-3 py-1" , on: { click: ( e ) => e.stopPropagation() } , children: [
+        Dom.el( "div" , { class: "form-check form-switch mb-0 small text-nowrap" , attrs: { title: I18n.get( "batches.randomize_hint" ) } , children: [
+          box , Dom.el( "label" , { class: "form-check-label" , text: I18n.get( "batches.randomize" ) , attrs: { for: id } } ),
+        ] } ),
+      ] } ),
     ];
     const empty = b.images === 0;
     return Dom.el( "div" , { class: "btn-group" , children: [
@@ -696,6 +748,10 @@ const Batches = {
     const actions = [ this.addMenu( b ) ];
     if ( b.images ) actions.push( Dom.el( "a" , { class: "btn btn-sm btn-outline-secondary" , attrs: { href: Ais.urlFor( b , null ) } ,
       children: [ Dom.el( "i" , { class: "bi bi-box-arrow-in-right me-1" } ) , Dom.el( "span" , { text: I18n.get( "batches.open" ) } ) ] } ) );
+    if ( b.images ) actions.push( Dom.el( "button" , { class: "btn btn-sm btn-outline-secondary" ,
+      attrs: { type: "button" , title: I18n.get( "batches.images_hint" ) } , on: { click: () => AisImages.openBatch( b , null ) } ,
+      children: [ Dom.el( "i" , { class: "bi bi-grid-3x3-gap me-1" } ) ,
+        Dom.el( "span" , { text: I18n.get( "batches.images_n" ).replace( "{n}" , this.includedOf( b ) ).replace( "{total}" , b.images ) } ) ] } ) );
     if ( admin && b.images ) actions.push( this.iconButton( "bi-people" , I18n.get( "ais.assign" ) , () => AisAssign.open( b ) ) );
     if ( b.images ) actions.push( this.exportMenu( b ) );
     const more = this.moreMenu( b , canChange );
@@ -718,10 +774,13 @@ const Batches = {
       if ( b.duplicates ) counts.push( I18n.get( "batches.n_duplicates" ).replace( "{n}" , b.duplicates ) );
       body.push( Dom.el( "div" , { class: "batches-measures" , children: [
         this.bar( I18n.get( "batches.on_server" ) , b.stored ?? b.files , b.files , "bg-info" ),
-        this.bar( I18n.get( "batches.completed" ) , b.completed , b.images , "" ),
+        this.bar( I18n.get( "batches.completed" ) , b.completed , this.includedOf( b ) , "" ),
         Dom.el( "div" , { class: "small text-body-secondary" , text: counts.join( " · " ) } ),
       ] } ) );
     }
+
+    const folders = this.folderChips( b );
+    if ( folders ) body.push( folders );
 
     const local = Dom.el( "div" , { class: "small text-primary mt-1" , attrs: { id: "batches-local-" + b.id } } );
     body.push( local );
@@ -757,6 +816,30 @@ const Batches = {
     this.renderLocalInto( local , b.id );
     if ( admin ) this.dragHandlers( card , b );
     return card;
+  },
+
+  includedOf( b ) {
+    return b.included ?? b.images;
+  },
+
+  // One chip per folder (or set of files) added to the batch, each opening
+  // the Images dialog on just those; "Earlier images" for what came in
+  // before adds were recorded.
+  folderChips( b ) {
+    const adds = b.adds || [];
+    if ( !adds.length ) return null;
+    const chip = ( icon , label , title , addId ) => Dom.el( "button" , {
+      class: "btn btn-sm btn-light border batches-folder text-truncate",
+      attrs: { type: "button" , title: title },
+      on: { click: () => AisImages.openBatch( b , addId ) },
+      children: [ Dom.el( "i" , { class: "bi " + icon + " me-1" } ) , Dom.el( "span" , { text: label } ) ],
+    } );
+    const chips = adds.map( ( a ) => chip( a.source === "path" ? "bi-hdd" : "bi-folder2" ,
+      a.name + " (" + a.count + ")" ,
+      [ a.path || a.name , I18n.get( "batches.by" ).replace( "{name}" , a.added_by_name || "?" ) , new Date( a.added_at ).toLocaleString() ]
+        .concat( a.randomized ? [ I18n.get( "batches.randomized" ) ] : [] ).join( " · " ) , a.id ) );
+    if ( b.earlier ) chips.unshift( chip( "bi-clock-history" , I18n.get( "batches.earlier" ) + " (" + b.earlier + ")" , I18n.get( "batches.earlier" ) , "earlier" ) );
+    return Dom.el( "div" , { class: "batches-folders mt-2" , children: chips } );
   },
 
   renderLocalInto( line , id ) {

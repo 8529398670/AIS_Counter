@@ -339,3 +339,100 @@ def test_reset_deletes_all_or_only_auto_and_keeps_images_and_assignment(store):
     assert deleted == 2 and ais.list_results(store, bid) == []
     assert after["skipped"] == [] and len(after["images"]) == 3 and after["assignment"]
     assert ais.list_batches(store)[0]["completed"] == 0
+
+
+# --- blinded names, adds and the team's inclusion --------------------------------
+
+
+def test_randomize_blinds_cells_keeps_pairs_and_zen_endings_and_skips_blinded_ones(store):
+    batch = ais.new_batch(store, "f", "upload", 1)
+    added = ais.add_files(store, batch["id"], "upload", files(
+        ("f/DOSE A_c2_ORG.tif", "a raw"), ("f/DOSE A_c2_ORG" + P, "a proc"),
+        ("f/DOSE B.czi", "b"),
+        ("f/19891-24785-20711.czi", "c"),
+    ), randomize_names=True, user_id=1, name="f")
+    by_original = {im.get("original_key", im["key"]): im for im in added["images"]}
+    pair, czi, kept = by_original["DOSE A_c2_ORG"], by_original["DOSE B"], by_original["19891-24785-20711"]
+    assert ais.RANDOM_RE.match(pair["cell"]) and pair["cell"].endswith("_c2_ORG")
+    assert pair["files"]["raw"]["name"] == pair["cell"] + ".tif"
+    assert pair["files"]["processed"]["name"] == pair["cell"] + P
+    assert pair["files"]["processed"]["rel"] == "f/" + pair["cell"] + P
+    assert pair["files"]["raw"]["original"] == {"name": "DOSE A_c2_ORG.tif", "rel": "f/DOSE A_c2_ORG.tif"}
+    assert ais.RANDOM_RE.match(czi["key"]) and czi["original_cell"] == "DOSE B"
+    assert "original_key" not in kept and "original" not in kept["files"]["czi"]
+    assert all(0 <= int(n) < 32768 for n in czi["cell"].split("-"))
+    # In the order of the new names, so the old order gives nothing away.
+    assert [im["key"] for im in added["images"]] == sorted(im["key"] for im in added["images"])
+
+    text = ais.translation(added)
+    assert text.startswith("Original Name/Random Name\r\n-------------------------\r\n")
+    assert f"DOSE B.czi/{czi['cell']}.czi\r\n" in text and "19891" not in text.split("\r\n", 2)[2].split("/")[0]
+
+
+def test_randomize_keeps_new_names_unique(store, monkeypatch):
+    draws = iter([1, 2, 3, 1, 2, 3, 4, 5, 6])
+    monkeypatch.setattr(ais.secrets, "randbelow", lambda n: next(draws))
+    batch = ais.create_batch(store, "f", "upload", files(("f/a.czi", "a"), ("f/b.czi", "b")), 1, randomize_names=True)
+    assert sorted(im["key"] for im in batch["images"]) == ["1-2-3", "4-5-6"]
+
+
+def test_each_add_is_recorded_with_its_images(store):
+    batch = ais.new_batch(store, "f", "upload", 1)
+    ais.add_files(store, batch["id"], "upload", files(("one/a.czi", "a")), user_id=1, name="one")
+    later = ais.add_files(store, batch["id"], "path", [
+        {"name": "b.czi", "rel": "two/b.czi", "sha": sha("b"), "size": 2, "path": "/two/b.czi",
+         "modified": "2024-01-02T00:00:00+00:00", "created": "2024-01-01T00:00:00+00:00"},
+    ], "/two", user_id=2, name="two")
+    assert [(a["id"], a["name"], a["source"], a["added_by"], a["count"], a["randomized"]) for a in later["adds"]] == [
+        (1, "one", "upload", 1, 1, False), (2, "two", "path", 2, 1, False)]
+    assert [im["add_id"] for im in later["images"]] == [1, 2]
+    assert later["images"][1]["files"]["czi"]["modified"] == "2024-01-02T00:00:00+00:00"
+    listed = ais.list_batches(store)[0]
+    assert [a["name"] for a in listed["adds"]] == ["one", "two"] and listed["earlier"] == 0
+    with pytest.raises(ais.BatchError):
+        ais.add_files(store, batch["id"], "upload", [{"name": "c.czi", "sha": sha("c"), "modified": 5}])
+
+
+def test_excluded_images_are_left_out_of_counts_and_assignment_and_duplicates_start_out(store):
+    batch = ais.create_batch(store, "f", "upload", files(
+        ("f/a" + P, "a"), ("f/b" + P, "b"), ("f/c" + P, "c"), ("f/d" + P, "a")), 1)
+    bid = batch["id"]
+    assert batch["excluded"] == ["d"]                          # a duplicate of a
+    ais.set_done(store, bid, "c", True)
+    after = ais.set_included(store, bid, ["c", "nope"], False)
+    assert after["excluded"] == ["c", "d"]
+    listed = ais.list_batches(store)[0]
+    assert (listed["images"], listed["included"], listed["completed"]) == (4, 2, 0)
+    ais.assign(store, bid, [{"user_id": 1, "percent": 100}], 1)
+    assert sorted(ais.get_batch(store, bid)["assignment"]["images"]) == ["a", "b"]
+    status = {s["key"]: s["included"] for s in ais.image_status(ais.get_batch(store, bid), [], lambda f: True)}
+    assert status == {"a": True, "b": True, "c": False, "d": False}
+    assert ais.set_included(store, bid, ["d"], True)["excluded"] == ["c"]
+    with pytest.raises(ais.BatchError):
+        ais.set_included(store, bid, "c", True)
+    with pytest.raises(ais.BatchError):
+        ais.set_included(store, bid, ["c"], "yes")
+    assert ais.set_included(store, 999, ["c"], True) is None
+
+
+def test_a_batch_from_before_inclusion_leaves_its_duplicates_out(store):
+    batch = ais.create_batch(store, "f", "upload", files(("f/a" + P, "a"), ("f/b" + P, "a")), 1)
+    legacy = {k: v for k, v in batch.items() if k not in ("excluded", "adds")}
+    legacy["images"] = [{k: v for k, v in im.items() if k != "add_id"} for im in legacy["images"]]
+    store.put(db.BUCKET_AIS_BATCHES, batch["id"], legacy)
+    assert ais.excluded_keys(legacy) == {"b"}
+    listed = ais.list_batches(store)[0]
+    assert listed["included"] == 1 and listed["earlier"] == 2 and listed["adds"] == []
+    added = ais.add_files(store, batch["id"], "upload", files(("g/c" + P, "c")), user_id=1, name="g")
+    assert added["excluded"] == ["b"] and added["adds"][0]["id"] == 1
+
+
+def test_originals_are_only_for_admins():
+    from app.routes import ais as routes
+
+    blinded = {"name": "1-2-3.czi", "rel": "f/1-2-3.czi", "sha": sha("x"), "path": "/f/DOSE.czi",
+               "original": {"name": "DOSE.czi", "rel": "f/DOSE.czi"}}
+    assert routes._unnamed_file(blinded) == {"name": "1-2-3.czi", "rel": "f/1-2-3.czi", "sha": sha("x")}
+    plain = {"name": "a.czi", "rel": "f/a.czi", "sha": sha("a"), "path": "/f/a.czi"}
+    assert routes._unnamed_file(plain) == plain
+    assert routes._unnamed_image({"key": "1-2-3", "original_key": "DOSE", "original_cell": "DOSE"}) == {"key": "1-2-3"}
