@@ -45,6 +45,9 @@ MAX_TEXT = 1000
 SOURCES = ("upload", "path")    # "mixed" once a batch has had both
 MAX_SHARES = 100
 
+# The Measure tool's AIS start -> soma distance (static/js/ais_measure.js):
+# µm and px, then its two ends (AIS start, soma) in MATLAB axes like click_x.
+SOMA_NUMBERS = ("soma_um", "soma_px", "soma_ais_x", "soma_ais_y", "soma_x", "soma_y")
 # What an accepted row may carry, and the type each value must have.
 RESULT_NUMBERS = ("length_um", "start_um", "end_um", "mid_um", "max_um", "arc_um", "threshold_initial",
                   "threshold", "click_x", "click_y", "click2_x", "click2_y", "profile_points",
@@ -52,7 +55,9 @@ RESULT_NUMBERS = ("length_um", "start_um", "end_um", "mid_um", "max_um", "arc_um
                   "pixconv", "f", "kernel", "sigma", "strel", "min_pixels", "max_path", "max_passes",
                   "spline_p", "window_um",
                   # how wide and bright the measured AIS is (app/analysis/service.shape)
-                  "width_um", "brightness")
+                  "width_um", "brightness",
+                  # how far its start is from the soma, measured by hand (set_soma)
+                  *SOMA_NUMBERS)
 # origin: "auto" for one auto mode found, empty for a click.
 RESULT_TEXTS = ("length_str", "source", "notes", "file", "sha", "smooth", "origin")
 
@@ -588,6 +593,31 @@ def update_result(store: Store, result_id: int, row: Any, user_id: int) -> Recor
             return None
         kept = {k: record[k] for k in ("id", "batch_id", "batch_name", "image", "cell", "n", "created_by", "accepted_at")}
         record = clean | kept | {"origin": record.get("origin", ""), "edited_at": to_iso(utc_now()), "edited_by": user_id}
+        tx.put(BUCKET_AIS_RESULTS, result_id, record)
+    return record
+
+
+def set_soma(store: Store, result_id: int, soma: Any, user_id: int) -> Record | None:
+    """Set an accepted AIS's distance to its soma ({soma_um, ...} with every
+    SOMA_NUMBERS field a number), or clear it (None), leaving its trace alone.
+    None when it is gone. An edit (update_result) drops it: the start may move."""
+    if soma is None:
+        values: dict[str, Any] = dict.fromkeys(SOMA_NUMBERS)
+    elif isinstance(soma, dict):
+        values = {}
+        for k in SOMA_NUMBERS:
+            v = soma.get(k)
+            if not isinstance(v, (int, float)) or isinstance(v, bool) or v != v or v < 0:
+                raise BatchError(f"{k} must be a number")
+            values[k] = v
+    else:
+        raise BatchError("soma must be an object or null")
+    with store.transaction() as tx:
+        record = tx.get(BUCKET_AIS_RESULTS, result_id)
+        if record is None:
+            return None
+        record = record | values | {"soma_at": to_iso(utc_now()) if soma is not None else None,
+                                    "soma_by": user_id if soma is not None else None}
         tx.put(BUCKET_AIS_RESULTS, result_id, record)
     return record
 

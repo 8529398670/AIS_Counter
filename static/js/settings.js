@@ -261,6 +261,8 @@ const Settings = {
     return out;
   },
   twoClicks() { return this.values.two_clicks; },
+  // µm per pixel (the Measure tool's distances).
+  pixconv() { return this.values.pixconv; },
   // µm; 0 is off.
   minLength() { return this.values.min_length; },
   // Screen pixels, whatever the zoom.

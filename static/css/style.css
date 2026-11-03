@@ -296,6 +296,7 @@ th { color: var(--bs-secondary-color); font-size: 0.8rem; text-transform: upperc
 .ais-tools .btn[data-tool="trace"].active { background: var(--bs-primary); border-color: var(--bs-primary); }
 .ais-tools .btn[data-tool="edit"].active { background: var(--bs-warning); border-color: var(--bs-warning); color: #000; }
 .ais-tools .btn[data-tool="delete"].active { background: var(--bs-danger); border-color: var(--bs-danger); }
+.ais-tools .btn[data-tool="measure"].active { background: rgb(200, 40, 170); border-color: rgb(200, 40, 170); }
 .ais-stage canvas.ais-tool-delete { cursor: default; }
 .ais-stage canvas.ais-hit { cursor: pointer; }
 .ais-zoom-level { font-size: 0.7rem; font-variant-numeric: tabular-nums; min-width: 3.2rem; padding-left: 0.25rem; padding-right: 0.25rem; }
@@ -305,6 +306,14 @@ th { color: var(--bs-secondary-color); font-size: 0.8rem; text-transform: upperc
 .ais-focus .ais-view > .card.mb-3 { margin-bottom: 0.5rem !important; }
 .ais-focus .ais-toolbar { padding: 0.5rem; }
 #ais-focus.active, #ais-view-lock.active { background: var(--bs-warning); color: #000; border-color: var(--bs-warning); }
+/* Measure (static/js/ais_measure.js): the toolbar button while on, its options, and the loupe beside the pointer. */
+#ais-measure.active { background: rgb(200, 40, 170); color: #fff; border-color: rgb(200, 40, 170); }
+.ais-measure-menu { min-width: 17rem; }
+.ais-stage canvas.ais-loupe { position: absolute; width: 160px; height: 160px; pointer-events: none; border: 2px solid rgba(255, 255, 255, 0.85);
+  border-radius: 0.35rem; box-shadow: 0 0.25rem 1rem rgba(0, 0, 0, 0.6); image-rendering: pixelated; }
+.ais-stage canvas.ais-loupe[hidden] { display: none; }
+.ais-stage canvas.ais-measure-grab { cursor: grab; }
+.ais-stage canvas.ais-measure-dragging { cursor: grabbing; }
 
 /* The Images dialog: most of the screen, a grid of previews. */
 @media (min-width: 992px) {

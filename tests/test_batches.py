@@ -124,6 +124,34 @@ def test_delete_closes_the_gap_and_update_keeps_the_number(store):
     assert ais.update_result(store, 999, row(), 1) is None
 
 
+SOMA = {"soma_um": 4.83, "soma_px": 30.0, "soma_ais_x": 10, "soma_ais_y": 12, "soma_x": 34, "soma_y": 30}
+
+
+def test_soma_distance_is_set_cleared_and_dropped_by_an_edit(store):
+    batch = ais.create_batch(store, "f", "upload", files(("f/a" + P, "a")), 1)
+    first = ais.add_result(store, batch["id"], "a", row(), 1)
+    assert first["soma_um"] is None
+    measured = ais.set_soma(store, first["id"], SOMA, 2)
+    assert {k: measured[k] for k in SOMA} == SOMA
+    assert (measured["n"], measured["pixels"], measured["length_um"], measured["soma_by"]) == (1, [[1, 2], [2, 3]], 1.5, 2)
+    assert measured["soma_at"]
+    cleared = ais.set_soma(store, first["id"], None, 2)
+    assert all(cleared[k] is None for k in SOMA) and cleared["soma_at"] is None
+    ais.set_soma(store, first["id"], SOMA, 2)
+    edited = ais.update_result(store, first["id"], row(2.0), 2)
+    assert all(edited[k] is None for k in SOMA) and "soma_at" not in edited
+    assert ais.set_soma(store, 999, SOMA, 1) is None
+
+
+@pytest.mark.parametrize("soma", [SOMA | {"soma_um": "4"}, SOMA | {"soma_x": True}, SOMA | {"soma_px": -1},
+                                  {"soma_um": 4.0}, [1, 2]])
+def test_soma_distance_must_be_numbers(store, soma):
+    batch = ais.create_batch(store, "f", "upload", files(("f/a" + P, "a")), 1)
+    first = ais.add_result(store, batch["id"], "a", row(), 1)
+    with pytest.raises(ais.BatchError):
+        ais.set_soma(store, first["id"], soma, 1)
+
+
 def test_split_counts_sum_to_n():
     assert ais.split_counts(10, [1, 1, 1]) == [4, 3, 3]
     assert ais.split_counts(30, [66.67, 33.33]) == [20, 10]

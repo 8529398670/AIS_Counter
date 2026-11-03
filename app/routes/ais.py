@@ -554,6 +554,28 @@ async def result_update(request: Request) -> Response:
     return JSONResponse(updated)
 
 
+async def result_soma(request: Request) -> Response:
+    """Body: {soma}: an accepted AIS's distance to its soma (the Measure tool),
+    or null to clear it. The trace is left as it is."""
+    body, refused = await _body(request)
+    if refused:
+        return refused
+    store = get_store(request)
+    result_id = parse_id(request.path_params["result_id"])
+    row = await run(batches.get_result, store, result_id) if result_id else None
+    if row is None:
+        return not_found("no such result")
+    if not await _may_change(request, row):
+        return forbidden("only whoever accepted it, the image's assignee, or an admin, can change it")
+    try:
+        updated = await run(batches.set_soma, store, result_id, body.get("soma"), _user_id(request))
+    except batches.BatchError as exc:
+        return bad_request(str(exc))
+    if updated is None:
+        return not_found("no such result")
+    return JSONResponse(updated)
+
+
 async def result_import(request: Request) -> Response:
     """Body: {name, rows}: results kept in a browser before they lived here."""
     body, refused = await _body(request)

@@ -165,6 +165,30 @@
               <button id="ais-auto-review" class="btn btn-outline-secondary ais-focus-hide" type="button" hidden data-i18n-attr="title:ais.auto_review_help">
                 <i class="bi bi-list-check" aria-hidden="true"></i> <span data-i18n="ais.auto_review"></span> <span id="ais-auto-review-count" class="badge text-bg-secondary"></span>
               </button>
+              <!-- Measure (static/js/ais_measure.js): each AIS's start to its soma, kept on its row; a ruler elsewhere. -->
+              <div class="btn-group">
+                <button id="ais-measure" class="btn btn-outline-secondary" type="button" data-tool="measure" disabled aria-pressed="false" data-i18n-attr="title:ais.measure_help">
+                  <i class="bi bi-rulers" aria-hidden="true"></i> <span data-i18n="ais.measure"></span>
+                </button>
+                <button id="ais-measure-menu" class="btn btn-outline-secondary dropdown-toggle dropdown-toggle-split" type="button" disabled data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false" data-i18n-attr="title:ais.measure_options,aria-label:ais.measure_options"></button>
+                <div class="dropdown-menu p-3 small ais-measure-menu">
+                  <div class="form-check form-switch"><input class="form-check-input" type="checkbox" id="ais-measure-loupe" data-measure-option="loupe" /><label class="form-check-label" for="ais-measure-loupe" data-i18n="ais.measure_loupe"></label></div>
+                  <div class="form-check form-switch ms-3"><input class="form-check-input" type="checkbox" id="ais-measure-loupe-traces" data-measure-option="loupe_traces" /><label class="form-check-label" for="ais-measure-loupe-traces" data-i18n="ais.measure_loupe_traces"></label></div>
+                  <div class="form-check form-switch"><input class="form-check-input" type="checkbox" id="ais-measure-snap" data-measure-option="snap" /><label class="form-check-label" for="ais-measure-snap" data-i18n="ais.measure_snap"></label></div>
+                  <div class="form-check form-switch"><input class="form-check-input" type="checkbox" id="ais-measure-units" data-measure-option="units" /><label class="form-check-label" for="ais-measure-units" data-i18n="ais.measure_units"></label></div>
+                  <div class="form-check form-switch"><input class="form-check-input" type="checkbox" id="ais-measure-soma-hint" data-measure-option="soma_hint" /><label class="form-check-label" for="ais-measure-soma-hint" data-i18n="ais.measure_soma_hint"></label></div>
+                  <div class="form-check form-switch"><input class="form-check-input" type="checkbox" id="ais-measure-keep" data-measure-option="keep" /><label class="form-check-label" for="ais-measure-keep" data-i18n="ais.measure_keep"></label></div>
+                  <hr class="my-2" />
+                  <div class="fw-semibold mb-1" data-i18n="ais.measure_ais_end"></div>
+                  <div class="form-check"><input class="form-check-input" type="radio" name="ais-measure-ais-end" id="ais-measure-end-preset" value="preset" data-measure-option="ais_end" /><label class="form-check-label" for="ais-measure-end-preset" data-i18n="ais.measure_end_preset"></label></div>
+                  <div class="form-check"><input class="form-check-input" type="radio" name="ais-measure-ais-end" id="ais-measure-end-click" value="click" data-measure-option="ais_end" /><label class="form-check-label" for="ais-measure-end-click" data-i18n="ais.measure_end_click"></label></div>
+                  <label class="d-flex align-items-center gap-2 mt-2"><span data-i18n="ais.measure_zoom"></span>
+                    <select class="form-select form-select-sm w-auto" data-measure-option="zoom"><option value="2">2×</option><option value="4">4×</option><option value="8">8×</option></select>
+                  </label>
+                  <hr class="my-2" />
+                  <button id="ais-measure-clear-lines" class="btn btn-outline-secondary btn-sm" type="button"><i class="bi bi-x-lg" aria-hidden="true"></i> <span data-i18n="ais.measure_clear_lines"></span></button>
+                </div>
+              </div>
               <div class="input-group ais-picker">
                 <button id="ais-prev" class="btn btn-outline-secondary" type="button" data-i18n-attr="title:ais.prev"><i class="bi bi-chevron-left" aria-hidden="true"></i></button>
                 <select id="ais-image" class="form-select" data-i18n-attr="aria-label:ais.image_label"></select>
@@ -204,6 +228,7 @@
               </div>
               <div class="ais-stage" id="ais-stage">
                 <canvas id="ais-canvas"></canvas>
+                <canvas id="ais-loupe" class="ais-loupe" hidden></canvas>
                 <p id="ais-empty" class="ais-empty" data-i18n="ais.empty"></p>
                 <p id="ais-status" class="ais-status small" hidden><span id="ais-status-text"></span><button id="ais-status-close" class="btn-close btn-close-white" type="button" data-i18n-attr="title:ais.note_close,aria-label:ais.note_close" hidden></button></p>
                 <!-- Pan and zoom: drag (or middle-drag) pans, the wheel zooms; lock freezes the view across images. Undo / redo take back accepted, edited and deleted AIS. -->
@@ -219,11 +244,12 @@
                 </div>
                 <!-- What the image shows (Ais.toggleView): the processed image, or a .czi's channels / a pair's raw file blended; on a .czi, Soma outlines the cell bodies over it. Hidden until hovered at the top left, folded into one button; open, they run along the top until the mouse leaves. -->
                 <div id="ais-channels" class="ais-channels" role="group" data-i18n-attr="aria-label:ais.views" hidden></div>
-                <!-- What a click on the image does (Ais.setTool): trace a new AIS, edit one, or delete one. -->
+                <!-- What a click on the image does (Ais.setTool): trace a new AIS, edit one, delete one, or measure (ais_measure.js). Each stays on until another is picked. -->
                 <div class="ais-tools btn-group btn-group-sm" role="group" data-i18n-attr="aria-label:ais.tools">
                   <button class="btn btn-dark" type="button" data-tool="trace" data-i18n-attr="title:ais.tool_trace,aria-label:ais.tool_trace" aria-pressed="true"><i class="bi bi-crosshair" aria-hidden="true"></i></button>
                   <button class="btn btn-dark" type="button" data-tool="edit" data-i18n-attr="title:ais.tool_edit,aria-label:ais.tool_edit" aria-pressed="false"><i class="bi bi-pencil" aria-hidden="true"></i></button>
                   <button class="btn btn-dark" type="button" data-tool="delete" data-i18n-attr="title:ais.tool_delete,aria-label:ais.tool_delete" aria-pressed="false"><i class="bi bi-eraser" aria-hidden="true"></i></button>
+                  <button class="btn btn-dark" type="button" data-tool="measure" data-i18n-attr="title:ais.tool_measure,aria-label:ais.tool_measure" aria-pressed="false"><i class="bi bi-rulers" aria-hidden="true"></i></button>
                 </div>
               </div>
               <div class="card-footer ais-layers small">
@@ -242,6 +268,30 @@
 
             <div class="card ais-result-card">
               <div class="card-body">
+                <!-- Measure: the AIS being measured, its distance to the soma, and stepping on (ais_measure.js). -->
+                <div id="ais-measure-panel" class="ais-measure-panel mb-3" hidden>
+                  <div class="d-flex align-items-center gap-2 mb-2">
+                    <h2 class="h5 card-title mb-0 me-auto"><i class="bi bi-rulers me-1" aria-hidden="true"></i><span data-i18n="ais.measure_heading"></span></h2>
+                    <div class="btn-group btn-group-sm">
+                      <button id="ais-measure-prev" class="btn btn-outline-secondary" type="button" data-i18n-attr="title:ais.measure_prev,aria-label:ais.measure_prev"><i class="bi bi-chevron-left" aria-hidden="true"></i></button>
+                      <button id="ais-measure-next" class="btn btn-outline-secondary" type="button" data-i18n-attr="title:ais.measure_next,aria-label:ais.measure_next"><i class="bi bi-chevron-right" aria-hidden="true"></i></button>
+                    </div>
+                    <button id="ais-measure-stop" class="btn btn-outline-secondary btn-sm" type="button" data-i18n-attr="title:ais.measure_stop_help"><i class="bi bi-x-lg" aria-hidden="true"></i> <span data-i18n="ais.measure_stop"></span></button>
+                  </div>
+                  <p id="ais-measure-where" class="small text-body-secondary mb-1"></p>
+                  <p id="ais-measure-end" class="small text-body-secondary mb-1"></p>
+                  <div class="ais-length"><span id="ais-measure-value"></span></div>
+                  <p id="ais-measure-saved" class="small text-success mb-1"></p>
+                  <p id="ais-measure-help" class="small mb-2"></p>
+                  <p id="ais-measure-locked" class="small text-warning mb-2" data-i18n="ais.measure_locked" hidden></p>
+                  <div class="row-actions" id="ais-measure-actions" hidden>
+                    <button id="ais-measure-save" class="btn btn-primary btn-sm" type="button"><i class="bi bi-check-lg" aria-hidden="true"></i> <span data-i18n="ais.measure_save"></span></button>
+                    <button id="ais-measure-swap" class="btn btn-outline-secondary btn-sm" type="button" data-i18n-attr="title:ais.measure_swap_help"><i class="bi bi-arrow-left-right" aria-hidden="true"></i> <span data-i18n="ais.measure_swap"></span></button>
+                    <button id="ais-measure-skip" class="btn btn-outline-secondary btn-sm" type="button"><i class="bi bi-skip-forward" aria-hidden="true"></i> <span data-i18n="ais.measure_skip"></span></button>
+                    <button id="ais-measure-clear" class="btn btn-outline-danger btn-sm" type="button"><i class="bi bi-eraser" aria-hidden="true"></i> <span data-i18n="ais.measure_clear"></span></button>
+                  </div>
+                  <hr />
+                </div>
                 <!-- Auto mode: progress, then this image's candidates (to tick) or auto rows (to clean up). -->
                 <div id="ais-auto-panel" class="ais-auto-panel mb-3" hidden>
                   <div class="d-flex align-items-center gap-2 mb-2">
@@ -330,7 +380,7 @@
                 <table class="table table-sm align-middle mb-0 small" id="ais-table">
                   <thead><tr>
                     <th data-i18n="ais.col_image"></th><th>#</th><th data-i18n="ais.col_length"></th><th data-i18n="ais.col_start"></th>
-                    <th data-i18n="ais.col_end"></th><th data-i18n="ais.col_max"></th><th data-i18n="ais.col_threshold"></th><th data-i18n="ais.col_click"></th>
+                    <th data-i18n="ais.col_end"></th><th data-i18n="ais.col_max"></th><th data-i18n="ais.col_soma" data-i18n-attr="title:ais.col_soma_help"></th><th data-i18n="ais.col_threshold"></th><th data-i18n="ais.col_click"></th>
                     <th data-i18n="ais.col_source"></th><th data-i18n="ais.col_batch"></th><th></th>
                   </tr></thead>
                   <tbody></tbody>
@@ -1143,6 +1193,7 @@
   <script src="/js/ais_assign.js"></script>
   <script src="/js/ais_export.js"></script>
   <script src="/js/ais_auto.js"></script>
+  <script src="/js/ais_measure.js"></script>
   <script src="/js/batches.js"></script>
   <script src="/js/app.js"></script>
 </body>

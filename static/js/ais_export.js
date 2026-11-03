@@ -8,7 +8,7 @@ const AisExport = {
   cols: [ "batch_name" , "batch_id" , "image" , "n" , "file" , "source" , "length_um" , "start_um" , "end_um" , "mid_um" , "max_um" , "arc_um" ,
     "threshold_initial" , "threshold" , "click_x" , "click_y" , "click2_x" , "click2_y" , "profile_points" ,
     "smooth" , "pixconv" , "f" , "kernel" , "sigma" , "strel" , "min_pixels" , "max_path" , "max_passes" , "spline_p" , "window_um" ,
-    "width_um" , "brightness" , "origin" , "accepted_at" , "edited_at" , "notes" ],
+    "width_um" , "brightness" , "soma_um" , "soma_px" , "soma_ais_x" , "soma_ais_y" , "soma_x" , "soma_y" , "origin" , "accepted_at" , "edited_at" , "notes" ],
   // The method settings each row was measured with; rows from before these
   // were saved leave them blank.
   settingCols: [ "smooth" , "pixconv" , "f" , "kernel" , "sigma" , "strel" , "min_pixels" , "max_path" , "max_passes" , "spline_p" , "window_um" ],

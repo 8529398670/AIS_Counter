@@ -161,6 +161,7 @@ const Ais = {
     AisAssign.init();
     AisExport.init();
     AisAuto.init();
+    AisMeasure.init();
     this.renderPicker();
     this.renderTable();
     this.renderViewTools();
@@ -576,6 +577,8 @@ const Ais = {
     const shown = this.included();
     Dom.text( Dom.get( "ais-images-count" ) , this.images.length ? shown.length + " / " + this.images.length : "" );
     Dom.get( "ais-images-open" ).disabled = !this.images.length;
+    Dom.get( "ais-measure" ).disabled = !this.images.length;
+    Dom.get( "ais-measure-menu" ).disabled = !this.images.length;
     if ( !shown.length ) {
       select.appendChild( Dom.el( "option" , { text: I18n.get( this.images.length ? "ais.none_included" : "ais.no_images" ) } ) );
       select.disabled = true;
@@ -638,6 +641,7 @@ const Ais = {
     this.editing = null;
     this.hover = null;
     AisAuto.shown( index );
+    AisMeasure.imageShown( index );
     this.renderResult();
     this.renderTable();
     Dom.get( "ais-image" ).value = String( index );
@@ -669,6 +673,7 @@ const Ais = {
       Dom.show( Dom.get( "ais-empty" ) , false );
       this.status( this.imageNote( entry ) , true );
       this.draw();
+      AisMeasure.imageLoaded( index );
     };
     // An <img> does not say why it failed: ask again to tell a file that is
     // not there yet from a refusal (too many requests), which is retried.
@@ -1300,23 +1305,31 @@ const Ais = {
   },
 
   // Left-drag pans (a press that barely moves is a click, which traces);
-  // middle-drag always pans. Both stop while the view is locked.
+  // middle-drag always pans. Both stop while the view is locked. With the
+  // Measure tool, a left press on a measure line's end drags that end instead.
   bindCanvas() {
     let down = null;
     this.canvas.addEventListener( "pointerdown" , ( e ) => {
       if ( e.button !== 0 && e.button !== 1 ) return;
       if ( e.button === 1 ) e.preventDefault();
       down = { x: e.clientX , y: e.clientY , ox: this.view.ox , oy: this.view.oy , moved: false , button: e.button };
+      if ( e.button === 0 && this.tool === "measure" && AisMeasure.onDown( this.toImage( e ) ) ) down.point = true;
       try { this.canvas.setPointerCapture( e.pointerId ); } catch ( error ) { /* pointer already gone */ }
     } );
     this.canvas.addEventListener( "pointermove" , ( e ) => {
       if ( !down ) {
         this.hoverAt( this.toImage( e ) );
+        if ( this.tool === "measure" ) AisMeasure.onMove( this.toImage( e ) );
+        return;
+      }
+      if ( down.point ) {
+        AisMeasure.onDrag( this.toImage( e ) );
         return;
       }
       const dx = e.clientX - down.x;
       const dy = e.clientY - down.y;
       if ( Math.abs( dx ) + Math.abs( dy ) > 4 ) down.moved = true;
+      if ( down.moved && this.tool === "measure" ) AisMeasure.onMove( null );
       if ( down.moved && !this.locked ) {
         this.view.ox = down.ox + dx;
         this.view.oy = down.oy + dy;
@@ -1324,11 +1337,15 @@ const Ais = {
       }
     } );
     this.canvas.addEventListener( "pointerup" , ( e ) => {
-      const wasClick = down && !down.moved && down.button === 0;
+      const wasClick = down && !down.point && !down.moved && down.button === 0;
+      if ( down && down.point ) AisMeasure.onUp();
       down = null;
       if ( wasClick && e.button === 0 ) this.onClick( this.toImage( e ) );
     } );
-    this.canvas.addEventListener( "pointerleave" , () => this.hoverAt( null ) );
+    this.canvas.addEventListener( "pointerleave" , () => {
+      this.hoverAt( null );
+      AisMeasure.onMove( null );
+    } );
     this.canvas.addEventListener( "auxclick" , ( e ) => e.preventDefault() );
     this.canvas.addEventListener( "wheel" , ( e ) => {
       if ( !this.bitmap ) return;
@@ -1358,11 +1375,13 @@ const Ais = {
       return;
     }
     if ( event.ctrlKey || event.metaKey ) return;
-    // Esc: drop an edit, then the Edit / Delete tool, then (auto) the run.
-    if ( key === "Escape" && ( this.editing || this.tool !== "trace" ) ) {
+    // Measure (ais_measure.js) takes Esc, Enter, N, [ ] and Backspace first.
+    if ( AisMeasure.onKey( event ) ) return;
+    // Esc: drop an edit, then (auto) the run. It never changes the tool:
+    // only T, E, D and M (or their buttons) do.
+    if ( key === "Escape" && this.editing ) {
       event.preventDefault();
-      if ( this.editing ) this.reject();
-      else this.setTool( "trace" );
+      this.reject();
       return;
     }
     const arrows = { ArrowLeft: [ -1 , 0 ] , ArrowRight: [ 1 , 0 ] , ArrowUp: [ 0 , -1 ] , ArrowDown: [ 0 , 1 ] };
@@ -1391,6 +1410,7 @@ const Ais = {
     else if ( key === "t" || key === "T" ) this.setTool( "trace" );
     else if ( key === "e" || key === "E" ) this.setTool( "edit" );
     else if ( key === "d" || key === "D" ) this.setTool( "delete" );
+    else if ( key === "m" || key === "M" ) this.setTool( "measure" );
   },
 
   // --- tracing -------------------------------------------------------------
@@ -1399,6 +1419,10 @@ const Ais = {
     const entry = this.images[ this.index ];
     if ( !entry || !this.bitmap ) return;
     if ( point.x < 0 || point.y < 0 || point.x >= this.bitmap.width || point.y >= this.bitmap.height ) return;
+    if ( this.tool === "measure" ) {
+      AisMeasure.onClick( point );
+      return;
+    }
     if ( this.tool === "delete" ) {
       const target = this.nearestTrace( point );
       if ( target ) this.deleteTrace( target );
@@ -1692,14 +1716,18 @@ const Ais = {
     this.draw();
   },
 
-  // --- the Trace / Edit / Delete tools ---------------------------------------------
+  // --- the Trace / Edit / Delete / Measure tools --------------------------------------
 
+  // A tool stays on until another is picked: picking it again keeps it.
   setTool( tool ) {
-    const next = tool === this.tool && tool !== "trace" ? "trace" : tool;
+    const next = tool;
     if ( this.editing && next !== "edit" ) this.reject();
+    const was = this.tool;
     this.tool = next;
     this.hover = null;
     this.renderTools();
+    if ( was === "measure" && next !== "measure" ) AisMeasure.reset();
+    if ( next === "measure" && was !== "measure" ) AisMeasure.start();
     this.draw();
   },
 
@@ -1710,6 +1738,7 @@ const Ais = {
       button.setAttribute( "aria-pressed" , String( on ) );
     } );
     this.canvas.classList.toggle( "ais-tool-delete" , this.tool === "delete" );
+    this.canvas.classList.toggle( "ais-tool-measure" , this.tool === "measure" );
     this.canvas.classList.toggle( "ais-hit" , Boolean( this.hover ) );
   },
 
@@ -1743,7 +1772,7 @@ const Ais = {
 
   // Edit and Delete lock on to the trace under the pointer.
   hoverAt( point ) {
-    const target = point && this.tool !== "trace" ? this.nearestTrace( point ) : null;
+    const target = point && ( this.tool === "edit" || this.tool === "delete" ) ? this.nearestTrace( point ) : null;
     if ( ( target && target.item ) === ( this.hover && this.hover.item ) ) return;
     this.hover = target;
     this.renderTools();
@@ -1782,6 +1811,18 @@ const Ais = {
 
   async postUpdate( id , row ) {
     const saved = await Api.post( "/api/ais/results/" + id + "/update" , { row: row } );
+    const swap = ( list ) => list && list.forEach( ( old , i ) => { if ( old.id === saved.id ) list[ i ] = saved; } );
+    swap( this.batchRows );
+    swap( this.allRows );
+    const ref = this.refs.get( saved.id );
+    if ( ref ) ref.row = saved;
+    return saved;
+  },
+
+  // The Measure tool's AIS -> soma distance (null clears it): the row as the
+  // server now has it, in place of the old one.
+  async postSoma( id , soma ) {
+    const saved = await Api.post( "/api/ais/results/" + id + "/soma" , { soma: soma } );
     const swap = ( list ) => list && list.forEach( ( old , i ) => { if ( old.id === saved.id ) list[ i ] = saved; } );
     swap( this.batchRows );
     swap( this.allRows );
@@ -1861,6 +1902,7 @@ const Ais = {
         Dom.el( "td" , { text: this.fmt( row.start_um ) } ),
         Dom.el( "td" , { text: this.fmt( row.end_um ) } ),
         Dom.el( "td" , { text: this.fmt( row.max_um ) } ),
+        Dom.el( "td" , { children: [ this.somaCell( row ) ] } ),
         Dom.el( "td" , { text: this.fmt( row.threshold ) } ),
         Dom.el( "td" , { text: "(" + row.click_x + ", " + row.click_y + ")" } ),
         Dom.el( "td" , { text: ( row.source || "pair" ) + ( row.origin === "auto" ? " · " + I18n.get( "ais.auto_origin" ) : "" ) } ),
@@ -1869,6 +1911,20 @@ const Ais = {
       ] } ) );
     } );
     Dom.get( "ais-export" ).disabled = !this.shownRows().length;
+    AisMeasure.render();
+  },
+
+  // The AIS -> soma distance (Measure tool); on this batch's rows, a link
+  // that measures it.
+  somaCell( row ) {
+    const text = row.soma_um != null ? row.soma_um.toFixed( 2 ) : "—";
+    if ( !this.batch || row.batch_id !== this.batch.id ) return Dom.el( "span" , { text: text } );
+    return Dom.el( "button" , {
+      class: "btn btn-link btn-sm p-0 align-baseline" + ( row.soma_um == null ? " text-body-secondary" : "" ),
+      text: text,
+      attrs: { type: "button" , title: I18n.get( "ais.measure_row" ) },
+      on: { click: () => AisMeasure.measureRow( row ) },
+    } );
   },
 
   // Delete a saved row; the server renumbers the rest of its image 1..k.
@@ -2005,6 +2061,7 @@ const Ais = {
     if ( this.showSomata && this.somata ) this.somata.forEach( ( outline ) => this.dots( outline , SOMA_COLOUR ) );
 
     AisAuto.draw( ctx , s , lw );
+    AisMeasure.draw( ctx , s , lw );
 
     // Edit / Delete: the trace under the pointer, thick; the one being edited,
     // dashed white under its new trace.
