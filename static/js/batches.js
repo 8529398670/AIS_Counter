@@ -673,7 +673,6 @@ const Batches = {
       item( "bi-folder2-open" , "batches.add_folder" , () => this.pick( b , "batches-add-folder" ) ),
       item( "bi-images" , "batches.add_files" , () => this.pick( b , "batches-add-files" ) ),
     ];
-    if ( Ais.local && Ais.local.enabled ) items.push( item( "bi-hdd" , "batches.add_path" , () => AisImages.openPathDialog( b ) ) );
     const empty = b.images === 0;
     return Dom.el( "div" , { class: "btn-group" , children: [
       Dom.el( "button" , {

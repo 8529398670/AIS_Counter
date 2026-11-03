@@ -84,8 +84,6 @@ const Ais = {
     this.ctx = this.canvas.getContext( "2d" );
     this.loadView();
 
-    Dom.get( "ais-folder" ).addEventListener( "change" , ( e ) => { this.openFiles( e.target.files ); e.target.value = ""; } );
-    Dom.get( "ais-files" ).addEventListener( "change" , ( e ) => { this.openFiles( e.target.files ); e.target.value = ""; } );
     Dom.get( "ais-image" ).addEventListener( "change" , ( e ) => this.show( Number( e.target.value ) ) );
     Dom.get( "ais-prev" ).addEventListener( "click" , () => this.step( -1 ) );
     Dom.get( "ais-next" ).addEventListener( "click" , () => this.step( 1 ) );
@@ -180,7 +178,6 @@ const Ais = {
     } catch ( error ) {
       this.local = { enabled: false , platform: "" , matlab: false };
     }
-    Dom.show( Dom.get( "ais-open-path" ) , this.local.enabled );
     this.renderCurrent();
     this.renderResult();
   },

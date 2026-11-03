@@ -284,7 +284,6 @@ const AisImages = {
     this.pathModal = bootstrap.Modal.getOrCreateInstance( this.pathModalEl );
     this.listing = null;
     this.pathTarget = null;   // the batch to add the folder to, or null for a new one
-    Dom.get( "ais-open-path" ).addEventListener( "click" , () => this.openPathDialog( null ) );
     Dom.get( "ais-path-form" ).addEventListener( "submit" , ( e ) => { e.preventDefault(); this.browse( Dom.get( "ais-path-input" ).value ); } );
     Dom.get( "ais-path-choose" ).addEventListener( "click" , () => this.chooseNative() );
     Dom.get( "ais-path-open" ).addEventListener( "click" , () => this.openListing() );

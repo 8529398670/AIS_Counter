@@ -36,8 +36,6 @@ nav:
 
 # The Process screen (static/js/ais.js), our reimplementation of ais_auto.m.
 ais:
-  open_folder: "Open folder"
-  open_files: "Open files"
   open_path: "Open path"
   batches: "Batches"
   assigned_to: "· assigned to {name}"
@@ -261,7 +259,6 @@ batches:
   add: "Add images"
   add_folder: "Folder…"
   add_files: "Files…"
-  add_path: "Folder on this machine…"
   added: "{n} files added to \"{name}\"."
   added_path: "Folder added to \"{name}\"."
   reading: "Reading files {done} of {total}…"
