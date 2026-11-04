@@ -31,3 +31,5 @@ tests/golden/
 
 # scripts/export_batches.py default output
 exports/
+
+gitPushUpdate.sh

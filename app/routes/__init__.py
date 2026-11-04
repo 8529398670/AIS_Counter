@@ -113,6 +113,11 @@ def build_routes(static_server: StaticServer, cfg: Config) -> list[BaseRoute]:
         signed_in("/api/ais/batches/upload", ais.batch_upload, ["POST"]),
         # The team's priority order: admins.
         admins("/api/ais/batches/order", ais.batch_order, ["POST"]),
+        # Backups hold the original names: admins.
+        admins("/api/ais/batches/import", ais.batch_import, ["POST"], max_body_size=ais.UPLOAD_LIMIT_BYTES),
+        admins("/api/ais/batches/import/missing", ais.batch_import_missing, ["POST"],
+               max_body_size=ais.UPLOAD_LIMIT_BYTES),
+        admins("/api/ais/batches/{batch_id}/backup", ais.batch_backup),
         signed_in("/api/ais/batches/{batch_id}", ais.batch_get),
         signed_in("/api/ais/batches/{batch_id}/status", ais.batch_status),
         signed_in("/api/ais/batches/{batch_id}/channels", ais.batch_channels),

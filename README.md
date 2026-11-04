@@ -287,6 +287,27 @@ Manager needs a display, though batch mode opens no windows):
 .venv/bin/python scripts/preprocess_check.py example-data/006-both-tiff --stages /tmp/fiji006
 ```
 
+### Importing a batch
+
+For admins, a ZIP export from **Batches** can also be imported back: **Can be
+imported back** is on by default in the Export dialog, and turning it off warns
+that the batch can't be rebuilt from that ZIP. It adds what the report leaves
+out: every image, every AIS with its trace, the images left out and the
+original names (so treat the ZIP as unblinded). With **With the image files**
+unticked it is much smaller, and only restores on a server that still has the
+files. The Reset dialog's backup is one of these, without the files.
+
+**Import ZIP** on the Batches screen reads such a ZIP in the browser, uploads
+the files the server lacks, and adds each batch as a new batch at the top of
+the list; it never changes one that is already there (a name that is taken gets
+" (imported)"). Work stays with the person of the same name, or falls to
+whoever imports it. Assignments are not kept. ZIPs without it, and exports from
+before this, cannot be imported.
+
+It is `manifest.json` plus `files/<sha256>.tif|.czi` next to the report, built
+in browser memory like every ZIP export, so export very large sets batch by
+batch.
+
 ### Exporting a batch's files
 
 `scripts/export_batches.py` copies the files of one or more batches out of

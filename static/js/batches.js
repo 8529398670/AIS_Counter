@@ -44,6 +44,7 @@ const Batches = {
     Dom.get( "batches-archived" ).addEventListener( "change" , () => this.render() );
     Dom.all( "[data-export-all]" ).forEach( ( button ) => button.addEventListener( "click" ,
       () => this.exportAll( button.getAttribute( "data-export-all" ) ) ) );
+    this.initImport();
     Dom.get( "batches-filter" ).addEventListener( "input" , () => this.render() );
     [ "batches-add-folder" , "batches-add-files" ].forEach( ( id ) => {
       const input = Dom.get( id );
@@ -237,8 +238,10 @@ const Batches = {
     Dom.text( status , I18n.get( "batches.reset_backing_up" ) );
     try {
       const items = await this.gather( [ b ] , true );
+      // The images stay through a reset, so it can be imported back without them.
       await AisExport.exportReport( items , b.name , "zip" , ( done , total ) => Dom.text( status ,
-        total ? I18n.get( "batches.exporting" ).replace( "{done}" , done ).replace( "{total}" , total ) : "" ) );
+        total ? I18n.get( "batches.exporting" ).replace( "{done}" , done ).replace( "{total}" , total ) : "" ) ,
+      { traces: true , restorable: true , restorableFiles: false } );
       this.backedUp = true;
       Dom.text( status , I18n.get( "batches.reset_backed_up" ) );
     } catch ( error ) {
@@ -274,6 +277,97 @@ const Batches = {
       Ais.batchChanged( out.batch , true );
     }
     await this.refresh( true );
+  },
+
+  // --- importing an export (admins) ----------------------------------------------
+
+  initImport() {
+    Dom.show( Dom.get( "batches-import" ) , this.admin() );
+    Dom.get( "batches-import" ).addEventListener( "click" , () => Dom.get( "batches-import-file" ).click() );
+    Dom.get( "batches-import-file" ).addEventListener( "change" , ( e ) => {
+      const file = e.target.files && e.target.files[ 0 ];
+      if ( file ) this.importBackup( file );
+      e.target.value = "";
+    } );
+  },
+
+  // The line above the list, for an import. It stays once done (what
+  // happened), until the next one starts.
+  statusLine( text ) {
+    const line = Dom.get( "batches-export-status" );
+    Dom.text( line , text );
+    Dom.show( line , Boolean( text ) );
+  },
+
+  // A busy server answers 429: wait and go on, as AisExport.bytes does.
+  async uploadPatiently( blob ) {
+    for ( let tries = 0 ; ; tries += 1 ) {
+      try {
+        return await Api.postBytes( "/api/ais/files" , blob );
+      } catch ( error ) {
+        if ( error.status !== 429 || tries >= AisExport.retries ) throw error;
+        this.statusLine( I18n.get( "batches.export_waiting" ) );
+        await new Promise( ( resolve ) => window.setTimeout( resolve , 60000 ) );
+      }
+    }
+  },
+
+  // manifest.json of a backup ZIP, or null if it is anything else.
+  async readBackup( file , entries ) {
+    const entry = entries && entries.get( "manifest.json" );
+    if ( !entry ) return null;
+    let manifest;
+    try {
+      manifest = JSON.parse( await ( await Zip.blob( file , entry ) ).text() );
+    } catch ( error ) {
+      return null;
+    }
+    return manifest && manifest.format === "ais-batch-backup" && Array.isArray( manifest.batches ) ? manifest : null;
+  },
+
+  // The files first, a few at a time, then each batch: if anything fails no
+  // half-made batch is left, only files in the store nothing uses yet. Names
+  // in the ZIP are only looked up, never written anywhere.
+  async importBackup( file ) {
+    this.statusLine( I18n.get( "batches.import_reading" ) );
+    try {
+      const entries = await Zip.read( file );
+      const manifest = await this.readBackup( file , entries );
+      if ( !manifest ) throw new Error( I18n.get( "batches.import_not_backup" ) );
+      const shas = new Set();
+      manifest.batches.forEach( ( part ) => part.batch.images.forEach( ( image ) =>
+        Object.values( image.files ).forEach( ( f ) => shas.add( f.sha ) ) ) );
+      const { missing } = await Api.post( "/api/ais/batches/import/missing" , { shas: Array.from( shas ) } );
+      const inZip = ( sha ) => entries.get( "files/" + sha + ".tif" ) || entries.get( "files/" + sha + ".czi" );
+      const todo = missing.filter( inZip );
+      let done = 0;
+      const line = () => this.statusLine( I18n.get( "batches.import_uploading" ).replace( "{done}" , done ).replace( "{total}" , todo.length ) );
+      line();
+      const queue = todo.slice();
+      const worker = async () => {
+        while ( queue.length ) {
+          const sha = queue.shift();
+          const info = await this.uploadPatiently( await Zip.blob( file , inZip( sha ) ) );
+          if ( info.sha256 !== sha ) throw new Error( I18n.get( "batches.import_wrong_file" ).replace( "{name}" , sha ) );
+          Ais.fileStored( sha );
+          done += 1;
+          line();
+        }
+      };
+      await Promise.all( Array.from( { length: Ais.concurrency } , worker ) );
+      for ( let i = 0 ; i < manifest.batches.length ; i += 1 ) {
+        this.statusLine( I18n.get( "batches.import_saving" ).replace( "{done}" , i + 1 ).replace( "{total}" , manifest.batches.length ) );
+        await Api.post( "/api/ais/batches/import" , { format: manifest.format , version: manifest.version ,
+          users: manifest.users , batch: manifest.batches[ i ].batch , results: manifest.batches[ i ].results } );
+      }
+      const absent = missing.length - todo.length;
+      this.statusLine( I18n.get( "batches.import_done" ).replace( "{batches}" , manifest.batches.length ).replace( "{files}" , todo.length ) +
+        ( absent ? " " + I18n.get( "batches.import_no_files" ).replace( "{n}" , absent ) : "" ) );
+      this.refresh( true );
+    } catch ( error ) {
+      this.statusLine( "" );
+      App.showError( error.message );
+    }
   },
 
   // --- the priority order (admins) ---------------------------------------------

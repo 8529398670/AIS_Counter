@@ -29,6 +29,7 @@ from app.models import users
 from app.routes.helpers import bad_request, error, forbidden, get_config, get_store, not_found, parse_id, read_json, run
 
 UPLOAD_LIMIT_BYTES = 64 * 1024 * 1024
+MAX_IMPORT_SHAS = 200_000
 
 
 def _library(request: Request) -> Library:
@@ -594,6 +595,58 @@ async def batch_upload(request: Request) -> Response:
         batch = await run(batches.create_batch, get_store(request), body.get("name"), "upload",
                           body.get("files"), _user_id(request), randomize_names=_randomize(body),
                           translations=body.get("translations"))
+    except batches.BatchError as exc:
+        return bad_request(str(exc))
+    return JSONResponse(await run(_batch_json, request, batch))
+
+
+def _backup(request: Request, batch_id: int) -> dict[str, Any] | None:
+    """A batch as data (batches.backup_batch), with the names of the people
+    in it and which of its files the server can hand out."""
+    backup = batches.backup_batch(get_store(request), batch_id)
+    if backup is None:
+        return None
+    named = batches.backup_user_ids(backup)
+    has = _has(request)
+    stored = {f["sha"] for image in batches.get_batch(get_store(request), batch_id)["images"]
+              for f in image["files"].values() if has(f)}
+    return backup | {"format": batches.BACKUP_FORMAT, "version": batches.BACKUP_VERSION,
+                     "users": {str(i): n for i, n in _names(request).items() if i in named},
+                     "stored": sorted(stored)}
+
+
+async def batch_backup(request: Request) -> Response:
+    """What a backup ZIP holds besides the image files. Admins only: it has
+    the original names in it."""
+    batch_id = parse_id(request.path_params["batch_id"])
+    backup = await run(_backup, request, batch_id) if batch_id else None
+    if backup is None:
+        return not_found("no such batch")
+    return JSONResponse(backup)
+
+
+async def batch_import_missing(request: Request) -> Response:
+    """Body: {shas}. Which of a backup's files the store does not have yet,
+    to upload with POST /api/ais/files before importing."""
+    body, refused = await _body(request)
+    if refused:
+        return refused
+    shas = body.get("shas")
+    if (not isinstance(shas, list) or len(shas) > MAX_IMPORT_SHAS
+            or not all(isinstance(s, str) and batches.SHA_RE.match(s) for s in shas)):
+        return bad_request("shas must be a list of sha-256 hex digests")
+    library = _library(request)
+    return JSONResponse({"missing": await run(lambda: [s for s in shas if not library.has(s)])})
+
+
+async def batch_import(request: Request) -> Response:
+    """Body: one batch of a backup ({format, version, users, batch, results}),
+    which becomes a new batch."""
+    body, refused = await _body(request)
+    if refused:
+        return refused
+    try:
+        batch = await run(batches.import_batch, get_store(request), body, _names(request), _user_id(request))
     except batches.BatchError as exc:
         return bad_request(str(exc))
     return JSONResponse(await run(_batch_json, request, batch))

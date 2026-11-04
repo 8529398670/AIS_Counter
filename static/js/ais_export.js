@@ -34,6 +34,7 @@ const AisExport = {
     Dom.get( "export-options-table" ).addEventListener( "change" , ( e ) => this.tickColumn( e.target ) );
     Dom.get( "export-options-names" ).addEventListener( "change" , () => this.renderOptions() );
     Dom.get( "export-options-unrandomize" ).addEventListener( "change" , () => this.renderOptions() );
+    Dom.get( "export-options-restorable" ).addEventListener( "change" , () => this.renderOptions() );
     Dom.get( "export-options-go" ).addEventListener( "click" , () => this.goOptions() );
   },
 
@@ -42,7 +43,8 @@ const AisExport = {
   // list: the batches (Batches rows), label for the dialog; onGo( options )
   // runs the export with { traces, originals, originalsPng, processed,
   // processedPng, channels, channelsPng (channel names), unrandomize,
-  // names: null | "symlink" | "shortcut" | "copy" }.
+  // names: null | "symlink" | "shortcut" | "copy", restorable, restorableFiles }.
+  // Restorable (admins: it holds the original names) is on unless turned off.
   openOptions( list , label , onGo ) {
     this.optionsGo = onGo;
     Dom.text( Dom.get( "export-options-batch" ) , label );
@@ -54,6 +56,9 @@ const AisExport = {
     Dom.show( Dom.get( "export-options-blind" ) , blinded );
     Dom.get( "export-options-names" ).checked = false;
     Dom.get( "export-options-unrandomize" ).checked = false;
+    Dom.show( Dom.get( "export-options-backup" ) , Batches.admin() );
+    Dom.get( "export-options-restorable" ).checked = true;
+    Dom.get( "export-options-restorable-files" ).checked = true;
     let links = null;
     try {
       links = window.localStorage.getItem( this.linkKey );
@@ -145,6 +150,9 @@ const AisExport = {
     const unrandomize = Dom.get( "export-options-unrandomize" ).checked;
     Dom.get( "export-options-names" ).disabled = unrandomize;
     Dom.get( "export-options-links" ).disabled = unrandomize || !Dom.get( "export-options-names" ).checked;
+    const restorable = Dom.get( "export-options-restorable" ).checked;
+    Dom.get( "export-options-restorable-files" ).disabled = !restorable;
+    Dom.show( Dom.get( "export-options-restorable-warning" ) , !restorable );
     [ "file" , "png" ].forEach( ( kind ) => {
       const boxes = this.optionBoxes( kind );
       const ticked = boxes.filter( ( box ) => box.checked ).length;
@@ -162,11 +170,13 @@ const AisExport = {
       window.localStorage.setItem( this.linkKey , links );
     } catch ( error ) { /* storage blocked */ }
     const unrandomize = blinded && checked( "unrandomize" );
+    const restorable = !Dom.get( "export-options-backup" ).hidden && checked( "restorable" );
     const channels = ( kind ) => this.optionBoxes( kind ).filter( ( box ) => box.checked && box.dataset.channel )
       .map( ( box ) => box.dataset.channel );
     const options = { traces: checked( "traces" ) , originals: checked( "originals" ) , originalsPng: checked( "originals-png" ) ,
       processed: checked( "processed" ) , processedPng: checked( "processed-png" ) , channels: channels( "file" ) , channelsPng: channels( "png" ) ,
-      unrandomize: unrandomize , names: blinded && !unrandomize && checked( "names" ) ? links : null };
+      unrandomize: unrandomize , names: blinded && !unrandomize && checked( "names" ) ? links : null ,
+      restorable: restorable , restorableFiles: restorable && checked( "restorable-files" ) };
     this.optionsToken = ( this.optionsToken || 0 ) + 1;
     this.optionsModal.hide();
     if ( this.optionsGo ) this.optionsGo( options );
@@ -332,7 +342,8 @@ const AisExport = {
 
   // "xlsx": the report on its own; "zip": the report, its summary as CSV,
   // results.csv, the traced PNGs and the files options asks for (see
-  // openOptions; none given: the traces only).
+  // openOptions; none given: the traces only). With restorable it can also
+  // be imported back (backupFiles).
   async exportReport( items , label , kind , report , options ) {
     let at = [ 0 , 0 ];
     const progress = ( done , total ) => {
@@ -360,10 +371,13 @@ const AisExport = {
     const rows = items.flatMap( ( item ) => item.rows );
     const files = await this.imageFiles( items , opts , progress );
     if ( files === null ) return;
+    const backup = opts.restorable ? await this.backupFiles( items.map( ( item ) => item.batch ) , opts.restorableFiles , progress ) :
+      { files: [] , failed: 0 };
     await this.zip( rows , base , progress , [
       { name: "report.xlsx" , data: new Uint8Array( await workbook.arrayBuffer() ) },
       { name: "summary.csv" , data: this.sheetCsv( sheets[ 0 ] ) },
-    ].concat( files ) , opts.traces !== false );
+    ].concat( files , backup.files ) , opts.traces !== false );
+    if ( backup.failed ) App.showError( I18n.get( "batches.backup_failed" ).replace( "{n}" , backup.failed ) );
   },
 
   // items with every blinded image and file under what it was called before
@@ -391,6 +405,48 @@ const AisExport = {
           file: files.get( row.file ) || row.file } ) ),
       } );
     } ) );
+  },
+
+  // --- backups -----------------------------------------------------------------------
+
+  // What makes a ZIP one a batch can be rebuilt from (Batches.importBackup):
+  // manifest.json with each batch's record and results (app/models/ais.py),
+  // whole whatever the report leaves out, and with withFiles each stored file
+  // once, under its sha. Returns { files , failed }: failed counts the files
+  // the server does not have or could not hand over.
+  async backupFiles( list , withFiles , progress ) {
+    const parts = [];
+    for ( const b of list ) parts.push( await Api.request( "/api/ais/batches/" + b.id + "/backup" ) );
+    const stored = new Set( parts.flatMap( ( part ) => part.stored ) );
+    const entries = new Map();   // zip name -> url
+    const absent = new Set();
+    parts.forEach( ( part ) => part.batch.images.forEach( ( image ) => Object.entries( image.files ).forEach( ( [ role , f ] ) => {
+      if ( !stored.has( f.sha ) ) {
+        absent.add( f.sha );
+      } else {
+        entries.set( "files/" + f.sha + ( role === "czi" ? ".czi" : ".tif" ) , "/api/ais/files/" + f.sha + "/file" );
+      }
+    } ) ) );
+    const files = [];
+    let failed = 0;
+    if ( withFiles ) {
+      failed = absent.size;
+      let done = 0;
+      for ( const [ name , url ] of entries ) {
+        progress( done , entries.size );
+        try {
+          files.push( { name: name , data: await this.bytes( url ) } );
+        } catch ( error ) {
+          failed += 1;
+        }
+        done += 1;
+      }
+    }
+    const users = Object.assign( {} , ...parts.map( ( part ) => part.users ) );
+    const manifest = { format: parts[ 0 ].format , version: parts[ 0 ].version , exported_at: new Date().toISOString() ,
+      users: users , batches: parts.map( ( part ) => ( { batch: part.batch , results: part.results } ) ) };
+    files.unshift( { name: "manifest.json" , data: JSON.stringify( manifest ) } );
+    return { files: files , failed: failed };
   },
 
   // --- the image files of a ZIP ------------------------------------------------------

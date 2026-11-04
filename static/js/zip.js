@@ -106,4 +106,73 @@ const Zip = {
     tail.push( end.buffer );
     return new Blob( parts.concat( central , tail ) , { type: "application/zip" } );
   },
+
+  // A File -> Map of name -> entry, or null when it is no ZIP. Only the
+  // directory is read here, and an entry when asked for (Zip.blob), so a
+  // backup of several GB is never in memory at once. Symbolic links are left
+  // out, and so are encrypted entries.
+  async read( file ) {
+    const bytes = async ( from , to ) => new DataView( await file.slice( from , to ).arrayBuffer() );
+    const big = ( view , at ) => view.getUint32( at , true ) + view.getUint32( at + 4 , true ) * 2 ** 32;
+    const start = Math.max( 0 , file.size - 65557 );   // the end record, and the longest comment
+    const tail = await bytes( start , file.size );
+    let end = tail.byteLength - 22;
+    while ( end >= 0 && tail.getUint32( end , true ) !== 0x06054b50 ) end -= 1;
+    if ( end < 0 ) return null;
+    let size = tail.getUint32( end + 12 , true );
+    let at = tail.getUint32( end + 16 , true );
+    if ( tail.getUint16( end + 10 , true ) === 0xffff || size === this.max32 || at === this.max32 ) {
+      if ( end < 20 || tail.getUint32( end - 20 , true ) !== 0x07064b50 ) return null;
+      const where = big( tail , end - 12 );
+      const record = await bytes( where , where + 56 );
+      if ( record.byteLength < 56 || record.getUint32( 0 , true ) !== 0x06064b50 ) return null;
+      size = big( record , 40 );
+      at = big( record , 48 );
+    }
+    const directory = await bytes( at , at + size );
+    const decoder = new TextDecoder();
+    const entries = new Map();
+    let p = 0;
+    while ( p + 46 <= directory.byteLength && directory.getUint32( p , true ) === 0x02014b50 ) {
+      const nameLength = directory.getUint16( p + 28 , true );
+      const extraLength = directory.getUint16( p + 30 , true );
+      const entry = {
+        method: directory.getUint16( p + 10 , true ),
+        compressed: directory.getUint32( p + 20 , true ),
+        offset: directory.getUint32( p + 42 , true ),
+      };
+      const original = directory.getUint32( p + 24 , true );
+      // ZIP64: the fields too big above follow in this order in the extra field.
+      for ( let x = p + 46 + nameLength ; x + 4 <= p + 46 + nameLength + extraLength ; ) {
+        const length = directory.getUint16( x + 2 , true );
+        if ( directory.getUint16( x , true ) === 1 ) {
+          let field = x + 4;
+          if ( original === this.max32 ) field += 8;
+          if ( entry.compressed === this.max32 ) {
+            entry.compressed = big( directory , field );
+            field += 8;
+          }
+          if ( entry.offset === this.max32 ) entry.offset = big( directory , field );
+        }
+        x += 4 + length;
+      }
+      const name = decoder.decode( new Uint8Array( directory.buffer , directory.byteOffset + p + 46 , nameLength ) );
+      const link = ( directory.getUint32( p + 38 , true ) >>> 16 & 0xf000 ) === 0xa000;
+      const encrypted = directory.getUint16( p + 8 , true ) & 1;
+      if ( !link && !encrypted ) entries.set( name , entry );
+      p += 46 + nameLength + extraLength + directory.getUint16( p + 32 , true );
+    }
+    return entries;
+  },
+
+  // One entry of a File (Zip.read) as a Blob: stored ones are a slice of the
+  // file, and a ZIP made again by another tool is deflated.
+  async blob( file , entry ) {
+    const local = new DataView( await file.slice( entry.offset , entry.offset + 30 ).arrayBuffer() );
+    const start = entry.offset + 30 + local.getUint16( 26 , true ) + local.getUint16( 28 , true );
+    const data = file.slice( start , start + entry.compressed );
+    if ( entry.method === 0 ) return data;
+    if ( entry.method !== 8 ) throw new Error( "unsupported ZIP compression" );
+    return new Response( data.stream().pipeThrough( new DecompressionStream( "deflate-raw" ) ) ).blob();
+  },
 };

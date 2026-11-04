@@ -609,3 +609,118 @@ def test_the_export_dialog_lists_the_channels_of_stored_included_czis(store, tmp
     assert [(c["name"], c["files"]) for c in out["channels"]] == [("Alexa Fluor 488", 1), ("AMCA", 2), ("Alexa Fluor 594", 1)]
     assert (out["czis"], out["unread"]) == (3, 1)
     assert not asked
+
+
+# --- backups -------------------------------------------------------------------
+
+
+def backup_of(store, batch_id, names=None):
+    backup = ais.backup_batch(store, batch_id)
+    return {"format": ais.BACKUP_FORMAT, "version": ais.BACKUP_VERSION, "users": names or {"1": "Ann"}, **backup}
+
+
+def blinded_batch(store):
+    batch = ais.create_batch(store, "b", "upload", files(("f/a.tif", "a"), ("f/a" + P, "ap"), ("f/b.tif", "b")), 1,
+                             randomize_names=True)
+    first, second = (im["key"] for im in batch["images"])
+    row = {"length_um": 3.5, "pixels": [[1, 2], [3, 4]], "origin": "auto"}
+    ais.add_result(store, batch["id"], first, row, 1)
+    kept = ais.add_result(store, batch["id"], first, row, 1)
+    ais.update_result(store, kept["id"], row | {"length_um": 4.5}, 1)
+    ais.set_soma(store, kept["id"], dict.fromkeys(ais.SOMA_NUMBERS, 2.0), 1)
+    ais.set_included(store, batch["id"], [second], False)
+    return ais.get_batch(store, batch["id"])
+
+
+def test_a_deleted_batch_comes_back_from_its_backup_as_it_was(store):
+    batch = blinded_batch(store)
+    rows = ais.list_results(store, batch["id"])
+    backup = backup_of(store, batch["id"])
+    ais.delete_batch(store, batch["id"])
+
+    back = ais.import_batch(store, backup, {1: "Ann"}, 1)
+
+    assert back["id"] != batch["id"] and back["name"] == "b"
+    for k in ("images", "adds", "excluded", "skipped", "created_at", "created_by"):
+        assert back[k] == batch[k], k
+    assert "original_cell" in back["images"][0]
+    assert "original" in back["images"][0]["files"]["raw"]
+    moved = ("id", "batch_id")
+    again = ais.list_results(store, back["id"])
+    assert [{k: v for k, v in r.items() if k not in moved} for r in again] == \
+           [{k: v for k, v in r.items() if k not in moved} for r in rows]
+    assert again[1]["pixels"] == [[1, 2], [3, 4]] and again[1]["n"] == 2 and again[1]["edited_by"] == 1
+
+
+def test_a_backup_cannot_point_at_this_machine(store):
+    batch = ais.create_batch(store, "p", "path", [f | {"path": "/secret/a.tif"} for f in files(("f/a.tif", "a"))], 1,
+                             path="/secret")
+    backup = backup_of(store, batch["id"])
+    assert "/secret" not in str(backup)
+    backup["batch"]["source"] = "path"
+    backup["batch"]["path"] = "/etc"
+    backup["batch"]["images"][0]["files"]["raw"]["path"] = "/etc/passwd"
+    backup["batch"]["adds"][0]["path"] = "/etc"
+    back = ais.import_batch(store, backup, {}, 1)
+    assert back["source"] == "upload" and back["path"] is None
+    assert "path" not in back["images"][0]["files"]["raw"]
+    assert back["adds"][0]["path"] is None and back["adds"][0]["source"] == "upload"
+    assert ais.local_path_for(store, back["images"][0]["files"]["raw"]["sha"]) == "/secret/a.tif"   # the first batch's
+
+
+@pytest.mark.parametrize("rel", ["../a.tif", "f/../../a.tif", "/etc/a.tif", "f\\..\\a.tif"])
+def test_a_backup_cannot_climb_out_of_its_folder(store, rel):
+    batch = ais.create_batch(store, "r", "upload", files(("f/a.tif", "a")), 1)
+    backup = backup_of(store, batch["id"])
+    backup["batch"]["images"][0]["files"]["raw"]["rel"] = rel
+    with pytest.raises(ais.BatchError):
+        ais.import_batch(store, backup, {}, 1)
+
+
+def test_a_bad_backup_writes_nothing(store):
+    batch = blinded_batch(store)
+    backup = backup_of(store, batch["id"])
+    backup["results"][-1]["image"] = "nobody"
+    before = len(ais.list_batches(store)), len(ais.list_results(store))
+    with pytest.raises(ais.BatchError):
+        ais.import_batch(store, backup, {}, 1)
+    assert (len(ais.list_batches(store)), len(ais.list_results(store))) == before
+
+
+@pytest.mark.parametrize("change", [{"format": "report"}, {"version": 2}, {"batch": None}, {"results": None}])
+def test_only_a_backup_of_this_version_imports(store, change):
+    batch = ais.create_batch(store, "v", "upload", files(("f/a.tif", "a")), 1)
+    with pytest.raises(ais.BatchError):
+        ais.import_batch(store, backup_of(store, batch["id"]) | change, {}, 1)
+
+
+def test_importing_twice_makes_two_batches_and_touches_neither_original(store):
+    batch = blinded_batch(store)
+    backup = backup_of(store, batch["id"])
+    one = ais.import_batch(store, backup, {1: "Ann"}, 1)
+    two = ais.import_batch(store, backup, {1: "Ann"}, 1)
+    assert len({batch["id"], one["id"], two["id"]}) == 3
+    assert one["name"] == two["name"] == "b (imported)"
+    assert ais.get_batch(store, batch["id"]) == batch
+    assert two["position"] < one["position"] < batch["position"]
+    assert len(ais.list_results(store, batch["id"])) == len(ais.list_results(store, two["id"])) == 2
+
+
+def test_imported_work_stays_with_people_of_the_same_name(store):
+    batch = ais.create_batch(store, "u", "upload", files(("f/a.tif", "a"), ("f/b.tif", "b")), 7)
+    first, second = (im["key"] for im in batch["images"])
+    ais.add_result(store, batch["id"], first, {}, 7)
+    ais.add_result(store, batch["id"], second, {}, 8)
+    backup = backup_of(store, batch["id"], {"7": "Ann", "8": "Gone"})
+    back = ais.import_batch(store, backup, {3: "Ann", 4: "Admin"}, 4)
+    assert back["created_by"] == 3
+    assert [r["created_by"] for r in ais.list_results(store, back["id"])] == [3, 4]
+
+
+def test_a_backup_leaves_the_assignment_and_names_only_who_it_mentions(store):
+    batch = ais.create_batch(store, "a", "upload", files(("f/a.tif", "a")), 7)
+    ais.add_result(store, batch["id"], batch["images"][0]["key"], {}, 8)
+    ais.assign(store, batch["id"], [{"user_id": 9, "percent": 100}], 7)
+    backup = ais.backup_batch(store, batch["id"])
+    assert "assignment" not in backup["batch"]
+    assert ais.backup_user_ids(backup) == {7, 8}

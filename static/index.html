@@ -417,6 +417,9 @@
                 <li><button class="dropdown-item" type="button" data-export-all="zip"><i class="bi bi-file-earmark-zip me-2" aria-hidden="true"></i><span data-i18n="batches.export_zip"></span></button></li>
               </ul>
             </div>
+            <button id="batches-import" class="btn btn-outline-secondary btn-sm" type="button" data-i18n-attr="title:batches.import_help" hidden>
+              <i class="bi bi-upload" aria-hidden="true"></i> <span data-i18n="batches.import"></span>
+            </button>
             <button id="batches-new" class="btn btn-primary btn-sm" type="button"><i class="bi bi-plus-lg" aria-hidden="true"></i> <span data-i18n="batches.new"></span></button>
           </div>
           <form id="batches-new-form" class="card card-body mb-3" autocomplete="off" hidden>
@@ -435,6 +438,7 @@
           <input id="batches-add-folder" type="file" webkitdirectory multiple hidden />
           <input id="batches-add-files" type="file" accept=".tif,.tiff,.czi,.txt" multiple hidden />
           <input id="batches-translation" type="file" accept=".txt,text/plain" hidden />
+          <input id="batches-import-file" type="file" accept=".zip,application/zip" hidden />
 
           <!-- Reset results: an admin deletes a batch's AIS to run it again, a backup first (static/js/batches.js). -->
           <div class="modal fade" id="batches-reset-modal" tabindex="-1" aria-labelledby="batches-reset-title" aria-hidden="true">
@@ -524,6 +528,19 @@
                   </table>
                   <p id="export-options-channels-note" class="small text-body-secondary mb-2" hidden></p>
                   <p class="small text-body-secondary mb-0" data-i18n="batches.export_png_help"></p>
+                  <div id="export-options-backup" class="mt-3 pt-3 border-top" hidden>
+                    <div class="form-check">
+                      <input class="form-check-input" type="checkbox" id="export-options-restorable" checked />
+                      <label class="form-check-label" for="export-options-restorable" data-i18n="batches.export_restorable"></label>
+                    </div>
+                    <div id="export-options-restorable-warning" class="alert alert-warning small mt-2 mb-2 py-2" role="alert" data-i18n="batches.export_restorable_warning" hidden></div>
+                    <p class="small text-body-secondary mt-1 mb-2 ms-4" data-i18n="batches.export_restorable_help"></p>
+                    <div class="form-check ms-4">
+                      <input class="form-check-input" type="checkbox" id="export-options-restorable-files" checked />
+                      <label class="form-check-label" for="export-options-restorable-files" data-i18n="batches.export_restorable_files"></label>
+                    </div>
+                    <p class="small text-body-secondary mt-1 mb-0 ms-5" data-i18n="batches.export_restorable_files_help"></p>
+                  </div>
                   <div id="export-options-blind" class="mt-3 pt-3 border-top" hidden>
                     <div class="form-check">
                       <input class="form-check-input" type="checkbox" id="export-options-unrandomize" />

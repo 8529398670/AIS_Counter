@@ -40,6 +40,11 @@ the rest of that image 1..k; editing one keeps its number.
 
 Records are plain dicts in the store, returned as they are; the routes decide
 what reaches the browser.
+
+A backup (backup_batch, import_batch) is a batch and its results as data, to
+get a lost batch back or hand one to another server. It keeps blinded names,
+so only admins get one; the page adds it to a ZIP export, with the image files
+if asked (static/js/ais_export.js). Importing always makes a new batch.
 """
 from __future__ import annotations
 
@@ -69,6 +74,9 @@ ZEN_SUFFIX_RE = re.compile(r"_c\d+_ORG$", re.IGNORECASE)
 MAX_DATE = 40
 MAX_TRANSLATION = 1_000_000     # characters of one __Translation.txt
 MAX_TRANSLATIONS = 500          # of them in one add (one per folder)
+BACKUP_FORMAT = "ais-batch-backup"
+BACKUP_VERSION = 1
+IMPORTED_SUFFIX = " (imported)"
 
 # The Measure tool's AIS start -> soma distance (static/js/ais_measure.js):
 # µm and px, then its two ends (AIS start, soma) in MATLAB axes like click_x.
@@ -1018,6 +1026,211 @@ def import_rows(store: Store, rows: Any, user_id: int, name: str) -> Record:
     for row in rows:
         add_result(store, batch["id"], by_cell[row["image"]], row, user_id)
     return batch
+
+
+# --- backups -------------------------------------------------------------------
+
+
+def backup_batch(store: Store, batch_id: int) -> Record | None:
+    """Everything needed to rebuild a batch elsewhere: its record and results
+    as they are, without where its files live on this machine (a path means
+    nothing on another server, and has the original name in it) or its
+    assignment (who works on what is this server's). None when it is gone."""
+    batch = get_batch(store, batch_id)
+    if batch is None:
+        return None
+    images = [im | {"files": {role: {k: v for k, v in f.items() if k != "path"} for role, f in im["files"].items()}}
+              for im in batch["images"]]
+    kept = {k: v for k, v in batch.items() if k != "assignment"}
+    return {"batch": kept | {"path": None, "images": images, "excluded": sorted(excluded_keys(batch)),
+                             "adds": [a | {"path": None} for a in batch.get("adds", [])]},
+            "results": list_results(store, batch_id)}
+
+
+def backup_user_ids(backup: Record) -> set[int]:
+    """Who a backup names, so it carries those people's names and no others."""
+    batch = backup["batch"]
+    ids = {batch.get("created_by")} | {a.get("added_by") for a in batch["adds"]}
+    for row in backup["results"]:
+        ids |= {row.get("created_by"), row.get("edited_by"), row.get("soma_by")}
+    return {i for i in ids if i is not None}
+
+
+def _whole(value: Any, label: str, least: int = 0) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or value < least:
+        raise BatchError(f"{label} must be a whole number")
+    return value
+
+
+def _date(value: Any, label: str) -> str:
+    if not isinstance(value, str) or not value or len(value) > MAX_DATE:
+        raise BatchError(f"{label} must be a date")
+    return value
+
+
+def _inside(rel: str) -> str:
+    """A rel from a backup: relative, and staying inside its folder."""
+    parts = rel.replace("\\", "/").split("/")
+    if not parts[0] or ".." in parts:
+        raise BatchError("rel must stay inside the batch")
+    return rel
+
+
+def _strings(value: Any, label: str) -> list[str]:
+    if not isinstance(value, list) or len(value) > MAX_FILES:
+        raise BatchError(f"{label} must be a list")
+    return [_text(v, label) for v in value]
+
+
+def _restored_file(f: Any) -> dict[str, Any]:
+    if not isinstance(f, dict):
+        raise BatchError("each file must be an object")
+    out = clean_files([{k: v for k, v in f.items() if k != "path"}])[0]
+    _inside(out["rel"])
+    original = f.get("original")
+    if original is not None:
+        if not isinstance(original, dict):
+            raise BatchError("original must be an object")
+        out["original"] = {"name": _text(original.get("name"), "name"),
+                           "rel": _inside(_text(original.get("rel"), "rel"))}
+    if f.get("earlier") is not None:
+        out["earlier"] = _strings(f["earlier"], "earlier")
+    return out
+
+
+def _restored_image(image: Any, count: int) -> dict[str, Any]:
+    if not isinstance(image, dict) or not isinstance(image.get("files"), dict) or not image["files"]:
+        raise BatchError("each image needs its files")
+    if not set(image["files"]) <= {"raw", "processed", "czi"}:
+        raise BatchError("unknown file role")
+    out: dict[str, Any] = {"key": _text(image.get("key"), "key"), "cell": _text(image.get("cell"), "cell"),
+                           "dir": _text(image.get("dir", ""), "dir", empty=True),
+                           "files": {role: _restored_file(f) for role, f in image["files"].items()}}
+    if image.get("dup_of") is not None:
+        out["dup_of"] = _whole(image["dup_of"], "dup_of")
+        if out["dup_of"] >= count:
+            raise BatchError("dup_of must be an image of this batch")
+    if image.get("add_id") is not None:
+        out["add_id"] = _whole(image["add_id"], "add_id")
+    for k in ("original_cell", "original_key"):
+        if image.get(k) is not None:
+            out[k] = _text(image[k], k)
+    if image.get("earlier_keys") is not None:
+        out["earlier_keys"] = _strings(image["earlier_keys"], "earlier_keys")
+    return out
+
+
+def _user_map(exported: Any, local: dict[int, str]) -> dict[int, int]:
+    """A backup's user ids -> this server's: the same id under the same name
+    (a restore here), else the one person with that name. Whoever matches
+    nobody falls to the person importing."""
+    if not isinstance(exported, dict):
+        raise BatchError("users must be an object")
+    out: dict[int, int] = {}
+    for key, name in exported.items():
+        if not isinstance(key, str) or not key.isdecimal():
+            raise BatchError("users must be keyed by id")
+        same = [i for i, n in local.items() if n == name]
+        if int(key) in same:
+            out[int(key)] = int(key)
+        elif len(same) == 1:
+            out[int(key)] = same[0]
+    return out
+
+
+def import_batch(store: Store, data: Any, local_users: dict[int, str], user_id: int) -> Record:
+    """A backup (backup_batch, with format, version and users) as a new batch
+    at the top of the list, whatever it was called or whether it is still
+    here: importing never touches an existing batch. Its images are written
+    as they were, not regrouped, so keys, blinded names and which results
+    belong to which image survive. Nothing in it can point at this machine:
+    paths are dropped and the batch counts as uploaded. It is all checked
+    first and written at once, so a bad backup leaves nothing behind."""
+    if not isinstance(data, dict) or data.get("format") != BACKUP_FORMAT:
+        raise BatchError("this is not a batch backup")
+    if data.get("version") != BACKUP_VERSION:
+        raise BatchError("this backup is from a different version of the app")
+    batch, rows = data.get("batch"), data.get("results")
+    if not isinstance(batch, dict) or not isinstance(rows, list):
+        raise BatchError("the backup needs its batch and results")
+    images = batch.get("images")
+    if not isinstance(images, list) or len(images) > MAX_FILES:
+        raise BatchError(f"images must be a list of up to {MAX_FILES}")
+    people = _user_map(data.get("users", {}), local_users)
+
+    def person(value: Any) -> int:
+        return people.get(value, user_id)
+
+    restored = [_restored_image(im, len(images)) for im in images]
+    keys = {im["key"] for im in restored}
+    if len(keys) != len(restored):
+        raise BatchError("two images share a key")
+    excluded = _strings(batch.get("excluded", []), "excluded")
+    skipped = _strings(batch.get("skipped", []), "skipped")
+    if not set(excluded) | set(skipped) <= keys:
+        raise BatchError("excluded and skipped must be images of this batch")
+    adds = batch.get("adds", [])
+    if not isinstance(adds, list) or len(adds) > MAX_FILES:
+        raise BatchError("adds must be a list")
+    clean_adds = []
+    for a in adds:
+        if not isinstance(a, dict):
+            raise BatchError("each add must be an object")
+        clean_adds.append({"id": _whole(a.get("id"), "add id"), "name": _text(a.get("name"), "add name"),
+                           "source": "upload", "path": None, "added_at": _date(a.get("added_at"), "added_at"),
+                           "added_by": person(a.get("added_by")), "randomized": bool(a.get("randomized")),
+                           "count": _whole(a.get("count", 0), "count")})
+    if {im["add_id"] for im in restored if "add_id" in im} - {a["id"] for a in clean_adds}:
+        raise BatchError("an image names an add the batch does not have")
+
+    clean_rows, numbered = [], set()
+    for row in rows:
+        if not isinstance(row, dict):
+            raise BatchError("a result must be an object")
+        image = row.get("image")
+        if image not in keys:
+            raise BatchError("a result names an image the batch does not have")
+        n = _whole(row.get("n"), "n", least=1)
+        if (image, n) in numbered:
+            raise BatchError("two results of an image share a number")
+        numbered.add((image, n))
+        record = clean_row(row) | {"image": image, "n": n, "created_by": person(row.get("created_by")),
+                                   "accepted_at": _date(row.get("accepted_at"), "accepted_at")}
+        for at, by in (("edited_at", "edited_by"), ("soma_at", "soma_by")):
+            if row.get(at) is not None:
+                record |= {at: _date(row[at], at), by: person(row.get(by))}
+        clean_rows.append(record)
+
+    name = clean_name(batch.get("name"))
+    created_at = _date(batch.get("created_at"), "created_at")
+    cells = {im["key"]: im["cell"] for im in restored}
+    now = to_iso(utc_now())
+    with store.transaction() as tx:
+        existing = [b for _, b in tx.all(BUCKET_AIS_BATCHES)]
+        if any(b["name"] == name for b in existing):
+            name = name[:200 - len(IMPORTED_SUFFIX)] + IMPORTED_SUFFIX
+        batch_id = tx.next_sequence(BUCKET_AIS_BATCHES)
+        record = {
+            "id": batch_id,
+            "name": name,
+            "source": "upload",
+            "path": None,
+            "created_by": person(batch.get("created_by")),
+            "created_at": created_at,
+            "updated_at": now,
+            "position": min((_position(b) for b in existing), default=0) - 1,
+            "archived_at": None,
+            "skipped": skipped,
+            "images": restored,
+            "adds": clean_adds,
+            "excluded": excluded,
+        }
+        tx.put(BUCKET_AIS_BATCHES, batch_id, record)
+        for row in clean_rows:
+            result_id = tx.next_sequence(BUCKET_AIS_RESULTS)
+            tx.put(BUCKET_AIS_RESULTS, result_id, row | {"id": result_id, "batch_id": batch_id, "batch_name": name,
+                                                         "cell": cells[row["image"]]})
+    return record
 
 
 # --- live activity -------------------------------------------------------------
