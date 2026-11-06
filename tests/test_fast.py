@@ -128,15 +128,20 @@ def test_a_click_outside_or_on_nothing_fails_alike():
     assert same(run_click(prep, pic, (-9.0, 5.0), None, 0.01), fast.run_click(prep, pic, (-9.0, 5.0), None, 0.01))
 
 
-def test_a_skeleton_on_the_image_edge_fails_alike():
-    pic = rod()
-    prep = aa.PreparedImage.from_array(pic)
-    original = run_click(prep, pic, (20.0, 60.0), None, 0.01)
-    assert same(original, fast.run_click(prep, pic, (20.0, 60.0), None, 0.01))
-    with pytest.raises(MatlabError, match="touches the image border"):
-        aa.trace(prep, (20.0, 60.0))
-    with pytest.raises(MatlabError, match="touches the image border"):
-        fast.trace(prep, (20.0, 60.0))
+@pytest.mark.parametrize("box,fails", [((slice(0, 2), slice(20, 120)), False), ((slice(118, 120), slice(20, 120)), True),
+                                       ((slice(20, 100), slice(0, 2)), True), ((slice(20, 100), slice(158, 160)), False)])
+def test_a_skeleton_on_the_image_edge_goes_alike(box, fails):
+    D = np.zeros((120, 160))
+    D[box] = .5
+    D[60, 80] = 1
+    prep = aa.PreparedImage(pic=(D * 65535).astype(np.uint16), smooth=D, D=D, max_all=1.0)
+    click = ((box[1].start + box[1].stop) / 2 + 1, (box[0].start + box[0].stop) / 2 + 1)
+    if fails:
+        with pytest.raises(MatlabError, match="touches the image border"):
+            aa.trace(prep, click)
+        with pytest.raises(MatlabError, match="touches the image border"):
+            fast.trace(prep, click)
+    assert same(run_click(prep, prep.pic, click, None, 0.01), fast.run_click(prep, prep.pic, click, None, 0.01))
 
 
 def test_blobs_cut_by_each_edge_answer_alike():

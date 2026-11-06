@@ -144,7 +144,7 @@ def _window(prep: aa.PreparedImage, level: float, settings: aa.Settings, row: in
         comp = lab == lab[y, x]
         if not ((t and comp[0].any()) or (b and comp[-1].any()) or (l and comp[:, 0].any()) or (r and comp[:, -1].any())):
             break
-        pad *= 2
+        pad = 2 * pad + 1
     if int(comp.sum()) < settings.min_pixels:
         return None
     rows, cols = np.flatnonzero(comp.any(axis=1)), np.flatnonzero(comp.any(axis=0))
