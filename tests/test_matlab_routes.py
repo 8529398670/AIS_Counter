@@ -6,6 +6,7 @@ import asyncio
 import io
 import json
 import zipfile
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -39,8 +40,8 @@ class Harness:
         self.library = self.app.state.ais
         self.users = {}
 
-    def user(self, name="Ada", path=""):
-        user = users.create_user(self.store, name, users.ROLE_USER)
+    def user(self, name="Ada", path="", role=users.ROLE_USER):
+        user = users.create_user(self.store, name, role)
         if path:
             users.set_matlab_path(self.store, user.id, path)
         session_id, credential, session = sessions.new_session(user.id, 3600)
@@ -54,8 +55,8 @@ class Harness:
     def helper(self, who):
         return self.key(who, api_keys.PURPOSE_MATLAB_HELPER)
 
-    async def call(self, method, path, session=None, key=None, body=None):
-        headers = [(b"host", b"t")]
+    async def call(self, method, path, session=None, key=None, body=None, extra=(), peer="127.0.0.1"):
+        headers = [(b"host", b"t"), *extra]
         if session is not None:
             headers.append((b"cookie", session.cookie.encode()))
         if key is not None:
@@ -78,7 +79,7 @@ class Harness:
 
         scope = {"type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1", "method": method, "scheme": "http",
                  "path": path, "raw_path": path.encode(), "query_string": b"", "root_path": "", "headers": headers,
-                 "client": ("127.0.0.1", 5000), "server": ("t", 80)}
+                 "client": (peer, 5000), "server": ("t", 80)}
         await self.app(scope, receive, send)
         start = next(m for m in sent if m["type"] == "http.response.start")
         data = b"".join(m.get("body", b"") for m in sent if m["type"] == "http.response.body")
@@ -242,6 +243,58 @@ def test_the_saved_path_never_reaches_the_servers_launcher(h, monkeypatch):
     h.get("POST", "/api/ais/local/matlab", session=ada, body=BODY)
     h.get("POST", "/api/ais/matlab/bundle", session=ada, body=BODY)
     assert launched == []
+
+
+@pytest.fixture
+def host(h, monkeypatch):
+    """A server that can open its own MATLAB. Nothing here starts it."""
+    h.cfg.local_folders_enabled = True
+    h.launched = []
+    monkeypatch.setattr(matlab, "find_matlab", lambda configured: "/x/matlab")
+    monkeypatch.setattr(matlab, "stage", lambda *a: Path("/run/stem"))
+    monkeypatch.setattr(matlab, "launch", lambda *a: h.launched.append(a))
+    return h
+
+
+TUNNEL = [(b"cf-connecting-ip", b"203.0.113.5")]
+
+
+def test_a_browser_on_this_computer_gets_the_servers_matlab(host):
+    admin = host.user(role=users.ROLE_ADMIN)
+    assert json.loads(host.get("GET", "/api/ais/local/status", session=admin).data)["matlab"] is True
+    assert host.get("POST", "/api/ais/local/matlab", session=admin, body=BODY).status == 200
+    assert len(host.launched) == 1
+
+
+@pytest.mark.parametrize("away", [
+    {"extra": TUNNEL},
+    {"extra": [(b"x-forwarded-for", b"203.0.113.5")]},
+    {"extra": [(b"x-real-ip", b"203.0.113.5")]},
+    {"extra": [(b"forwarded", b"for=203.0.113.5")]},
+    {"extra": [(b"cf-connecting-ip", b"127.0.0.1")]},
+    {"peer": "192.168.1.20"},
+    {"peer": "unknown"},
+])
+def test_anyone_else_is_not_offered_it_and_cannot_start_it(host, away):
+    admin = host.user(role=users.ROLE_ADMIN)
+    status = json.loads(host.get("GET", "/api/ais/local/status", session=admin, **away).data)
+    assert status["matlab"] is False and status["enabled"] is True
+    assert host.get("POST", "/api/ais/local/matlab", session=admin, body=BODY, **away).status == 403
+    assert host.launched == []
+
+
+def test_the_configured_proxy_header_counts_too(host):
+    host.cfg.proxy_header = "X-Visitor"
+    admin = host.user(role=users.ROLE_ADMIN)
+    answer = host.get("GET", "/api/ais/local/status", session=admin, extra=[(b"x-visitor", b"203.0.113.5")])
+    assert json.loads(answer.data)["matlab"] is False
+
+
+def test_a_remote_visitor_with_a_helper_keeps_replay(host):
+    admin = host.user(role=users.ROLE_ADMIN)
+    host.get("GET", NEXT, key=host.helper(admin))
+    status = json.loads(host.get("GET", "/api/ais/local/status", session=admin, extra=TUNNEL).data)
+    assert status["matlab"] is False and status["helper"] is True
 
 
 def test_the_account_path_is_session_only(h):

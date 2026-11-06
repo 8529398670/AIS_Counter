@@ -92,6 +92,28 @@ class SecurityHeaders:
         await self.app(scope, receive, send_with_headers)
 
 
+# Any of these means a proxy passed the request on, whatever server.trust_proxy
+# says. cloudflared always adds the first.
+FORWARDING_HEADERS = ("cf-connecting-ip", "x-forwarded-for", "x-real-ip", "forwarded")
+
+
+def from_this_computer(scope: Scope, cfg: Config) -> bool:
+    """Whether the browser is on the machine the server runs on, so that a
+    window opened here is one its user can see. A loopback peer alone does not
+    say so: a tunnel or reverse proxy on this machine connects from loopback for
+    every visitor. It fails closed, unlike client_ip, which only has to count
+    requests: a header proves nothing about who sent it, but its absence on a
+    loopback connection does mean no proxy spoke up."""
+    client = scope.get("client")
+    try:
+        loopback = client is not None and ipaddress.ip_address(client[0]).is_loopback
+    except ValueError:
+        return False
+    headers = Headers(scope=scope)
+    names = (*FORWARDING_HEADERS, cfg.proxy_header) if cfg.proxy_header else FORWARDING_HEADERS
+    return loopback and not any(name in headers for name in names)
+
+
 def client_ip(scope: Scope, cfg: Config, trusted: Sequence[IPNetwork]) -> str:
     """The address a request is counted against.
 

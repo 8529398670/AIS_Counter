@@ -23,6 +23,7 @@ from app.analysis import detect as auto
 from app.analysis import local, matlab, matlab_bundle
 from app.analysis.images import ImageError
 from app.analysis.service import Library, NotStored
+from app.core.middleware import from_this_computer
 from app.core.security import actor_from, check_csrf
 from app.models import ais as batches
 from app.models import users
@@ -846,7 +847,9 @@ async def local_status(request: Request) -> Response:
     actor = actor_from(request)
     cfg = get_config(request)
     enabled = bool(cfg.local_folders_enabled and actor.is_admin and actor.session is not None)
-    found = enabled and matlab.find_matlab(cfg.matlab) is not None
+    # MATLAB opens on this machine, so it is only offered to someone sitting at
+    # it; anyone else needs their own helper.
+    found = enabled and from_this_computer(request.scope, cfg) and matlab.find_matlab(cfg.matlab) is not None
     helper_on = bool(cfg.matlab_helper and cfg.api_keys_enabled)
     return JSONResponse({"enabled": enabled, "platform": local.platform(), "matlab": found,
                          "helper_enabled": helper_on,
@@ -998,10 +1001,12 @@ async def local_matlab(request: Request) -> Response:
     body, refused = await _local_body(request)
     if refused:
         return refused
+    cfg = get_config(request)
+    if not from_this_computer(request.scope, cfg):
+        return forbidden("MATLAB would open on the server, not your computer: run the MATLAB helper instead")
     job, why = matlab_run(body)
     if job is None:
         return bad_request(why)
-    cfg = get_config(request)
     binary = matlab.find_matlab(cfg.matlab)
     if binary is None:
         return bad_request("MATLAB not found: set server.matlab in config.yaml")

@@ -205,9 +205,11 @@ the start of an AIS gives the original's trace and length. **Enter** accepts,
   and the raw AIS channel). Files are copied into `<app dir>/storage/ais-matlab/` first (last 20 runs kept), the
   command window is logged there, and `server.matlab` picks the MATLAB.
   There are three ways to reach a MATLAB:
-  - **On the server itself**: admins, on a server listening on loopback outside
-    Docker. A container can never start a program on its host, so this is off
-    there, and no display or X11 setting could change that.
+  - **On the server itself**: admins in a browser on that computer, with the
+    server listening on loopback outside Docker. Through a tunnel or proxy it is
+    not offered, because MATLAB would open out of the visitor's sight. A container
+    can never start a program on its host, so this is off there, and no display
+    or X11 setting could change that.
   - ***Download MATLAB Replay***, for anyone signed in, on any server: a zip of
     the image, the click(s) and the replay, with `run.sh` and `run.bat`. Extract
     it and run `sh run.sh` (macOS, Linux) or double-click `run.bat` (Windows).

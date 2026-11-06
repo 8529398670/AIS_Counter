@@ -128,7 +128,8 @@ server:
   # The MATLAB that "Verify in MATLAB" launches, with the GUI, on the original
   # original-code/ais_auto.m. Empty finds the newest
   # /Applications/MATLAB_R*.app (macOS) or `matlab` on the PATH. Needs
-  # local_folders, and the same loopback-only rule applies. A server that
+  # local_folders and the same loopback-only rule, and is offered only to a
+  # browser on this computer, not through a tunnel or proxy. A server that
   # cannot reach a person's MATLAB (Docker, or another machine) has the two
   # ways below instead; neither uses this key.
   matlab: ""
