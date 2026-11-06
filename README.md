@@ -195,7 +195,7 @@ the start of an AIS gives the original's trace and length. **Enter** accepts,
   - **Edit:** click a trace, then walk its start with Alt+arrow keys or
     click a new start. Enter or Space updates it (a saved AIS keeps its number) and
     Esc cancels.
-- **Verify in MATLAB** (admins on this machine). Per image: *Open original*
+- **Verify in MATLAB**. Per image: *Open original*
   (MATLAB with `ais_auto.m` in the Editor and the exact call on the
   clipboard — run it yourself) or *Run original*. After a web click, *Replay in
   MATLAB* runs the original with exactly those click(s) (a copy with only the
@@ -204,6 +204,24 @@ the start of an AIS gives the original's trace and length. **Enter** accepts,
   is written out as the TIFF pair it is traced from (its processed AIS channel
   and the raw AIS channel). Files are copied into `<app dir>/storage/ais-matlab/` first (last 20 runs kept), the
   command window is logged there, and `server.matlab` picks the MATLAB.
+  There are three ways to reach a MATLAB:
+  - **On the server itself**: admins, on a server listening on loopback outside
+    Docker. A container can never start a program on its host, so this is off
+    there, and no display or X11 setting could change that.
+  - ***Download MATLAB Replay***, for anyone signed in, on any server: a zip of
+    the image, the click(s) and the replay, with `run.sh` and `run.bat`. Extract
+    it and run `sh run.sh` (macOS, Linux) or double-click `run.bat` (Windows).
+  - **The MATLAB helper** (`helper/`), optional: a small Go program on your own
+    computer that polls the server, so *Replay in MATLAB* opens your MATLAB from
+    Docker or a remote server with no zip step. *Account → Connect a computer*
+    gives a one-line install. It needs `auth.api_keys`; `server.matlab_helper:
+    false` removes it. The image builds it; outside Docker, run `helper/build.sh`
+    once (needs Go). Only a browser session can send it a run, and only to that
+    person's own helper, but it runs what the server sends, so connect it only
+    to a server you trust.
+
+  Your zips and helper use the *MATLAB path* under *Account*, then the newest
+  install, then `matlab` on the PATH.
 - **Viewer.** Wheel or +/− zooms, drag or middle-drag pans, 1 is 100 %. The
   lock (L) freezes pan and zoom and keeps that view on every image; Reset (0),
   under the lock, fits the image (and becomes the locked view when locked).

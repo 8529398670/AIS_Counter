@@ -1,5 +1,15 @@
 # syntax=docker/dockerfile:1
 
+# --- helper stage ----------------------------------------------------------
+# The MATLAB helper people download (helper/, app/routes/ais_matlab.py), for
+# every OS: Go cross-compiles, so one stage builds them all. First, so that a new
+# build's VERSION does not invalidate it.
+FROM golang:1.24-alpine AS helper
+
+WORKDIR /helper
+COPY helper/ ./
+RUN sh build.sh
+
 # --- build stage -----------------------------------------------------------
 # Only this stage runs pip. Nothing it downloads or caches survives into the
 # shipped image except the installed packages themselves.
@@ -35,6 +45,9 @@ COPY --from=builder /install /usr/local
 COPY app ./app
 COPY static ./static
 COPY docs/ais_auto_report.md ./docs/
+# What a MATLAB replay zip is built from (app/analysis/matlab.py).
+COPY original-code/ais_auto.m ./original-code/
+COPY --from=helper /helper/dist ./helper/dist
 # The language file and the defaults the app reads; never config.yaml, which
 # docker/Dockerfile.dockerignore keeps out of the build context entirely.
 COPY config/language.yaml config/defaults.yaml config/example_header.yaml ./config/

@@ -25,5 +25,9 @@ venv/
 # This repo's research material: MATLAB original and multi-GB sample images.
 example-data/
 original-code/
+# ...except the original itself: MATLAB replays are built from it (app/analysis/matlab.py).
+!original-code/ais_auto.m
+# Built inside the image, for the image.
+helper/dist/
 notes.txt
 gitPushUpdate.sh

@@ -61,6 +61,10 @@ class User:
     # action id -> its keys, only where they differ from the defaults
     # (static/js/shortcuts.js owns the actions and their defaults).
     shortcuts: dict[str, list[str]] = field(default_factory=dict)
+    # Where MATLAB is on this person's own computer, for their replay zips and
+    # helper (app/analysis/matlab_bundle.py). Empty finds it there. It is a
+    # path on *their* machine: the server must never execute it.
+    matlab_path: str = ""
 
     @property
     def disabled(self) -> bool:
@@ -79,6 +83,7 @@ class User:
             "disabled_at": to_iso(self.disabled_at),
             "pin_hash": self.pin_hash,
             "shortcuts": self.shortcuts,
+            "matlab_path": self.matlab_path,
         }
 
     @classmethod
@@ -91,6 +96,7 @@ class User:
             disabled_at=from_iso(record.get("disabled_at")),
             pin_hash=record.get("pin_hash", ""),
             shortcuts=record.get("shortcuts") or {},
+            matlab_path=record.get("matlab_path", ""),
         )
 
 
@@ -192,6 +198,27 @@ def set_shortcuts(store: Store, user_id: int, shortcuts: dict[str, list[str]]) -
 
     def mutate(record: Record) -> None:
         record["shortcuts"] = shortcuts
+
+    return store.update_value(BUCKET_USERS, user_id, mutate) is not None
+
+
+MATLAB_PATH_MAX = 1024
+
+
+def valid_matlab_path(value: object) -> bool:
+    """Empty, or text that is safe as data for run.sh and run.bat: run.bat
+    wraps it in double quotes, so one in the path would end the string. It is
+    not checked against any disk; it names a file on the person's computer."""
+    return (isinstance(value, str) and len(value) <= MATLAB_PATH_MAX and '"' not in value
+            and all(ch.isprintable() for ch in value))
+
+
+def set_matlab_path(store: Store, user_id: int, path: str) -> bool:
+    """Save, or with an empty path clear, the account's MATLAB path. False if
+    there is no such user."""
+
+    def mutate(record: Record) -> None:
+        record["matlab_path"] = path
 
     return store.update_value(BUCKET_USERS, user_id, mutate) is not None
 

@@ -20,6 +20,7 @@ from starlette.applications import Starlette
 from starlette.concurrency import run_in_threadpool
 from starlette.middleware import Middleware
 
+from app.analysis import matlab_jobs
 from app.analysis.service import Library
 from app.models import ais as ais_batches
 from app.core import assets, bootstrap, config, db, language
@@ -93,6 +94,8 @@ def build_app(
     app.state.ais = Library(cfg.storage_dir, resolver)
     # Auto runs people report on each batch, for the Batches screen.
     app.state.ais_activity = ais_batches.Activity()
+    # Runs on their way to someone's MATLAB helper.
+    app.state.matlab_jobs = matlab_jobs.Jobs()
     # Reported to MCP clients as serverInfo.version.
     app.state.version = version
     return app

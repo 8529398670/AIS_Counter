@@ -20,6 +20,7 @@ ais_auto.m (Settings.patches) so MATLAB can be run with the same settings.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import asdict, dataclass, field, fields
 
 import numpy as np
@@ -66,12 +67,14 @@ class Settings:
             if key not in known:
                 raise ValueError(f"unknown setting {key}")
             if key == "smooth":
-                if value not in ml.FSPECIAL:
+                if not isinstance(value, str) or value not in ml.FSPECIAL:
                     raise ValueError("smooth must be one of " + ", ".join(ml.FSPECIAL))
                 values[key] = value
                 continue
             kind, lo, hi = cls.RANGES[key]
             if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError(f"{key} must be a number")
+            if isinstance(value, float) and not math.isfinite(value):   # JSON's Infinity and NaN
                 raise ValueError(f"{key} must be a number")
             if kind is int and value != int(value):
                 raise ValueError(f"{key} must be a whole number")

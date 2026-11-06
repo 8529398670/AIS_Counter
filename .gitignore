@@ -33,3 +33,5 @@ tests/golden/
 exports/
 
 gitPushUpdate.sh
+# The MATLAB helper, built by helper/build.sh.
+helper/dist/

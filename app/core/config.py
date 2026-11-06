@@ -102,6 +102,7 @@ class ServerSection:
     mcp: bool
     local_folders: bool
     matlab: str
+    matlab_helper: bool
 
 
 @dataclass
@@ -244,6 +245,9 @@ class Config:
     local_folders_enabled: bool = False
     # server.matlab as written; empty means find it (app/analysis/local.py).
     matlab: str = ""
+    # Whether the MATLAB helper's routes exist. They answer only helper keys,
+    # so with api_keys_enabled off they are not registered either.
+    matlab_helper: bool = True
 
     @property
     def listen_address(self) -> str:
@@ -714,6 +718,7 @@ def load() -> Config:
         mcp_enabled=file.server.mcp,
         local_folders_enabled=local_folders_allowed(file),
         matlab=file.server.matlab.strip(),
+        matlab_helper=file.server.matlab_helper,
     )
 
 

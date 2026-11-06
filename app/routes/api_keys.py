@@ -59,6 +59,8 @@ def api_key_row(key: api_keys.APIKey, display_name: str = "") -> dict[str, Any]:
         value = getattr(key, field_name)
         if value is not None:
             row[field_name] = to_iso(value)
+    if key.purpose:
+        row["purpose"] = key.purpose
     if display_name:
         row["display_name"] = display_name
     return row

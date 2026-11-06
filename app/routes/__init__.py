@@ -21,10 +21,10 @@ from starlette.middleware import Middleware
 from starlette.routing import BaseRoute, Route
 
 from app.core.config import Config
-from app.core.security import RequireAdmin, RequireAPIKey, RequireLogin, RequireSession
+from app.core.security import RequireAdmin, RequireAPIKey, RequireHelperKey, RequireLogin, RequireSession
 from app.core.static_files import StaticServer
 from app.mcp.protocol import Server as MCPServer
-from app.routes import account, admin, ais, api_keys, auth, invite_links, join, mcp_tools, meta, team
+from app.routes import account, admin, ais, ais_matlab, api_keys, auth, invite_links, join, mcp_tools, meta, team
 from app.routes.api_keys import RequireAPIKeys
 
 
@@ -87,6 +87,8 @@ def build_routes(static_server: StaticServer, cfg: Config) -> list[BaseRoute]:
         # A session only: a PIN lets its holder sign in through an invite
         # link, so a key that could set one could turn itself into a session.
         sessions_only("/api/account/pin", account.set_pin, ["POST"]),
+        # A session only: this path decides what this person's zips execute.
+        sessions_only("/api/account/matlab", account.set_matlab_path, ["POST"]),
         # A session only, for the same reason as every route that hands out
         # a login link: the link becomes a session. See admin_sessions above.
         sessions_only("/api/account/login-link", account.create_my_login_link, ["POST"]),
@@ -151,6 +153,9 @@ def build_routes(static_server: StaticServer, cfg: Config) -> list[BaseRoute]:
         admin_sessions("/api/ais/local/open", ais.local_open, ["POST"]),
         admin_sessions("/api/ais/local/choose", ais.local_choose, ["POST"]),
         admin_sessions("/api/ais/local/matlab", ais.local_matlab, ["POST"]),
+        # A MATLAB run as a zip: the images it holds are ones every signed-in
+        # user can already fetch.
+        signed_in("/api/ais/matlab/bundle", ais.matlab_bundle_download, ["POST"]),
         my_keys("/api/keys", api_keys.list_my_keys),
         my_keys("/api/keys", api_keys.create_my_key, ["POST"]),
         my_keys("/api/keys/{key_id}/revoke", api_keys.revoke_my_key, ["POST"]),
@@ -185,6 +190,23 @@ def build_routes(static_server: StaticServer, cfg: Config) -> list[BaseRoute]:
         routes += [
             group(RequireAPIKey)("/mcp", mcp.endpoint, ["POST"]),
             public("/mcp", mcp.method_not_allowed, ["GET", "DELETE"]),
+        ]
+
+    # The MATLAB helper (app/routes/ais_matlab.py). A session sends a run to its
+    # own helper; only that session can, so a stolen helper key cannot start
+    # anything. The helper authenticates with its own kind of key and nothing
+    # else, so without API keys these are not registered either.
+    if cfg.matlab_helper and cfg.api_keys_enabled:
+        helper = group(RequireHelperKey)
+        routes += [
+            sessions_only("/api/ais/matlab/send", ais_matlab.send, ["POST"]),
+            sessions_only("/api/ais/matlab/helper/key", ais_matlab.mint_key, ["POST"]),
+            # Signed in, not helper-only: the install line fetches this with
+            # the new key, and a person can from their browser.
+            signed_in("/api/ais/matlab/helper/download/{platform}", ais_matlab.download),
+            helper("/api/ais/matlab/helper/next", ais_matlab.next_job),
+            helper("/api/ais/matlab/helper/jobs/{job_id}/bundle", ais_matlab.job_bundle),
+            helper("/api/ais/matlab/helper/jobs/{job_id}/done", ais_matlab.job_done, ["POST"]),
         ]
 
     return routes + [

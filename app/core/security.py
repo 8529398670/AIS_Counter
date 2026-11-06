@@ -21,7 +21,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from app.core import encryption
 from app.core.config import Config
 from app.core.db import Store
-from app.models.api_keys import APIKey, load_api_key, narrow_role
+from app.models.api_keys import HELPER_PATH, PURPOSE_MATLAB_HELPER, APIKey, load_api_key, narrow_role
 from app.models.sessions import Session, load_session
 from app.models.users import ROLE_ADMIN, User
 
@@ -138,13 +138,21 @@ def _resolve_api_key(store: Store, cfg: Config, authorization: str) -> Actor | N
     return Actor(user=user, role=narrow_role(user.role, key.role), api_key=key)
 
 
-def resolve_actor(store: Store, cfg: Config, cookies: dict[str, str], authorization: str) -> Actor | None:
+def resolve_actor(store: Store, cfg: Config, cookies: dict[str, str], authorization: str,
+                  path: str = "") -> Actor | None:
     """The cookie is tried first and an API key only if there is no live
     session. Either order is safe, but this one keeps the CSRF rule below
     unambiguous: a request that arrives with ambient browser credentials is
     always held to the token check, and cannot opt out of it by also carrying
-    a key."""
-    return _resolve_session(store, cfg, cookies) or _resolve_api_key(store, cfg, authorization)
+    a key.
+
+    A MATLAB helper's key is no credential at all outside the helper's routes:
+    refused here, once, it needs no check on any route it must stay out of."""
+    actor = _resolve_session(store, cfg, cookies) or _resolve_api_key(store, cfg, authorization)
+    if actor is not None and actor.api_key is not None and actor.api_key.purpose == PURPOSE_MATLAB_HELPER \
+            and not path.startswith(HELPER_PATH):
+        return None
+    return actor
 
 
 class LoadActor:
@@ -165,7 +173,8 @@ class LoadActor:
         if scope["type"] == "http":
             request = Request(scope)
             actor = await run_in_threadpool(
-                resolve_actor, self.store, self.cfg, dict(request.cookies), request.headers.get("authorization", "")
+                resolve_actor, self.store, self.cfg, dict(request.cookies), request.headers.get("authorization", ""),
+                request.url.path,
             )
             request.state.actor = actor
         await self.app(scope, receive, send)
@@ -272,6 +281,22 @@ class RequireAPIKey(Guard):
             return response
         if not actor.via_api_key:
             return _refuse(403, "this endpoint requires an API key, not a signed-in session")
+        return None
+
+
+class RequireHelperKey(Guard):
+    """RequireAPIKey narrowed to the MATLAB helper's own key. A helper is handed
+    images and reports what it launched, so a key minted for a CI job or an MCP
+    client must not be able to pose as one."""
+
+    def refuse(self, request: Request) -> Response | None:
+        actor = actor_from(request)
+        if actor is None:
+            response = _refuse(401, "not authenticated")
+            response.headers["WWW-Authenticate"] = "Bearer"
+            return response
+        if actor.api_key is None or actor.api_key.purpose != PURPOSE_MATLAB_HELPER:
+            return _refuse(403, "this endpoint requires a MATLAB helper key")
         return None
 
 

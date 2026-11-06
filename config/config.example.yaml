@@ -128,8 +128,16 @@ server:
   # The MATLAB that "Verify in MATLAB" launches, with the GUI, on the original
   # original-code/ais_auto.m. Empty finds the newest
   # /Applications/MATLAB_R*.app (macOS) or `matlab` on the PATH. Needs
-  # local_folders, and the same loopback-only rule applies.
+  # local_folders, and the same loopback-only rule applies. A server that
+  # cannot reach a person's MATLAB (Docker, or another machine) has the two
+  # ways below instead; neither uses this key.
   matlab: ""
+  # The optional helper (helper/) that runs on a person's own computer, so
+  # "Replay in MATLAB" opens their MATLAB from a server that cannot. It polls
+  # this server and needs auth.api_keys. Only a signed-in browser can send it
+  # anything, and only to that person's own helper, but what it receives is
+  # code it runs: false removes it. "Download MATLAB Replay" does not need it.
+  matlab_helper: true
 
 auth:
   session_ttl_seconds: 1209600     # 14 days

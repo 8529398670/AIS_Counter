@@ -20,7 +20,7 @@ from starlette.responses import JSONResponse, Response
 
 from app.analysis import ais_auto as aa
 from app.analysis import detect as auto
-from app.analysis import local, matlab
+from app.analysis import local, matlab, matlab_bundle
 from app.analysis.images import ImageError
 from app.analysis.service import Library, NotStored
 from app.core.security import actor_from, check_csrf
@@ -171,10 +171,14 @@ async def channel_tif(request: Request) -> Response:
 
 
 def _point(value: Any) -> tuple[float, float] | None:
-    if (isinstance(value, list) and len(value) == 2
-            and all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) for v in value)):
-        return float(value[0]), float(value[1])
-    return None
+    if not (isinstance(value, list) and len(value) == 2
+            and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in value)):
+        return None
+    try:
+        x, y = float(value[0]), float(value[1])
+    except OverflowError:   # JSON integers have no limit
+        return None
+    return (x, y) if math.isfinite(x) and math.isfinite(y) else None
 
 
 def _threshold(value: Any) -> float | None:
@@ -843,7 +847,10 @@ async def local_status(request: Request) -> Response:
     cfg = get_config(request)
     enabled = bool(cfg.local_folders_enabled and actor.is_admin and actor.session is not None)
     found = enabled and matlab.find_matlab(cfg.matlab) is not None
-    return JSONResponse({"enabled": enabled, "platform": local.platform(), "matlab": found})
+    helper_on = bool(cfg.matlab_helper and cfg.api_keys_enabled)
+    return JSONResponse({"enabled": enabled, "platform": local.platform(), "matlab": found,
+                         "helper_enabled": helper_on,
+                         "helper": helper_on and request.app.state.matlab_jobs.live(actor.user.id)})
 
 
 async def _local_body(request: Request) -> tuple[dict[str, Any] | None, Response | None]:
@@ -933,32 +940,67 @@ async def local_choose(request: Request) -> Response:
     return JSONResponse({"path": path, "cancelled": path is None})
 
 
-async def local_matlab(request: Request) -> Response:
+def matlab_run(body: dict[str, Any]) -> tuple[matlab.Run | None, str]:
     """Body: {mode: open|run|replay, processed, raw?, cell, threshold?,
-    settings?, clicks?: [[x, y], ...]}. Starts MATLAB's desktop on the original
-    ais_auto.m for that image (app/analysis/matlab.py). processed is the
-    traced image's id, raw the profile image's when the cell has both."""
-    body, refused = await _local_body(request)
-    if refused:
-        return refused
+    settings?, clicks?: [[x, y], ...]}, as a matlab.Run or (None, why).
+    processed is the traced image's id, raw the profile image's when the cell
+    has both. cell is the name the browser shows: a randomized batch's blind
+    name stays blind because nothing here looks the original up."""
     mode = body.get("mode", "run")
     processed, raw, cell = body.get("processed"), body.get("raw"), body.get("cell")
     threshold = _threshold(body.get("threshold", 0.01))
-    if mode not in matlab.MODES:
-        return bad_request("mode must be open, run or replay")
+    if not isinstance(mode, str) or mode not in matlab.MODES:
+        return None, "mode must be open, run or replay"
     if not isinstance(processed, str) or (raw is not None and not isinstance(raw, str)) or not isinstance(cell, str):
-        return bad_request("processed, raw and cell must be strings")
+        return None, "processed, raw and cell must be strings"
     if threshold is None:
-        return bad_request("threshold must be between 0 and 1")
+        return None, "threshold must be between 0 and 1"
     settings, why = _settings(body.get("settings"))
     if settings is None:
-        return bad_request(why)
+        return None, why
     clicks = None
     if mode == "replay":
         raw_clicks = body.get("clicks")
         clicks = [_point(c) for c in raw_clicks] if isinstance(raw_clicks, list) and 1 <= len(raw_clicks) <= 2 else None
         if not clicks or None in clicks:
-            return bad_request("replay needs one or two clicks as [x, y]")
+            return None, "replay needs one or two clicks as [x, y]"
+    return matlab.Run(mode, processed, raw, cell, threshold, clicks, settings), ""
+
+
+async def bundle_response(request: Request, job: matlab.Run) -> Response:
+    """The run as a zip for the signed-in person (app/analysis/matlab_bundle.py),
+    their own MATLAB path inside. ImageError is the caller's to answer."""
+    processed, raw = await run(_library(request).matlab_pair, job.processed, job.raw)
+    name, data = await run(matlab_bundle.build, job, processed, raw, actor_from(request).user.matlab_path)
+    return Response(data, media_type="application/zip",
+                    headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
+async def matlab_bundle_download(request: Request) -> Response:
+    """Body: see matlab_run. The zip "Download MATLAB Replay" saves: the same
+    images /file and /processed.tif already give a signed-in person, so this
+    needs nothing more than that."""
+    body, refused = await _body(request)
+    if refused:
+        return refused
+    job, why = matlab_run(body)
+    if job is None:
+        return bad_request(why)
+    try:
+        return await bundle_response(request, job)
+    except ImageError as exc:
+        return bad_request(str(exc))
+
+
+async def local_matlab(request: Request) -> Response:
+    """Body: see matlab_run. Starts MATLAB's desktop on the original ais_auto.m
+    for that image, on this machine (app/analysis/matlab.py)."""
+    body, refused = await _local_body(request)
+    if refused:
+        return refused
+    job, why = matlab_run(body)
+    if job is None:
+        return bad_request(why)
     cfg = get_config(request)
     binary = matlab.find_matlab(cfg.matlab)
     if binary is None:
@@ -966,9 +1008,9 @@ async def local_matlab(request: Request) -> Response:
     library = _library(request)
     user = _user_id(request)
     try:
-        processed_tiff, raw_tiff = await run(library.matlab_pair, processed, raw)
-        stem = await run(matlab.stage, cfg.storage_dir / "ais-matlab" / str(int(user)), cell, processed_tiff, raw_tiff)
-        await run(matlab.launch, binary, mode, stem, threshold, clicks, settings)
+        processed_tiff, raw_tiff = await run(library.matlab_pair, job.processed, job.raw)
+        stem = await run(matlab.stage, cfg.storage_dir / "ais-matlab" / str(int(user)), job.cell, processed_tiff, raw_tiff)
+        await run(matlab.launch, binary, job.mode, stem, job.threshold, job.clicks, job.settings)
     except ImageError as exc:
         return bad_request(str(exc))
     except OSError as exc:

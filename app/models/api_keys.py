@@ -57,6 +57,14 @@ API_KEY_TOUCH_INTERVAL = timedelta(minutes=15)
 # week; keeping it forever is the other wrong trade.
 API_KEY_RETENTION = timedelta(days=30)
 
+# A key minted for one job rather than for "anything this account can do". The
+# MATLAB helper's key lives in a file on someone's laptop, so it authenticates
+# only under HELPER_PATH (LoadActor), and those routes accept nothing else
+# (RequireHelperKey). It adds a limit to a key, never a permission: the role
+# model above is unchanged.
+PURPOSE_MATLAB_HELPER = "matlab-helper"
+HELPER_PATH = "/api/ais/matlab/helper/"
+
 # Bounds an explicit expiry. Zero still means "never expires", asked for
 # deliberately; this only stops a typo from producing a date so far out that
 # it is the same thing by accident.
@@ -98,6 +106,7 @@ class APIKey:
     expires_at: datetime | None = None
     last_used_at: datetime | None = None
     revoked_at: datetime | None = None
+    purpose: str = ""
 
     @property
     def revoked(self) -> bool:
@@ -125,6 +134,7 @@ class APIKey:
             "expires_at": to_iso(self.expires_at),
             "last_used_at": to_iso(self.last_used_at),
             "revoked_at": to_iso(self.revoked_at),
+            "purpose": self.purpose,
         }
 
     @classmethod
@@ -139,6 +149,7 @@ class APIKey:
             expires_at=from_iso(record.get("expires_at")),
             last_used_at=from_iso(record.get("last_used_at")),
             revoked_at=from_iso(record.get("revoked_at")),
+            purpose=record.get("purpose", ""),
         )
 
 
@@ -178,7 +189,8 @@ def narrow_role(account_role: str, key_role: str) -> str:
     return ROLE_USER
 
 
-def issue_api_key(store: Store, user_id: int, name: str, role: str, ttl_seconds: int) -> tuple[str, APIKey]:
+def issue_api_key(store: Store, user_id: int, name: str, role: str, ttl_seconds: int,
+                  purpose: str = "") -> tuple[str, APIKey]:
     """Returns (credential, key). The credential exists exactly once, here: it
     is never stored and cannot be recovered -- if it is lost, revoke the key
     and mint another.
@@ -205,6 +217,7 @@ def issue_api_key(store: Store, user_id: int, name: str, role: str, ttl_seconds:
         secret_hash=encryption.sha256_hex(secret),
         created_at=now,
         expires_at=now + timedelta(seconds=ttl_seconds) if ttl_seconds > 0 else None,
+        purpose=purpose,
     )
 
     # The owner check, the quota check, and the insert share one transaction.

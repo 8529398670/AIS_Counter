@@ -111,6 +111,7 @@ const Ais = {
     Dom.all( "[data-tool]" ).forEach( ( button ) => button.addEventListener( "click" , () => this.setTool( button.dataset.tool ) ) );
     Dom.get( "ais-reject" ).addEventListener( "click" , () => this.reject() );
     Dom.get( "ais-replay" ).addEventListener( "click" , () => this.replayInMatlab() );
+    Dom.get( "ais-replay-download" ).addEventListener( "click" , () => this.downloadReplay() );
     Dom.get( "ais-table-scope" ).addEventListener( "change" , () => this.loadTable() );
     // A changed setting (on the Settings screen) drops a half-done two-click.
     // A method setting starts the click over; a general one (thickness, minimum
@@ -173,17 +174,32 @@ const Ais = {
     this.loadHint();
     this.resize();
     this.loadLocal();
+    // Whether this person's MATLAB helper is running changes while the page is
+    // open, and the MATLAB buttons follow it.
+    window.setInterval( () => {
+      if ( this.local.helper_enabled && !document.hidden ) this.loadLocal();
+    } , 10000 );
     this.importLegacy().finally( () => this.followUrl() );
   },
 
   async loadLocal() {
+    const before = this.localLoaded ? this.canMatlab() : null;
     try {
       this.local = await Api.request( "/api/ais/local/status" );
     } catch ( error ) {
-      this.local = { enabled: false , platform: "" , matlab: false };
+      this.local = { enabled: false , platform: "" , matlab: false , helper: false , helper_enabled: false };
     }
+    this.localLoaded = true;
+    MatlabAccount.render();
+    if ( before === this.canMatlab() ) return;
     this.renderCurrent();
-    this.renderResult();
+    this.renderResult( Boolean( this.firstClick ) );
+    if ( before !== null ) AisImages.render();
+  },
+
+  // MATLAB is reachable: this person's helper, or this machine's own.
+  canMatlab() {
+    return Boolean( this.local.matlab || this.local.helper );
   },
 
   // Accepted AIS from before results lived on the server (this browser's
@@ -843,7 +859,7 @@ const Ais = {
     Dom.get( "ais-progress-bar-wrap" ).setAttribute( "aria-valuemax" , String( total ) );
     const buttons = [ "ais-file-open" , "ais-file-reveal" , "ais-file-copy" , "ais-file-link" , "ais-matlab-menu" , "ais-file-done" ];
     // A .czi goes to MATLAB as the TIFF pair it is traced from (Library.matlab_pair).
-    Dom.show( Dom.get( "ais-matlab-group" ) , Boolean( this.local.matlab ) );
+    Dom.show( Dom.get( "ais-matlab-group" ) , this.canMatlab() );
     if ( !entry ) {
       [ "ais-current-pos" , "ais-current-stem" , "ais-current-ext" , "ais-current-partner" ].forEach( ( id ) => Dom.text( Dom.get( id ) , "" ) );
       buttons.forEach( ( id ) => { Dom.get( id ).disabled = true; } );
@@ -924,33 +940,69 @@ const Ais = {
 
   // mode: "open" (the original in the Editor, run it yourself), "run" (the
   // original, run for you) or "replay" (the web click(s) played back).
-  async verifyInMatlab( entry , mode , clicks ) {
-    if ( !entry || !this.local.matlab ) return;
+  matlabBody( entry , mode , clicks , threshold , settings ) {
+    return {
+      mode: mode || "run",
+      processed: this.sha( entry ),
+      raw: this.kind( entry ) === "pair" ? this.sha( entry , "raw" ) : null,
+      cell: entry.cell,
+      threshold: threshold ?? Settings.threshold(),
+      settings: settings || Settings.methodSettings(),
+      clicks: clicks || null,
+    };
+  },
+
+  // mode: "open" or "run", on the settings as they stand.
+  verifyInMatlab( entry , mode ) {
+    if ( entry ) this.sendToMatlab( entry , this.matlabBody( entry , mode ) );
+  },
+
+  async sendToMatlab( entry , body ) {
+    if ( !this.canMatlab() ) return;
     try {
       await this.upload( entry );
-      await Api.post( "/api/ais/local/matlab" , {
-        mode: mode || "run",
-        processed: this.sha( entry ),
-        raw: this.kind( entry ) === "pair" ? this.sha( entry , "raw" ) : null,
-        cell: entry.cell,
-        threshold: Settings.threshold(),
-        settings: Settings.methodSettings(),
-        clicks: clicks || null,
-      } );
+      // The helper first: it is the computer in front of this person, where
+      // the server's own MATLAB may be somewhere else entirely.
+      await Api.post( this.local.helper ? "/api/ais/matlab/send" : "/api/ais/local/matlab" , body );
       Dom.toast( I18n.get( "ais.matlab_started" ) , "ok" );
     } catch ( error ) {
       App.showError( error.message );
     }
   },
 
-  // The clicks the shown trace used, in the order the original asks for them.
-  replayInMatlab() {
+  // The shown trace as a replay: its clicks, in the order the original asks
+  // for them, and the threshold and settings it was traced with, which the
+  // sliders may have moved away from since.
+  replayBody() {
     const r = this.result;
     const entry = this.images[ this.index ];
-    if ( !r || !this.lastBody || !entry ) return;
+    if ( !r || !this.lastBody || !entry ) return null;
     const clicks = [ this.lastBody.click ];
     if ( r.rethresholded ) clicks.push( this.lastBody.click2 || this.lastBody.click );
-    this.verifyInMatlab( entry , "replay" , clicks );
+    return this.matlabBody( entry , "replay" , clicks , r.threshold_initial , r.settings );
+  },
+
+  replayInMatlab() {
+    const body = this.replayBody();
+    if ( body ) this.sendToMatlab( this.images[ this.index ] , body );
+  },
+
+  // The same replay as a zip, for wherever this person's MATLAB is. Needs
+  // nothing from the server but the images (app/analysis/matlab_bundle.py).
+  async downloadReplay() {
+    const body = this.replayBody();
+    if ( !body ) return;
+    const button = Dom.get( "ais-replay-download" );
+    button.disabled = true;
+    try {
+      await this.upload( this.images[ this.index ] );
+      const { blob , name } = await Api.postBlob( "/api/ais/matlab/bundle" , body );
+      AisExport.download( blob , name );
+    } catch ( error ) {
+      App.showError( error.message );
+    } finally {
+      button.disabled = false;
+    }
   },
 
   // The preview is min..max scaled like imagesc; the brightness slider is a
@@ -1570,7 +1622,7 @@ const Ais = {
     const r = this.result;
     Dom.show( Dom.get( "ais-result-none" ) , !r );
     Dom.show( Dom.get( "ais-result" ) , Boolean( r ) );
-    Dom.show( Dom.get( "ais-replay" ) , Boolean( this.local.matlab ) );
+    Dom.show( Dom.get( "ais-replay" ) , this.canMatlab() );
     if ( !r ) return;
     const m = r.measures;
     Dom.text( Dom.get( "ais-length" ) , m ? m.length_str : I18n.get( "ais.no_length" ) );
@@ -1607,6 +1659,7 @@ const Ais = {
     Dom.get( "ais-accept" ).disabled = !( r.ok && !waitingForSecond );
     Dom.text( Dom.get( "ais-accept" ).querySelector( "span" ) , I18n.get( this.editing ? "ais.update" : "ais.accept" ) );
     Dom.get( "ais-replay" ).disabled = !( r.path && !waitingForSecond );
+    Dom.get( "ais-replay-download" ).disabled = !( r.path && !waitingForSecond );
   },
 
   // Normalised, smoothed intensity along the trace with the f line and the

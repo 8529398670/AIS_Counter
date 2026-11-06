@@ -353,6 +353,7 @@
                     <button id="ais-accept" class="btn btn-primary btn-sm" type="button"><i class="bi bi-check-lg" aria-hidden="true"></i> <span data-i18n="ais.accept"></span></button>
                     <button id="ais-reject" class="btn btn-outline-secondary btn-sm" type="button"><i class="bi bi-x-lg" aria-hidden="true"></i> <span data-i18n="ais.reject"></span></button>
                     <button id="ais-replay" class="btn btn-outline-secondary btn-sm" type="button" hidden data-i18n-attr="title:ais.replay_help"><i class="bi bi-window-stack" aria-hidden="true"></i> <span data-i18n="ais.replay"></span></button>
+                    <button id="ais-replay-download" class="btn btn-outline-secondary btn-sm" type="button" data-i18n-attr="title:ais.replay_download_help"><i class="bi bi-file-earmark-zip" aria-hidden="true"></i> <span data-i18n="ais.replay_download"></span></button>
                   </div>
                 </div>
               </div>
@@ -694,6 +695,43 @@
             </div>
 
             <hr />
+
+            <!-- Where this person's own MATLAB is, and the helper that opens it.
+                 Offered to browser sessions; see static/js/matlab_account.js. -->
+            <div id="matlab-panel" hidden>
+              <h3 class="h6" data-i18n="matlab.heading"></h3>
+              <p class="text-body-secondary" data-i18n="matlab.description"></p>
+              <form id="matlab-path-form" class="row g-3 align-items-end" autocomplete="off">
+                <div class="col-md">
+                  <label for="matlab-path" class="form-label" data-i18n="matlab.path_label"></label>
+                  <input id="matlab-path" class="form-control" maxlength="1024" spellcheck="false"
+                         data-i18n-attr="placeholder:matlab.path_placeholder" />
+                </div>
+                <div class="col-md-auto">
+                  <button type="submit" class="btn btn-primary" data-i18n="account.save_button"></button>
+                </div>
+              </form>
+              <div id="matlab-helper" class="mt-3" hidden>
+                <p class="mb-2"><span data-i18n="matlab.helper_heading"></span> <span id="matlab-helper-status" class="badge"></span></p>
+                <p class="text-body-secondary" data-i18n="matlab.helper_description"></p>
+                <button id="matlab-helper-connect" class="btn btn-outline-secondary" type="button" data-i18n="matlab.helper_connect"></button>
+                <div id="matlab-helper-box" class="alert alert-warning mt-3" hidden>
+                  <p data-i18n="matlab.helper_warning"></p>
+                  <p class="mb-1" data-i18n="matlab.helper_unix"></p>
+                  <div class="link-box mb-3">
+                    <code id="matlab-helper-unix"></code>
+                    <button id="matlab-helper-unix-copy" class="btn btn-sm btn-outline-secondary" type="button" data-i18n="account.copy_button"></button>
+                  </div>
+                  <p class="mb-1" data-i18n="matlab.helper_windows"></p>
+                  <div class="link-box mb-3">
+                    <code id="matlab-helper-windows"></code>
+                    <button id="matlab-helper-windows-copy" class="btn btn-sm btn-outline-secondary" type="button" data-i18n="account.copy_button"></button>
+                  </div>
+                  <p class="mb-0" data-i18n="matlab.helper_after"></p>
+                </div>
+              </div>
+              <hr />
+            </div>
 
             <button id="logout-button" class="btn btn-outline-danger" data-i18n="account.logout_button"></button>
           </div>
@@ -1303,6 +1341,7 @@
   <script src="/js/shortcuts.js"></script>
   <script src="/js/settings.js"></script>
   <script src="/js/about.js"></script>
+  <script src="/js/matlab_account.js"></script>
   <script src="/js/ais.js"></script>
   <script src="/js/ais_images.js"></script>
   <script src="/js/ais_assign.js"></script>

@@ -258,7 +258,7 @@ const AisImages = {
       const badges = this.badges( entry );
       const owner = this.assigneeBadge( entry );
       if ( owner ) badges.push( owner );
-      if ( this.ctx.process && Ais.local.matlab ) badges.push( this.matlabMenu( entry , main.name ) );
+      if ( this.ctx.process && Ais.canMatlab() ) badges.push( this.matlabMenu( entry , main.name ) );
       const card = Dom.el( "div" , {
         class: "ais-image-card ais-item" + ( this.ctx.process && i === Ais.index ? " ais-current" : "" ),
         attrs: { role: "option" , "data-index": String( i ) , title: main.name + ( entry.original_key ? " · " + entry.original_key : "" ) },

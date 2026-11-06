@@ -125,6 +125,7 @@ const App = {
     // First, so text naming a key shows this person's keys.
     Shortcuts.init( me );
     Pin.init( me );
+    MatlabAccount.init( me );
     await Keys.init( me );
     Settings.init();
     About.init();

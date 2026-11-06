@@ -26,7 +26,13 @@ async def me(request: Request) -> Response:
     rare caller that needs to tell the two apart. Reporting the account's role
     as "role" would have a client believe it has permissions the server will
     refuse to act on."""
-    return JSONResponse(await run(me_row, get_store(request), get_config(request), actor_from(request)))
+    actor = actor_from(request)
+    row = await run(me_row, get_store(request), get_config(request), actor)
+    # Not in me_row: a path on someone's computer is for their own Account
+    # panel, not for a key or an MCP client asking who it is.
+    if actor.session is not None:
+        row["matlab_path"] = actor.user.matlab_path
+    return JSONResponse(row)
 
 
 def me_row(store: Store, cfg: Config, actor: Actor) -> dict[str, Any]:
@@ -87,6 +93,24 @@ async def set_shortcuts(request: Request) -> Response:
     if not await run(users.set_shortcuts, get_store(request), actor_from(request).user.id, shortcuts):
         return server_error()
     return JSONResponse({"ok": True})
+
+
+async def set_matlab_path(request: Request) -> Response:
+    """Body: {path}: where MATLAB is on the caller's own computer, written into
+    their replay zips (app/analysis/matlab_bundle.py). Empty clears it. A
+    session only: this value decides what those scripts execute."""
+    body = await read_json(request)
+    if body is None:
+        return bad_request("malformed request body")
+    if not check_csrf(request, body.get("csrf_token")):
+        return forbidden("invalid csrf token")
+    path = body.get("path")
+    if not users.valid_matlab_path(path):
+        return bad_request("that does not look like a path")
+    path = path.strip()
+    if not await run(users.set_matlab_path, get_store(request), actor_from(request).user.id, path):
+        return server_error()
+    return JSONResponse({"ok": True, "path": path})
 
 
 async def set_pin(request: Request) -> Response:

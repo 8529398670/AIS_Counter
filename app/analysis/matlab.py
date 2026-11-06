@@ -27,12 +27,17 @@ from the original's constants (ais_auto.Settings.patches) is written into a
 copy, ais_auto_settings.m (or the replay copy), in the run folder, with a
 header listing what changed; with the original's constants open and run use
 ais_auto.m itself.
+
+The same run can leave this machine as a zip (matlab_bundle.py), for a server
+that cannot reach the person's MATLAB: Run is what a run is, sources() its .m
+files and steps() its MATLAB statements, so all three stay one definition.
 """
 from __future__ import annotations
 
 import shutil
 import subprocess
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 from app.analysis.ais_auto import DEFAULT, Settings
@@ -43,6 +48,23 @@ ORIGINAL_CODE = Path(__file__).resolve().parents[2] / "original-code"
 PROCESSED_SUFFIX = ".tif - Processed method 2.5.tif"
 KEEP_RUNS = 20
 MODES = ("open", "run", "replay")
+SAFE_CELL_MAX = 64
+# Names Windows reserves whatever the extension: a file called CON.tif cannot
+# be created there, so a zip holding one would not extract.
+WINDOWS_DEVICES = {"CON", "PRN", "AUX", "NUL", *(f"{n}{i}" for n in ("COM", "LPT") for i in range(1, 10))}
+
+
+@dataclass(frozen=True)
+class Run:
+    """One MATLAB run of one image, validated (app/routes/ais.py): processed
+    and raw are image ids, clicks are MATLAB axes coordinates."""
+    mode: str
+    processed: str
+    raw: str | None
+    cell: str
+    threshold: float
+    clicks: list[tuple[float, float]] | None
+    settings: Settings
 
 # (original text, replacement): each must occur exactly once in ais_auto.m, so
 # a change to the original fails loudly instead of replaying something else.
@@ -122,11 +144,32 @@ def replay_source(settings: Settings = DEFAULT) -> str:
     return apply_patches(text, REPLAY_PATCHES)
 
 
+def sources(mode: str, settings: Settings = DEFAULT, portable: bool = False) -> dict[str, str]:
+    """The .m files this run needs beside its images, by file name. On this
+    machine the plain original is reached through addpath; portable (a zip)
+    carries it too."""
+    if mode == "replay":
+        return {"ais_auto_replay.m": replay_source(settings), "ais_replay_click.m": REPLAY_CLICK}
+    if settings.patches():
+        return {"ais_auto_settings.m": settings_source(settings)}
+    return {"ais_auto.m": (ORIGINAL_CODE / "ais_auto.m").read_text()} if portable else {}
+
+
+def safe_cell(cell: str) -> str:
+    """A cell name as a file name every OS and a Content-Disposition header can
+    hold: ASCII, no leading dot, bounded, and not a Windows device."""
+    safe = "".join(ch if ch.isascii() and (ch.isalnum() or ch in "-_.") else "_" for ch in cell)
+    safe = safe.lstrip(".")[:SAFE_CELL_MAX].rstrip(".")
+    if safe.split(".")[0].upper() in WINDOWS_DEVICES:
+        safe = "cell_" + safe
+    return safe or "cell"
+
+
 def stage(runs_dir: Path, cell: str, processed: bytes, raw: bytes | None) -> Path:
     """Write the pair (TIFF bytes) into runs_dir/<time>-<cell>/ under the
     original's names; returns the <cell> path stem ais_auto takes. Old runs
     beyond KEEP_RUNS go."""
-    safe = "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in cell) or "cell"
+    safe = safe_cell(cell)
     runs_dir.mkdir(parents=True, exist_ok=True)
     runs = sorted(p for p in runs_dir.iterdir() if p.is_dir())   # oldest first: names start with the time
     for old in runs[:max(0, len(runs) - (KEEP_RUNS - 1))]:
@@ -149,45 +192,51 @@ def function_name(mode: str, settings: Settings) -> str:
     return "ais_auto_settings" if settings.patches() else "ais_auto"
 
 
-def command(mode: str, stem: Path, threshold: float, clicks: list[tuple[float, float]] | None = None,
-            settings: Settings = DEFAULT) -> str:
-    """What the new MATLAB session runs."""
-    fn = function_name(mode, settings)
-    call = f"{fn}({_str(str(stem))}, {threshold!r}, {_str(settings.smooth)}, 0)"
-    source = ORIGINAL_CODE / "ais_auto.m" if fn == "ais_auto" else stem.parent / f"{fn}.m"
-    # diary copies the command window into <stem>_matlab.log: with the desktop,
-    # MATLAB's output goes there rather than to stdout.
-    steps = [f"diary({_str(str(stem) + '_matlab.log')})", f"cd({_str(str(stem.parent))})",
-             f"addpath({_str(str(ORIGINAL_CODE))})"]
+def steps(mode: str, cell: str, source: str, threshold: float,
+          clicks: list[tuple[float, float]] | None = None, settings: Settings = DEFAULT) -> list[str]:
+    """The MATLAB statements of a run once it is in its folder. cell is what
+    ais_auto is called with, source the file the open mode shows."""
+    call = f"{function_name(mode, settings)}({_str(cell)}, {threshold!r}, {_str(settings.smooth)}, 0)"
     if mode == "open":
-        steps += [
-            f"edit({_str(str(source))})",
+        name = Path(source).name
+        return [
+            f"edit({_str(source)})",
             f"clipboard('copy', {_str(call)})",
-            (f"disp('{source.name} (the original with the changed constants listed at its top) is open in the Editor. "
-             "To run it on this image, paste (it is on the clipboard):')" if fn != "ais_auto" else
+            (f"disp('{name} (the original with the changed constants listed at its top) is open in the Editor. "
+             "To run it on this image, paste (it is on the clipboard):')" if name != "ais_auto.m" else
              "disp('The original ais_auto.m is open in the Editor. To run it on this image, paste (it is on the clipboard):')"),
             f"disp({_str('    ' + call)})",
         ]
-    elif mode == "run":
-        steps += [
+    if mode == "run":
+        return [
             "disp('ais_auto.m: zoom if needed, press a key in the figure, click just outside the AIS start; "
             "after the trace shows press a key (n discards). The results stay open here.')",
             call,
         ]
-    elif mode == "replay":
+    if mode == "replay":
         if not clicks:
             raise ImageError("replay needs the clicks")
         rows = "; ".join(f"{x!r} {y!r}" for x, y in clicks)
-        steps += [
+        return [
             "global AIS_REPLAY_CLICKS",
             f"AIS_REPLAY_CLICKS = [{rows}]",
             "disp('Replaying the web click(s) in ais_auto.m (orange +). After the trace shows, press a key "
             "(n discards). The results stay open here.')",
             call,
         ]
-    else:
-        raise ImageError("unknown MATLAB mode")
-    return "; ".join(steps) + ";"
+    raise ImageError("unknown MATLAB mode")
+
+
+def command(mode: str, stem: Path, threshold: float, clicks: list[tuple[float, float]] | None = None,
+            settings: Settings = DEFAULT) -> str:
+    """What the new MATLAB session runs."""
+    fn = function_name(mode, settings)
+    source = ORIGINAL_CODE / "ais_auto.m" if fn == "ais_auto" else stem.parent / f"{fn}.m"
+    # diary copies the command window into <stem>_matlab.log: with the desktop,
+    # MATLAB's output goes there rather than to stdout.
+    head = [f"diary({_str(str(stem) + '_matlab.log')})", f"cd({_str(str(stem.parent))})",
+            f"addpath({_str(str(ORIGINAL_CODE))})"]
+    return "; ".join(head + steps(mode, str(stem), str(source), threshold, clicks, settings)) + ";"
 
 
 def launch(matlab: str, mode: str, stem: Path, threshold: float,
@@ -196,11 +245,8 @@ def launch(matlab: str, mode: str, stem: Path, threshold: float,
     window to <stem>_matlab.log (diary); MATLAB's own start-up output goes to
     <stem>_launch.log."""
     cmd = command(mode, stem, threshold, clicks, settings)
-    if mode == "replay":
-        (stem.parent / "ais_auto_replay.m").write_text(replay_source(settings))
-        (stem.parent / "ais_replay_click.m").write_text(REPLAY_CLICK)
-    elif settings.patches():
-        (stem.parent / "ais_auto_settings.m").write_text(settings_source(settings))
+    for name, text in sources(mode, settings).items():
+        (stem.parent / name).write_text(text)
     with open(str(stem) + "_launch.log", "wb") as log:
         subprocess.Popen([matlab, "-desktop", "-r", cmd], cwd=str(stem.parent),
                          stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)

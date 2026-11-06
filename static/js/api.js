@@ -48,6 +48,25 @@ const Api = {
     } );
   },
 
+  // A POST whose answer is a file (a zip): request() parses every answer as
+  // JSON, which would lose it. An error is still the usual JSON.
+  async postBlob( path , body ) {
+    const response = await fetch( path , {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify( Object.assign( {} , body || {} , { csrf_token: this.csrfToken } ) ),
+    } );
+    if ( !response.ok ) {
+      const payload = await response.json().catch( () => ( {} ) );
+      const error = new Error( payload.error || response.statusText );
+      error.status = response.status;
+      throw error;
+    }
+    const name = /filename="([^"]+)"/.exec( response.headers.get( "Content-Disposition" ) || "" );
+    return { blob: await response.blob() , name: name ? name[ 1 ] : "matlab-replay.zip" };
+  },
+
   async me() {
     try {
       const payload = await this.request( "/api/me" );
@@ -78,6 +97,8 @@ const Api = {
   rename( displayName )        { return this.post( "/api/account/rename" , { display_name: displayName } ); },
   setPin( pin )                { return this.post( "/api/account/pin" , { pin: pin } ); },
   saveShortcuts( map )         { return this.post( "/api/account/shortcuts" , { shortcuts: map } ); },
+  saveMatlabPath( path )       { return this.post( "/api/account/matlab" , { path: path } ); },
+  mintHelperKey()              { return this.post( "/api/ais/matlab/helper/key" ); },
   createMyLoginLink()          { return this.post( "/api/account/login-link" ); },
   logout()                     { return this.post( "/api/logout" ); },
   listTeam()                   { return this.request( "/api/team" ); },
