@@ -1,9 +1,11 @@
 // The Settings screen: which method the Process screen calculates with, and
 // that method's own settings.
 //
-// Today there is one method, ais_auto.m (our port of the original). Another
-// one is an entry in methods below plus a <fieldset data-method="key"> of its
-// controls in index.html; only the chosen method's fieldset shows.
+// Today there are two: ais_auto.m (our port of the original) and ais_auto.m
+// (fast), the same answers from app/analysis/fast.py, which shows the same
+// fieldset and keeps its own values. Another one is an entry in methods below
+// plus a <fieldset data-method="key"> of its controls in index.html; only the
+// chosen method's fieldset shows.
 //
 // General settings (minimum length, trace thickness, and how auto mode runs)
 // apply whatever the method, and are kept apart from any one method's.
@@ -93,7 +95,7 @@ const Settings = {
       this.render();
       this.save();
     } );
-    this.methods.forEach( ( method ) => {
+    this.methods.filter( ( method ) => !method.fieldset ).forEach( ( method ) => {
       Object.keys( method.controls ).forEach( ( field ) => {
         Dom.get( method.controls[ field ] ).addEventListener( "change" , ( e ) => {
           const value = this.clean( method , field , e.target.value );
@@ -205,7 +207,7 @@ const Settings = {
   render() {
     const method = this.find( this.values.method );
     Dom.all( "fieldset[data-method]" , Dom.get( "settings" ) ).forEach( ( fieldset ) => {
-      Dom.show( fieldset , fieldset.getAttribute( "data-method" ) === method.key );
+      Dom.show( fieldset , fieldset.getAttribute( "data-method" ) === ( method.fieldset || method.key ) );
     } );
     Object.keys( method.controls ).forEach( ( field ) => {
       Dom.get( method.controls[ field ] ).value = this.values[ field ];
@@ -252,6 +254,11 @@ const Settings = {
   },
 
   method() { return this.values.method; },
+  // What the trace and detect bodies add for the method's server engine.
+  engine() {
+    const engine = this.find( this.values.method ).engine;
+    return engine ? { engine: engine } : {};
+  },
   threshold() { return this.values.threshold; },
   // The method's settings the server takes (the trace and MATLAB bodies).
   methodSettings() {
@@ -291,3 +298,7 @@ const Settings = {
   learnedMinLength() { return this.values.learned_min_length; },
   autoSkipDone() { return this.values.auto_skip_done; },
 };
+
+// "ais_auto.m (fast)": ais_auto's settings and fieldset, its own saved values,
+// and the server's app/analysis/fast.py, which gives the same answers sooner.
+Settings.methods.push( Object.assign( {} , Settings.methods[ 0 ] , { key: "ais_fast" , fieldset: "ais_auto" , engine: "fast" } ) );

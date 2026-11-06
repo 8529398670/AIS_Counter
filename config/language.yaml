@@ -601,6 +601,8 @@ settings:
   description: "How the Process screen calculates. Kept in this browser."
   method_label: "Method"
   method_ais_auto: "ais_auto.m (original)"
+  method_ais_fast: "ais_auto.m (fast)"
+  method_help: "Both give the same traces and measures, by hand and in auto mode. Fast works on each object instead of the whole image, so it takes less time and memory. Each keeps its own settings below."
   method_settings: "Method settings"
   general: "General"
   min_length_label: "Minimum AIS length"

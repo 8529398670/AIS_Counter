@@ -343,6 +343,24 @@ exit code is 1.
 .venv/bin/python scripts/export_batches.py --all
 ```
 
+### Method: ais_auto.m (fast)
+
+*Settings > Method* has a second entry, **ais_auto.m (fast)**, beside
+*ais_auto.m (original)*, which stays the default. It gives the same traces and
+measures, byte for byte, for clicks and for every auto mode method, in less
+time and memory. `app/analysis/fast.py` works on a crop around each object:
+the original keeps a whole-image label map per re-threshold and a whole-image
+mask per component, and scans them on every click. A re-threshold segments a
+window around the click instead, grown until the component ends inside it; a
+click a window cannot settle goes through the whole image, as the original does.
+
+Choosing it adds `"engine": "fast"` to `/api/ais/trace` and `/api/ais/detect`;
+without that field, the original runs. Its settings are the same controls with
+their own saved values. `ais_auto.py`, `detect.py` and `learned.py` are not
+called differently, so a change there has to be made in `fast.py` too:
+`tests/test_fast.py` compares the two, and fails when they part.
+`scripts/auto_eval.py --fast` scores it.
+
 ### Checking auto mode
 
 `scripts/export_ground_truth.py` writes the AIS accepted on a batch as a

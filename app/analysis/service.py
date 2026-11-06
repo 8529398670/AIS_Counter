@@ -36,6 +36,7 @@ from scipy import ndimage as ndi
 
 from app.analysis import ais_auto as aa
 from app.analysis import detect as auto
+from app.analysis import fast
 from app.analysis import mlcompat as ml
 from app.analysis import preprocess
 from app.analysis import soma as somata
@@ -303,6 +304,46 @@ class Library:
         if raw_arr.shape[:2] != prep.pic.shape:
             raise ImageError("raw and processed images differ in size")
         return auto.detect(prep, raw_arr, threshold, settings, start, exclude)
+
+    def trace_fast(self, processed: str, raw: str | None,
+                   click: tuple[float, float], click2: tuple[float, float] | None,
+                   threshold: float, settings: aa.Settings = aa.DEFAULT) -> dict[str, Any]:
+        """trace on Settings' Method "ais_auto.m (fast)" (fast.py): the same
+        answer, from crops."""
+        prep = self.prepared(processed, settings)
+        if not raw and self.is_czi(processed):
+            return fast.run_click(prep, self.array(processed), click, click2, threshold, settings,
+                                  bright_ref=self.bright_ref(processed))
+        if not raw:
+            out = fast.run_click(prep, prep.pic, click, click2, threshold, settings, bright_ref=self.bright_ref(processed))
+            out.setdefault("notes", []).insert(0, SINGLE_NOTE)
+            return out
+        raw_arr = self.array(raw)
+        if raw_arr.shape[:2] != prep.pic.shape:
+            raise ImageError("raw and processed images differ in size")
+        return fast.run_click(prep, raw_arr, click, click2, threshold, settings, bright_ref=self.bright_ref(raw))
+
+    def detect_fast(self, processed: str, raw: str | None, threshold: float,
+                    settings: aa.Settings = aa.DEFAULT, start: str = "both",
+                    exclude: list[list[list[int]]] | None = None) -> dict[str, Any]:
+        """detect on Settings' Method "ais_auto.m (fast)" (fast.py)."""
+        prep = self.prepared(processed, settings)
+        if not raw and self.is_czi(processed):
+            soma = self.soma(processed)
+            if start == "soma" and soma is None:
+                raise ImageError("start \"soma\" needs a soma channel (AMCA, DAPI or Hoechst), and this .czi has none")
+            return fast.detect(prep, self.array(processed), threshold, settings, start, exclude, soma=soma)
+        if start == "soma":
+            raise ImageError("start \"soma\" needs a .czi image (its AMCA channel)")
+        if not raw:
+            out = fast.detect(prep, prep.pic, threshold, settings, start, exclude)
+            for candidate in out["candidates"]:
+                candidate.setdefault("notes", []).insert(0, SINGLE_NOTE)
+            return out
+        raw_arr = self.array(raw)
+        if raw_arr.shape[:2] != prep.pic.shape:
+            raise ImageError("raw and processed images differ in size")
+        return fast.detect(prep, raw_arr, threshold, settings, start, exclude)
 
 
 def _read(data: bytes) -> np.ndarray:

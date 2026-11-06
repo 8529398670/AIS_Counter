@@ -197,13 +197,20 @@ def _settings(value: Any) -> tuple[aa.Settings | None, str]:
         return None, str(exc)
 
 
+def _engine(value: Any) -> bool | None:
+    """Whether a body's engine asks for app/analysis/fast.py; None if it is
+    neither that nor left out."""
+    return True if value == "fast" else False if value is None else None
+
+
 async def trace(request: Request) -> Response:
     """Body: {processed, raw?, click: [x, y], click2?: [x, y], threshold?,
-    settings?: {smooth, kernel, sigma, ...}}.
+    settings?: {smooth, kernel, sigma, ...}, engine?: "fast"}.
     Clicks are MATLAB axes coordinates (x = column, y = row, pixel centres at
     1..n). click2 stands in for the second ginput after re-thresholding; by
     default the first click is used again. threshold defaults to 0.01, what
-    the original was called with (0 means Otsu, as in the original)."""
+    the original was called with (0 means Otsu, as in the original). engine
+    "fast" is Settings' Method "ais_auto.m (fast)": the same answer, sooner."""
     body, refused = await _body(request)
     if refused:
         return refused
@@ -219,8 +226,12 @@ async def trace(request: Request) -> Response:
     settings, why = _settings(body.get("settings"))
     if settings is None:
         return bad_request(why)
+    quick = _engine(body.get("engine"))
+    if quick is None:
+        return bad_request("engine must be fast, or left out")
+    library = _library(request)
     try:
-        result = await run(_library(request).trace, processed, raw, click, click2, threshold, settings)
+        result = await run(library.trace_fast if quick else library.trace, processed, raw, click, click2, threshold, settings)
     except ImageError as exc:
         return bad_request(str(exc))
     return JSONResponse(result)
@@ -242,7 +253,7 @@ def _traces(value: Any) -> list[list[list[int]]] | None:
 
 async def detect(request: Request) -> Response:
     """Auto mode. Body: {processed, raw?, threshold?, settings?, start?,
-    exclude?: [[[x, y], ...], ...]}. Every AIS found on the image without a
+    exclude?: [[[x, y], ...], ...], engine?: "fast"}. Every AIS found on the image without a
     click (app/analysis/detect.py); start is both | brighter | dimmer | soma
     (a .czi only) | fitted | fitted2 | learned, exclude the traces already
     accepted on it."""
@@ -264,8 +275,12 @@ async def detect(request: Request) -> Response:
     settings, why = _settings(body.get("settings"))
     if settings is None:
         return bad_request(why)
+    quick = _engine(body.get("engine"))
+    if quick is None:
+        return bad_request("engine must be fast, or left out")
+    library = _library(request)
     try:
-        result = await run(_library(request).detect, processed, raw, threshold, settings, start, exclude)
+        result = await run(library.detect_fast if quick else library.detect, processed, raw, threshold, settings, start, exclude)
     except ImageError as exc:
         return bad_request(str(exc))
     return JSONResponse(result)

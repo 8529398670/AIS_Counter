@@ -1551,7 +1551,7 @@ const Ais = {
         raw: this.kind( entry ) === "pair" ? this.sha( entry , "raw" ) : null,
         threshold: Settings.threshold(),
         settings: Settings.methodSettings(),
-      } , body ) );
+      } , Settings.engine() , body ) );
       if ( this.images[ this.index ] !== entry ) return;
       const twoClicks = Settings.twoClicks() === "manual";
       if ( twoClicks && !body.click2 && result.rethresholded ) {

@@ -54,6 +54,17 @@ def test_learned_scores_as_shipped():
     assert total["recall"] >= 0.9
 
 
+@NEEDS
+@pytest.mark.parametrize("start,method,expected", [
+    ("soma", "classic", (81, 122)), ("fitted", "fitted", (81, 97)), ("fitted2", "fitted2", (82, 101)),
+    ("learned", "learned", (84, 108)),
+])
+def test_fast_engine_scores_the_same(start, method, expected):
+    images = auto_eval.load(GT)
+    total = auto_eval.evaluate(images, start, False, method, os.cpu_count() or 1, quick=True)["total"]
+    assert (total["tp"], total["found"]) == expected
+
+
 def test_match_is_one_to_one_by_overlap():
     import numpy as np
     masks = [np.zeros((5, 5), bool), np.zeros((5, 5), bool)]

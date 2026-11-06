@@ -17,6 +17,8 @@ learned, kept from the lowest score its model was shipped with, which
 FILTERS, "off" for none) override either. --plain runs as for a TIFF pair (no
 somata, no AMCA): start soma becomes both, as the client does.
 
+--fast runs on app/analysis/fast.py, which must score the same.
+
 --dump DIR writes, per image, what trying other rules needs without running
 detection again: DIR/<key>.npz (raw AIS channel, AMCA, soma mask and gap)
 and DIR/<key>.json, every component with the run_click result from each of
@@ -42,6 +44,7 @@ sys.path.insert(0, str(ROOT))
 
 from app.analysis import ais_auto as aa  # noqa: E402
 from app.analysis import detect as auto  # noqa: E402
+from app.analysis import fast  # noqa: E402
 from app.analysis import mlcompat as ml  # noqa: E402
 from app.analysis import preprocess  # noqa: E402
 from app.analysis import soma as somata  # noqa: E402
@@ -136,13 +139,13 @@ def summary(tp: int, found: int, truth: int, errors: list[float]) -> dict[str, f
             "len_within_2um": float(np.mean(np.abs(e) <= 2.0)) if errors else 0.0}
 
 
-def _found(job: tuple[dict[str, Any], str, bool]) -> list[dict[str, Any]]:
+def _found(job: tuple[dict[str, Any], str, bool, bool]) -> list[dict[str, Any]]:
     """Auto mode's candidates on one image."""
-    image, start, plain = job
+    image, start, plain, quick = job
     raw = image["raw"]
     prep = aa.PreparedImage.from_array(preprocess.processed(raw))
     soma = None if plain else somata.find(image["amca"], image["pixel_um"])
-    return auto.detect(prep, raw, 0.01, aa.DEFAULT, start, [], soma=soma)["candidates"]
+    return (fast if quick else auto).detect(prep, raw, 0.01, aa.DEFAULT, start, [], soma=soma)["candidates"]
 
 
 def learned_min_score() -> float:
@@ -172,10 +175,10 @@ def passes(c: dict[str, Any], filters: str) -> bool:
 
 
 def evaluate(images: list[dict[str, Any]], start: str, plain: bool, filters: str = "off",
-             jobs: int = 1) -> dict[str, Any]:
+             jobs: int = 1, quick: bool = False) -> dict[str, Any]:
     per, tp, found, truth, errors = {}, 0, 0, 0, []
     with multiprocessing.Pool(jobs) as pool:
-        all_found = pool.map(_found, [(image, start, plain) for image in images])
+        all_found = pool.map(_found, [(image, start, plain, quick) for image in images])
     for image, cands in zip(images, all_found):
         cands = [c for c in cands if passes(c, filters)]
         hits = match(cands, near_masks(image))
@@ -263,6 +266,7 @@ def main() -> None:
     ap.add_argument("--dump", metavar="DIR")
     ap.add_argument("--jobs", type=int, default=os.cpu_count() or 1, help="images worked on at once")
     ap.add_argument("--json", action="store_true", help="print the result as JSON")
+    ap.add_argument("--fast", action="store_true", help="on app/analysis/fast.py, Settings' ais_auto.m (fast)")
     args = ap.parse_args()
     global LEARNED_MIN_SCORE
     LEARNED_MIN_SCORE = args.min_score
@@ -272,7 +276,7 @@ def main() -> None:
         return
     start = args.start or METHODS[args.method]
     start = "both" if args.plain and start == "soma" else start
-    result = evaluate(images, start, args.plain, args.filters or args.method, args.jobs)
+    result = evaluate(images, start, args.plain, args.filters or args.method, args.jobs, args.fast)
     if args.json:
         print(json.dumps(result, indent=1))
         return

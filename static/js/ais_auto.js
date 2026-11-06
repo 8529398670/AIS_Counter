@@ -119,6 +119,7 @@ const AisAuto = {
     const params = Object.assign( {
       threshold: Settings.threshold(),
       settings: Settings.methodSettings(),
+      engine: Settings.engine(),
     } , this.filters() );
     this.run = { mode: Settings.autoReview() , queue: queue , at: 0 , step: 0 , pending: new Map() ,
       found: 0 , hidden: 0 , saved: 0 , deleted: 0 , errors: 0 , params: params };
@@ -236,14 +237,14 @@ const AisAuto = {
       const entry = Ais.images[ index ];
       const p = ( async () => {
         await Ais.upload( entry );
-        const out = await Api.post( "/api/ais/detect" , {
+        const out = await Api.post( "/api/ais/detect" , Object.assign( {
           processed: Ais.sha( entry ),
           raw: Ais.kind( entry ) === "pair" ? Ais.sha( entry , "raw" ) : null,
           threshold: run.params.threshold,
           settings: run.params.settings,
           start: this.startFor( entry , run.params.start ),
           exclude: Ais.savedRows( entry ).map( ( row ) => row.pixels ),
-        } );
+        } , run.params.engine ) );
         out.candidates = out.candidates.map( ( c ) => Object.assign( c , { image: entry.key , source: Ais.kind( entry ) } ) );
         return out;
       } )();
