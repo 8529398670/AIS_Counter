@@ -724,3 +724,129 @@ def test_a_backup_leaves_the_assignment_and_names_only_who_it_mentions(store):
     backup = ais.backup_batch(store, batch["id"])
     assert "assignment" not in backup["batch"]
     assert ais.backup_user_ids(backup) == {7, 8}
+
+
+# --- recorded measurements -----------------------------------------------------
+
+
+LINE = {"a_x": 10, "a_y": 12, "b_x": 40, "b_y": 52, "length_px": 50.0, "length_um": 8.05, "pixconv": 0.161}
+
+
+def test_measurements_are_numbered_per_image_and_renumbered_on_delete(store):
+    batch = ais.create_batch(store, "f", "upload", files(("f/a" + P, "a"), ("f/b" + P, "b")), 1)
+    first = ais.add_measurement(store, batch["id"], "a", LINE, 1)
+    second = ais.add_measurement(store, batch["id"], "a", LINE | {"label": "soma"}, 1)
+    other = ais.add_measurement(store, batch["id"], "b", LINE, 2)
+    assert [(m["image"], m["n"], m["label"]) for m in (first, second, other)] == [("a", 1, ""), ("a", 2, "soma"), ("b", 1, "")]
+    assert (first["batch_name"], other["created_by"]) == ("f", 2) and first["created_at"]
+    assert ais.delete_measurement(store, first["id"]) == [{"id": second["id"], "n": 1}]
+    assert [m["id"] for m in ais.list_measurements(store, batch["id"])] == [second["id"], other["id"]]
+    assert ais.delete_measurement(store, 999) == []
+
+
+def test_a_measurement_update_keeps_its_place_and_who_recorded_it(store):
+    batch = ais.create_batch(store, "f", "upload", files(("f/a" + P, "a")), 1)
+    line = ais.add_measurement(store, batch["id"], "a", LINE, 1)
+    moved = ais.update_measurement(store, line["id"], LINE | {"b_x": 20, "label": "width"}, 2)
+    assert (moved["id"], moved["n"], moved["image"], moved["created_by"], moved["created_at"]) == \
+        (line["id"], 1, "a", 1, line["created_at"])
+    assert (moved["b_x"], moved["label"], moved["edited_by"]) == (20, "width", 2) and moved["edited_at"]
+    assert ais.update_measurement(store, 999, LINE, 1) is None
+
+
+@pytest.mark.parametrize("line", [LINE | {"a_x": "4"}, LINE | {"b_y": True}, LINE | {"length_px": -1},
+                                  LINE | {"length_um": float("inf")}, LINE | {"pixconv": float("nan")},
+                                  LINE | {"label": 3}, LINE | {"label": "x" * 1001}, {"a_x": 1}, [1, 2]])
+def test_a_measurement_must_be_numbers_and_a_label(store, line):
+    batch = ais.create_batch(store, "f", "upload", files(("f/a" + P, "a")), 1)
+    with pytest.raises(ais.BatchError):
+        ais.add_measurement(store, batch["id"], "a", line, 1)
+
+
+def test_a_measurement_needs_a_batch_and_image_that_exist(store):
+    batch = ais.create_batch(store, "f", "upload", files(("f/a" + P, "a")), 1)
+    with pytest.raises(ais.BatchError):
+        ais.add_measurement(store, batch["id"] + 1, "a", LINE, 1)
+    with pytest.raises(ais.BatchError):
+        ais.add_measurement(store, batch["id"], "nope", LINE, 1)
+
+
+def test_a_measurement_is_not_an_ais_and_does_not_finish_an_image(store):
+    batch = ais.create_batch(store, "f", "upload", files(("f/a" + P, "a")), 1)
+    before = ais.list_batches(store)
+    ais.add_measurement(store, batch["id"], "a", LINE, 1)
+    assert ais.list_batches(store) == before
+    assert ais.list_results(store, batch["id"]) == []
+
+
+def test_measurements_follow_a_renamed_batch_and_go_with_a_deleted_one(store):
+    batch = ais.create_batch(store, "f", "upload", files(("f/a" + P, "a")), 1)
+    other = ais.create_batch(store, "g", "upload", files(("f/z" + P, "z")), 1)
+    ais.add_measurement(store, batch["id"], "a", LINE, 1)
+    kept = ais.add_measurement(store, other["id"], "z", LINE, 1)
+    ais.rename_batch(store, batch["id"], "new")
+    assert ais.list_measurements(store, batch["id"])[0]["batch_name"] == "new"
+    assert ais.get_measurement(store, kept["id"])["batch_name"] == "g"
+    ais.delete_batch(store, batch["id"])
+    assert ais.list_measurements(store) == [kept]
+
+
+def test_a_full_reset_deletes_measurements_and_an_auto_reset_keeps_them(store):
+    batch = ais.create_batch(store, "f", "upload", files(("f/a" + P, "a")), 1)
+    ais.add_measurement(store, batch["id"], "a", LINE, 1)
+    assert ais.reset_batch(store, batch["id"], "auto")[1] == 0
+    assert len(ais.list_measurements(store, batch["id"])) == 1
+    assert ais.reset_batch(store, batch["id"], "all")[1] == 0
+    assert ais.list_measurements(store, batch["id"]) == []
+
+
+def test_measurements_move_with_a_rerandomized_image(store):
+    batch = ais.create_batch(store, "b", "upload", files(("f/a" + P, "a")), 1, randomize_names=True)
+    old = batch["images"][0]["key"]
+    ais.add_measurement(store, batch["id"], old, LINE, 1)
+    after, _, _ = ais.rerandomize(store, batch["id"], 1)
+    new = after["images"][0]["key"]
+    assert new != old and ais.list_measurements(store, batch["id"])[0]["image"] == new
+
+
+def test_measurements_come_back_from_a_backup(store):
+    batch = blinded_batch(store)
+    key = batch["images"][0]["key"]
+    line = ais.add_measurement(store, batch["id"], key, LINE | {"label": "soma"}, 1)
+    ais.update_measurement(store, line["id"], LINE | {"label": "edited"}, 1)
+    lines = ais.list_measurements(store, batch["id"])
+    backup = backup_of(store, batch["id"])
+    ais.delete_batch(store, batch["id"])
+
+    back = ais.import_batch(store, backup, {1: "Ann"}, 1)
+
+    moved = ("id", "batch_id")
+    assert [{k: v for k, v in m.items() if k not in moved} for m in ais.list_measurements(store, back["id"])] == \
+        [{k: v for k, v in m.items() if k not in moved} for m in lines]
+
+
+def test_a_backup_from_before_measurements_still_imports(store):
+    batch = blinded_batch(store)
+    backup = backup_of(store, batch["id"])
+    del backup["measurements"]
+    back = ais.import_batch(store, backup, {1: "Ann"}, 1)
+    assert ais.list_measurements(store, back["id"]) == []
+
+
+@pytest.mark.parametrize("change", [
+    "not a list", ["not an object"], [{"image": "nope", "n": 1}],
+])
+def test_a_backup_with_bad_measurements_is_refused_whole(store, change):
+    batch = blinded_batch(store)
+    backup = backup_of(store, batch["id"]) | {"measurements": change}
+    count = len(ais.list_batches(store))
+    with pytest.raises(ais.BatchError):
+        ais.import_batch(store, backup, {1: "Ann"}, 1)
+    assert len(ais.list_batches(store)) == count
+
+
+def test_a_backup_names_the_people_of_its_measurements(store):
+    batch = ais.create_batch(store, "f", "upload", files(("f/a" + P, "a")), 1)
+    line = ais.add_measurement(store, batch["id"], "a", LINE, 7)
+    ais.update_measurement(store, line["id"], LINE, 8)
+    assert ais.backup_user_ids(ais.backup_batch(store, batch["id"])) == {1, 7, 8}

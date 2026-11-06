@@ -836,6 +836,68 @@ async def result_import(request: Request) -> Response:
     return JSONResponse({"batch_id": batch["id"]})
 
 
+# --- recorded measurements (the Measure tool's Record switch) ----------------
+
+
+async def measurement_list(request: Request) -> Response:
+    """?batch=<id> for one batch, anything else for all."""
+    batch_id = parse_id(request.query_params.get("batch", ""))
+    lines = await run(batches.list_measurements, get_store(request), batch_id)
+    return JSONResponse({"measurements": lines})
+
+
+async def measurement_add(request: Request) -> Response:
+    """Body: {batch_id, image, measurement}: a line recorded on an image."""
+    body, refused = await _body(request)
+    if refused:
+        return refused
+    batch_id = body.get("batch_id")
+    if not isinstance(batch_id, int) or isinstance(batch_id, bool) or not isinstance(body.get("image"), str):
+        return bad_request("batch_id and image are required")
+    try:
+        line = await run(batches.add_measurement, get_store(request), batch_id, body["image"], body.get("measurement"),
+                         _user_id(request))
+    except batches.BatchError as exc:
+        return bad_request(str(exc))
+    return JSONResponse(line)
+
+
+async def measurement_update(request: Request) -> Response:
+    """Body: {measurement}: a recorded line's new ends, length and label."""
+    body, refused = await _body(request)
+    if refused:
+        return refused
+    store = get_store(request)
+    line_id = parse_id(request.path_params["measurement_id"])
+    line = await run(batches.get_measurement, store, line_id) if line_id else None
+    if line is None:
+        return not_found("no such measurement")
+    if not await _may_change(request, line):
+        return forbidden("only whoever recorded it, the image's assignee, or an admin, can change it")
+    try:
+        updated = await run(batches.update_measurement, store, line_id, body.get("measurement"), _user_id(request))
+    except batches.BatchError as exc:
+        return bad_request(str(exc))
+    if updated is None:
+        return not_found("no such measurement")
+    return JSONResponse(updated)
+
+
+async def measurement_delete(request: Request) -> Response:
+    body, refused = await _body(request)
+    if refused:
+        return refused
+    store = get_store(request)
+    line_id = parse_id(request.path_params["measurement_id"])
+    line = await run(batches.get_measurement, store, line_id) if line_id else None
+    if line is None:
+        return not_found("no such measurement")
+    if not await _may_change(request, line):
+        return forbidden("only whoever recorded it, the image's assignee, or an admin, can delete it")
+    renumbered = await run(batches.delete_measurement, store, line_id)
+    return JSONResponse({"ok": True, "renumbered": renumbered})
+
+
 # --- folders on this machine (app/analysis/local.py) ------------------------
 #
 # Registered for admins with a browser session only, and each call checks

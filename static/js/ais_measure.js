@@ -21,33 +21,44 @@
 // Enter saves and moves on, N skips, [ and ] step. The tool stays on until
 // T, E or D (or Done) picks another.
 //
-// On an image without saved AIS it is a plain ruler: two clicks, a line,
-// whose ends drag and nudge the same way. Those lines are not saved.
+// On an image without saved AIS, and on every image in Manual (the panel's
+// third mode), two clicks draw a line, saved as it is drawn: as many as
+// wanted, numbered per image, each with an optional label
+// (/api/ais/measurements, app/models/ais.add_measurement). Their ends drag and
+// nudge the same way. They have nothing to do with any AIS and export on their
+// own (measurements.csv, the report's Measurements sheet). In Manual [ and ]
+// step through every image; leaving it goes to the next AIS not yet measured.
 //
 // Points are in MATLAB axes like everything in ais.js: pixel x's centre is x.
 // The options (loupe, snap, ...) are remembered in this browser only, like
 // Settings.
 const MEASURE_COLOUR = "rgba(255, 80, 220, 1)";
 const MEASURE_SAVED = "rgba(255, 80, 220, 0.6)";
+const NUDGE_SAVE_MS = 400;  // how long after the last arrow key a recorded line saves
 const LOUPE_PIXELS = 15;    // image pixels across the loupe
 const LOUPE_SIZE = 160;     // its CSS size, px
 
 const AisMeasure = {
   storageKey: "measure-options",
-  // ais_end: preset | click; zoom: times the whole-image view.
-  defaults: { loupe: true , loupe_traces: true , snap: true , keep: false , units: false , ais_end: "preset" , soma_hint: true , zoom: 4 },
+  // ais_end: preset | click | manual (no AIS: lines on any image); zoom: times
+  // the whole-image view.
+  defaults: { loupe: true , loupe_traces: true , snap: true , units: false , ais_end: "preset" , soma_hint: true , zoom: 4 },
   options: null,
   on: false,
-  row: null,          // the saved AIS being measured, or null: the free ruler
-  a: null,            // its ends, [x, y]; the ruler's first click
+  row: null,          // the saved AIS being measured, or null: free lines, each recorded
+  a: null,            // its ends, [x, y]; a free line's first click
   b: null,
   end: "first",       // which end of the trace A started on: "first" (its start) | "last" (S swapped it)
-  sel: null,          // the end selected: { line: null (the AIS measured) | a ruler line , end: "a" | "b" }
+  sel: null,          // the end selected: { line: null (the AIS measured) | a recorded line , end: "a" | "b" }
   dragging: false,
   cursor: null,       // the pointer, MATLAB axes, while over the image
-  lines: new Map(),   // ruler: image key -> [{ a, b }]
+  aisEnd: "preset",   // the AIS mode Manual came from
   want: null,         // the row to pick once the next image is shown: "first" | "last" | an id
   saving: false,
+  writes: Promise.resolve(),   // recorded lines' saves, one at a time and in order
+  nudged: null,       // the recorded line an arrow key moved, its save waiting
+  nudgeTimer: null,
+  listKey: null,      // what the panel's list of recorded lines shows now
 
   init() {
     this.options = this.load();
@@ -58,17 +69,21 @@ const AisMeasure = {
       else if ( control.type === "radio" ) control.checked = control.value === this.options[ field ];
       else control.value = String( this.options[ field ] );
       control.addEventListener( "change" , () => {
+        const was = this.options[ field ];
         if ( control.type === "checkbox" ) this.options[ field ] = control.checked;
         else if ( control.type === "radio" ) { if ( control.checked ) this.options[ field ] = control.value; }
         else this.options[ field ] = Number( control.value );
         this.save();
-        if ( field === "ais_end" && this.row && this.row.soma_um == null ) this.select( this.row , false );
+        if ( field === "ais_end" ) {
+          control.blur();   // keys typed in a control do not reach the tool
+          if ( was === "manual" || this.manual() ) this.modeChanged( was );
+          else if ( this.row && this.row.soma_um == null ) this.select( this.row , false );
+        }
         if ( field === "zoom" && this.row ) this.focus();
         Ais.draw();
         this.render();
       } );
     } );
-    Dom.get( "ais-measure-clear-lines" ).addEventListener( "click" , () => this.clearLines() );
     Dom.get( "ais-measure-prev" ).addEventListener( "click" , () => this.go( -1 ) );
     Dom.get( "ais-measure-next" ).addEventListener( "click" , () => this.go( 1 ) );
     Dom.get( "ais-measure-save" ).addEventListener( "click" , () => this.saveAndNext() );
@@ -89,7 +104,7 @@ const AisMeasure = {
     Object.keys( this.defaults ).forEach( ( field ) => {
       if ( typeof stored[ field ] === typeof this.defaults[ field ] ) out[ field ] = stored[ field ];
     } );
-    if ( ![ "preset" , "click" ].includes( out.ais_end ) ) out.ais_end = this.defaults.ais_end;
+    if ( ![ "preset" , "click" , "manual" ].includes( out.ais_end ) ) out.ais_end = this.defaults.ais_end;
     if ( ![ 2 , 4 , 8 ].includes( out.zoom ) ) out.zoom = this.defaults.zoom;
     return out;
   },
@@ -106,12 +121,13 @@ const AisMeasure = {
     this.on = true;
     const rows = this.rows();
     this.want = null;
-    const row = rows.find( ( r ) => r.soma_um == null ) || rows[ 0 ] || null;
+    const row = this.manual() ? null : rows.find( ( r ) => r.soma_um == null ) || rows[ 0 ] || null;
     if ( row ) this.select( row , true );
     else this.select( null , false );
   },
 
   reset() {
+    this.flushNudge();
     this.on = false;
     this.row = null;
     this.a = null;
@@ -129,7 +145,8 @@ const AisMeasure = {
   // the view moves to it once the image is in (imageLoaded).
   imageShown() {
     if ( !this.on ) return;
-    const rows = this.rows();
+    this.flushNudge();
+    const rows = this.manual() ? [] : this.rows();
     const want = this.want;
     this.want = null;
     let row = null;
@@ -149,6 +166,7 @@ const AisMeasure = {
     if ( !Ais.batch || row.batch_id !== Ais.batch.id ) return;
     const index = Ais.images.findIndex( ( entry ) => entry.key === row.image );
     if ( index < 0 ) return;
+    if ( this.manual() ) this.leaveManual();
     if ( Ais.tool !== "measure" ) Ais.setTool( "measure" );
     if ( index === Ais.index ) {
       this.select( Ais.batchRows.find( ( r ) => r.id === row.id ) || row , true );
@@ -258,6 +276,10 @@ const AisMeasure = {
   // The next (or previous) AIS: on this image, else the nearest image that
   // has any.
   go( delta ) {
+    if ( this.manual() ) {
+      this.goImage( delta );
+      return;
+    }
     const rows = this.rows();
     const at = this.row ? rows.indexOf( this.row ) : ( delta > 0 ? -1 : rows.length );
     const next = rows[ at + delta ];
@@ -274,6 +296,17 @@ const AisMeasure = {
     }
     this.want = delta > 0 ? "first" : "last";
     Ais.show( index , true );
+  },
+
+  // Manual: the next (or previous) image, AIS or not.
+  goImage( delta ) {
+    const shown = Ais.included();
+    const order = delta > 0 ? shown.filter( ( i ) => i > Ais.index ) : shown.filter( ( i ) => i < Ais.index ).reverse();
+    if ( !order.length ) {
+      Ais.status( I18n.get( delta > 0 ? "ais.measure_last_image" : "ais.measure_first_image" ) , true );
+      return;
+    }
+    Ais.show( order[ 0 ] , true );
   },
 
   // The two ends' distance, px and µm, rounded as stored.
@@ -323,6 +356,171 @@ const AisMeasure = {
     }
   },
 
+  // --- Manual, and the lines recorded -------------------------------------
+
+  manual() {
+    return Boolean( this.options && this.options.ais_end === "manual" );
+  },
+
+  // Into or out of Manual: what was half placed goes. Into it, free lines on
+  // this image; out of it, the AIS walk where it is needed.
+  modeChanged( was ) {
+    if ( was !== "manual" ) this.aisEnd = was;
+    this.dropPlaced();
+    if ( !this.on ) return;
+    if ( this.manual() ) this.start();
+    else this.resume();
+  },
+
+  dropPlaced() {
+    this.flushNudge();
+    this.a = null;
+    this.b = null;
+    this.sel = null;
+  },
+
+  // Back to the AIS mode Manual came from, for a row about to be picked.
+  leaveManual() {
+    this.options.ais_end = this.aisEnd;
+    this.save();
+    Dom.all( "[data-measure-option=ais_end]" ).forEach( ( radio ) => { radio.checked = radio.value === this.aisEnd; } );
+    this.dropPlaced();
+  },
+
+  // The first AIS not yet measured: on this image, else the next image that
+  // has one, round to the start of the batch. All measured: as Measure opens.
+  resume() {
+    const todo = ( i ) => Ais.savedRows( Ais.images[ i ] ).slice().sort( ( p , q ) => p.n - q.n ).find( ( r ) => r.soma_um == null );
+    const shown = Ais.included();
+    if ( Ais.index < 0 || todo( Ais.index ) ) {
+      this.start();
+      return;
+    }
+    const index = shown.filter( ( i ) => i > Ais.index ).concat( shown.filter( ( i ) => i < Ais.index ) ).find( ( i ) => todo( i ) );
+    if ( index == null ) {
+      this.start();
+      return;
+    }
+    this.want = todo( index ).id;
+    Ais.show( index , true );
+  },
+
+  recorded() {
+    const entry = Ais.images[ Ais.index ];
+    return entry ? Ais.measurementsOn( entry ) : [];
+  },
+
+  // A line's numbers from where its ends are now, at today's pixel size. Only
+  // moving an end changes them: a new label leaves its length as measured.
+  placed( line ) {
+    const d = this.distance( line.a , line.b );
+    return { a_x: line.a[ 0 ] , a_y: line.a[ 1 ] , b_x: line.b[ 0 ] , b_y: line.b[ 1 ] ,
+      length_px: d.px , length_um: d.um , pixconv: Settings.pixconv() };
+  },
+
+  // What the server keeps of a line.
+  fields( line ) {
+    return { a_x: line.a_x , a_y: line.a_y , b_x: line.b_x , b_y: line.b_y , length_px: line.length_px ,
+      length_um: line.length_um , pixconv: line.pixconv , label: line.label };
+  },
+
+  // One write after another, each reading the line as it is by then, so the
+  // server ends up with the last of them whatever the network does.
+  write( job ) {
+    this.writes = this.writes.then( job ).catch( ( error ) => this.writeFailed( error ) );
+    return this.writes;
+  },
+
+  // Never show a line that is not as saved: back to what the server has.
+  async writeFailed( error ) {
+    Ais.status( error.message , true );
+    this.sel = null;
+    if ( Ais.batch ) await Ais.loadMeasurements();
+    Ais.draw();
+    Ais.renderTable();
+  },
+
+  // Shown at once; the line is on the server by the time anything else is
+  // written, so a drag straight after finds its id.
+  addLine( a , b ) {
+    const entry = Ais.images[ Ais.index ];
+    if ( !entry || !Ais.batch ) return;
+    const same = Ais.measurementsOn( entry );
+    const line = { a: a , b: b , image: entry.key , batch_id: Ais.batch.id , batch_name: Ais.batch.name , label: "" ,
+      n: same.length ? same[ same.length - 1 ].n + 1 : 1 };
+    Object.assign( line , this.placed( line ) );
+    Ais.measurements.push( line );
+    Ais.renderTable();
+    this.write( async () => {
+      const saved = await Api.post( "/api/ais/measurements" , { batch_id: line.batch_id , image: line.image , measurement: this.fields( line ) } );
+      line.id = saved.id;
+      line.n = saved.n;
+      line.created_by = saved.created_by;
+      line.created_at = saved.created_at;
+      this.render();
+    } );
+  },
+
+  saveLine( line ) {
+    if ( !line.dirty ) return;
+    line.dirty = false;
+    this.write( async () => {
+      if ( !line.id || line.gone ) return;
+      const saved = await Api.post( "/api/ais/measurements/" + line.id + "/update" , { measurement: this.fields( line ) } );
+      line.edited_at = saved.edited_at;
+      line.edited_by = saved.edited_by;
+    } );
+  },
+
+  // Arrow keys come fast: save once they stop.
+  nudgeLater( line ) {
+    if ( this.nudged && this.nudged !== line ) this.flushNudge();
+    this.nudged = line;
+    window.clearTimeout( this.nudgeTimer );
+    this.nudgeTimer = window.setTimeout( () => this.flushNudge() , NUDGE_SAVE_MS );
+  },
+
+  flushNudge() {
+    window.clearTimeout( this.nudgeTimer );
+    const line = this.nudged;
+    this.nudged = null;
+    if ( line ) this.saveLine( line );
+  },
+
+  setLabel( line , label ) {
+    line.label = label;
+    line.dirty = true;
+    this.saveLine( line );
+  },
+
+  deleteLine( line ) {
+    if ( !line ) return;
+    if ( this.nudged === line ) this.flushNudge();
+    line.gone = true;
+    Ais.measurements = Ais.measurements.filter( ( other ) => other !== line );
+    if ( this.sel && this.sel.line === line ) this.sel = null;
+    // The rest of its image close up, as the server renumbers them.
+    const entry = Ais.images[ Ais.index ];
+    if ( entry ) Ais.measurementsOn( entry ).forEach( ( other , i ) => { other.n = i + 1; } );
+    Ais.renderTable();
+    Ais.draw();
+    this.write( async () => {
+      if ( line.id ) await Api.post( "/api/ais/measurements/" + line.id + "/delete" , {} );
+    } );
+  },
+
+  // The pill on a recorded line, and how far it is in the panel's list.
+  lineUm( line ) {
+    return line.length_um.toFixed( 2 ) + " µm";
+  },
+
+  lineText( line ) {
+    const parts = [ String( line.n ) + ":" , this.lineUm( line ) ];
+    if ( this.options.units ) parts.push( "· " + line.length_px.toFixed( 1 ) + " px" );
+    if ( line.label ) parts.push( "· " + line.label );
+    return parts.join( " " );
+  },
+
   // --- the pointer and keys ------------------------------------------------
 
   // A canvas point (ais.js toImage) in MATLAB axes: the pixel's centre when
@@ -337,11 +535,15 @@ const AisMeasure = {
     return q && Math.hypot( p[ 0 ] - q[ 0 ] , p[ 1 ] - q[ 1 ] ) <= reach;
   },
 
-  // An end of the AIS measured, or (no AIS) of a ruler line, and setting it.
+  // An end of the AIS measured, or (no AIS) of a recorded line, and setting it.
   endOf( sel ) { return sel.line ? sel.line[ sel.end ] : this[ sel.end ]; },
   setEnd( sel , p ) {
-    if ( sel.line ) sel.line[ sel.end ] = p;
-    else this[ sel.end ] = p;
+    if ( sel.line ) {
+      sel.line[ sel.end ] = p;
+      Object.assign( sel.line , this.placed( sel.line ) , { dirty: true } );
+    } else {
+      this[ sel.end ] = p;
+    }
   },
 
   // The end within reach of a canvas point, nearest first, or null.
@@ -353,7 +555,7 @@ const AisMeasure = {
       if ( this.b ) ends.push( { line: null , end: "b" } );
       if ( this.a ) ends.push( { line: null , end: "a" } );
     } else {
-      ( this.lines.get( this.imageKey() ) || [] ).slice().reverse()
+      this.recorded().slice().reverse()
         .forEach( ( line ) => ends.push( { line: line , end: "b" } , { line: line , end: "a" } ) );
     }
     let best = null;
@@ -398,6 +600,7 @@ const AisMeasure = {
   onUp() {
     this.dragging = false;
     Ais.canvas.classList.remove( "ais-measure-dragging" );
+    if ( this.sel && this.sel.line ) this.saveLine( this.sel.line );
     Ais.draw();
     this.render();
   },
@@ -431,15 +634,16 @@ const AisMeasure = {
         this.b = p;
         this.sel = { line: null , end: "b" };
       }
-    } else if ( this.sel ) {
-      this.setEnd( this.sel , p );
-    } else if ( !this.a ) {
-      this.a = p;
     } else {
-      const key = this.imageKey();
-      const kept = this.options.keep ? ( this.lines.get( key ) || [] ) : [];
-      this.lines.set( key , kept.concat( [ { a: this.a , b: p } ] ) );
-      this.a = null;
+      // Always the next line: a selected end lets go rather than jumps here.
+      this.flushNudge();
+      this.sel = null;
+      if ( !this.a ) {
+        this.a = p;
+      } else {
+        this.addLine( this.a , p );
+        this.a = null;
+      }
     }
     Ais.draw();
     this.render();
@@ -467,6 +671,7 @@ const AisMeasure = {
     const p = this.clamp( [ q[ 0 ] + dx * step , q[ 1 ] + dy * step ] );
     this.setEnd( this.sel , [ Math.round( p[ 0 ] * 100 ) / 100 , Math.round( p[ 1 ] * 100 ) / 100 ] );
     this.cursor = this.endOf( this.sel );
+    if ( this.sel.line ) this.nudgeLater( this.sel.line );
     Ais.draw();
     this.render();
   },
@@ -505,10 +710,8 @@ const AisMeasure = {
         this.b = null;
         this.sel = null;
       } else {
-        const lines = this.lines.get( this.imageKey() ) || [];
-        const gone = this.sel ? this.sel.line : lines[ lines.length - 1 ];
-        this.lines.set( this.imageKey() , lines.filter( ( line ) => line !== gone ) );
-        this.sel = null;
+        const lines = this.recorded();
+        this.deleteLine( this.sel ? this.sel.line : lines[ lines.length - 1 ] );
       }
       Ais.draw();
       this.render();
@@ -524,21 +727,6 @@ const AisMeasure = {
     if ( is( "swap_end" ) ) { event.preventDefault(); this.swapEnd(); return true; }
     if ( step ) { event.preventDefault(); this.go( step ); return true; }
     return false;
-  },
-
-  imageKey() {
-    const entry = Ais.images[ Ais.index ];
-    return entry ? entry.key : "";
-  },
-
-  clearLines() {
-    this.lines.delete( this.imageKey() );
-    if ( !this.row ) {
-      this.a = null;
-      this.sel = null;
-    }
-    Ais.draw();
-    this.render();
   },
 
   // --- drawing -------------------------------------------------------------
@@ -563,7 +751,8 @@ const AisMeasure = {
         out.push( { a: [ r.soma_ais_x , r.soma_ais_y ] , b: [ r.soma_x , r.soma_y ] , colour: MEASURE_SAVED , label: true } );
       } );
     }
-    ( this.lines.get( this.imageKey() ) || [] ).forEach( ( line ) => out.push( { a: line.a , b: line.b , colour: MEASURE_COLOUR , label: true } ) );
+    const colour = this.row ? MEASURE_SAVED : MEASURE_COLOUR;
+    this.recorded().forEach( ( line ) => out.push( { a: line.a , b: line.b , colour: colour , label: true , text: this.lineText( line ) } ) );
     const a = this.a;
     const b = this.b || ( this.a ? this.cursor : null );
     if ( a && b ) out.push( { a: a , b: b , colour: MEASURE_COLOUR , label: true , live: true } );
@@ -619,7 +808,7 @@ const AisMeasure = {
 
   // The distance at the line's middle, white on a dark pill.
   pill( ctx , shape , s ) {
-    const text = this.label( shape.a , shape.b );
+    const text = shape.text || this.label( shape.a , shape.b );
     const x = ( shape.a[ 0 ] + shape.b[ 0 ] ) / 2 - 0.5;
     const y = ( shape.a[ 1 ] + shape.b[ 1 ] ) / 2 - 0.5;
     ctx.font = ( 12 / s ) + "px sans-serif";
@@ -722,18 +911,24 @@ const AisMeasure = {
     const rows = this.rows();
     const r = this.row;
     const shown = Ais.included();
+    const manual = this.manual();
+    Dom.text( Dom.get( "ais-measure-title" ) , I18n.get( r ? "ais.measure_heading" : "ais.measure_lines_heading" ) );
+    Dom.get( "ais-measure-prev" ).title = I18n.get( manual ? "ais.measure_prev_image" : "ais.measure_prev" );
+    Dom.get( "ais-measure-next" ).title = I18n.get( manual ? "ais.measure_next_image" : "ais.measure_next" );
     let where = "";
-    if ( r ) {
+    if ( !r ) {
+      where = I18n.get( "ais.measure_record_where" ).replace( "{n}" , String( this.recorded().length ) )
+        .replace( "{image}" , String( shown.indexOf( Ais.index ) + 1 ) ).replace( "{images}" , String( shown.length ) );
+    } else {
       where = I18n.get( "ais.measure_where" ).replace( "{n}" , String( rows.indexOf( r ) + 1 ) ).replace( "{count}" , String( rows.length ) )
         .replace( "{image}" , String( shown.indexOf( Ais.index ) + 1 ) ).replace( "{images}" , String( shown.length ) );
     }
     Dom.text( Dom.get( "ais-measure-where" ) , where );
     let help;
-    if ( !r ) help = I18n.get( this.a ? "ais.measure_ruler_second" : "ais.measure_ruler" );
+    if ( !r ) help = I18n.get( this.a ? "ais.measure_ruler_second" : this.sel ? "ais.measure_lines_selected" : manual ? "ais.measure_manual_help" : "ais.measure_no_ais" );
     else if ( !this.a ) help = I18n.get( "ais.measure_click_start" );
     else if ( !this.b ) help = I18n.get( "ais.measure_click_soma" );
     else help = I18n.get( this.sel ? "ais.measure_selected" : "ais.measure_ready" );
-    if ( !r && this.sel ) help = I18n.get( "ais.measure_selected" );
     Dom.text( Dom.get( "ais-measure-help" ) , help );
     Dom.text( Dom.get( "ais-measure-end" ) , r ? I18n.get( this.end === "last" ? "ais.measure_end_last" : "ais.measure_end_first" ) : "" );
     Dom.get( "ais-measure-end" ).classList.toggle( "text-warning" , this.end === "last" );
@@ -749,5 +944,37 @@ const AisMeasure = {
     Dom.get( "ais-measure-prev" ).disabled = this.saving;
     Dom.get( "ais-measure-next" ).disabled = this.saving;
     Dom.show( Dom.get( "ais-measure-locked" ) , Boolean( r && Ais.locked ) );
+    this.renderList();
+  },
+
+  // Free lines: the image's, each with its label to fill in and a delete.
+  // Left alone while a label is being typed in, or the typing would be lost.
+  renderList() {
+    const list = Dom.get( "ais-measure-list" );
+    const lines = this.row ? [] : this.recorded();
+    Dom.show( list , lines.length > 0 );
+    const key = JSON.stringify( lines.map( ( line ) => [ line.id , line.n , line.label , line.length_um ] ) );
+    const typing = list.contains( document.activeElement ) && document.activeElement.tagName === "INPUT";
+    if ( key === this.listKey || typing ) return;
+    this.listKey = key;
+    list.replaceChildren( ...lines.map( ( line ) => {
+      const input = Dom.el( "input" , { class: "form-control form-control-sm" ,
+        attrs: { type: "text" , maxlength: "1000" , placeholder: I18n.get( "ais.measure_label" ) , "aria-label": I18n.get( "ais.measure_label" ) } } );
+      input.value = line.label || "";
+      input.addEventListener( "change" , () => {
+        this.setLabel( line , input.value );
+        Ais.draw();
+      } );
+      input.addEventListener( "blur" , () => this.render() );
+      input.addEventListener( "keydown" , ( event ) => { if ( event.key === "Enter" ) input.blur(); } );
+      const gone = Dom.el( "button" , { class: "btn btn-outline-danger btn-sm" ,
+        attrs: { type: "button" , title: I18n.get( "ais.measure_delete_line" ) , "aria-label": I18n.get( "ais.measure_delete_line" ) } ,
+        children: [ Dom.el( "i" , { class: "bi bi-x-lg" , attrs: { "aria-hidden": "true" } } ) ] } );
+      gone.addEventListener( "click" , () => this.deleteLine( line ) );
+      return Dom.el( "div" , { class: "ais-measure-line small" , children: [
+        Dom.el( "span" , { class: "text-body-secondary" , text: String( line.n ) } ),
+        Dom.el( "span" , { class: "ais-measure-line-um" , text: this.lineUm( line ) } ),
+        input , gone ] } );
+    } ) );
   },
 };

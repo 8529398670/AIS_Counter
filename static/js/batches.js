@@ -358,7 +358,8 @@ const Batches = {
       for ( let i = 0 ; i < manifest.batches.length ; i += 1 ) {
         this.statusLine( I18n.get( "batches.import_saving" ).replace( "{done}" , i + 1 ).replace( "{total}" , manifest.batches.length ) );
         await Api.post( "/api/ais/batches/import" , { format: manifest.format , version: manifest.version ,
-          users: manifest.users , batch: manifest.batches[ i ].batch , results: manifest.batches[ i ].results } );
+          users: manifest.users , batch: manifest.batches[ i ].batch , results: manifest.batches[ i ].results ,
+          measurements: manifest.batches[ i ].measurements } );
       }
       const absent = missing.length - todo.length;
       this.statusLine( I18n.get( "batches.import_done" ).replace( "{batches}" , manifest.batches.length ).replace( "{files}" , todo.length ) +
@@ -446,18 +447,22 @@ const Batches = {
 
   // --- reports -------------------------------------------------------------------
 
-  // [{ batch , images , rows }] for the batches given, fetched now. rows:
-  // one batch's accepted AIS, or (several batches) all of them, split here.
+  // [{ batch , images , rows , measurements }] for the batches given, fetched
+  // now. rows: one batch's accepted AIS, or (several batches) all of them,
+  // split here; measurements the same for its recorded lines.
   // Images the team left out, and their AIS, are not in it unless everything
   // is asked for (a backup).
   async gather( list , everything ) {
     const one = list.length === 1;
-    const results = ( await Api.request( "/api/ais/results?batch=" + ( one ? list[ 0 ].id : "all" ) ) ).results;
+    const scope = one ? list[ 0 ].id : "all";
+    const results = ( await Api.request( "/api/ais/results?batch=" + scope ) ).results;
+    const lines = ( await Api.request( "/api/ais/measurements?batch=" + scope ) ).measurements;
     const statuses = await Promise.all( list.map( ( b ) => Api.request( "/api/ais/batches/" + b.id + "/status" ).then( ( r ) => r.images ) ) );
     return list.map( ( b , i ) => {
       const out = new Set( statuses[ i ].filter( ( image ) => !image.included && !everything ).map( ( image ) => image.key ) );
       return { batch: b , images: statuses[ i ].filter( ( image ) => !out.has( image.key ) ) ,
-        rows: results.filter( ( r ) => r.batch_id === b.id && !out.has( r.image ) ) };
+        rows: results.filter( ( r ) => r.batch_id === b.id && !out.has( r.image ) ) ,
+        measurements: lines.filter( ( m ) => m.batch_id === b.id && !out.has( m.image ) ) };
     } );
   },
 

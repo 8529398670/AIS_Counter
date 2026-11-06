@@ -318,6 +318,10 @@ th { color: var(--bs-secondary-color); font-size: 0.8rem; text-transform: upperc
 /* Measure (static/js/ais_measure.js): the toolbar button while on, its options, and the loupe beside the pointer. */
 #ais-measure.active { background: rgb(200, 40, 170); color: #fff; border-color: rgb(200, 40, 170); }
 .ais-measure-menu { min-width: 17rem; }
+.ais-measure-list { display: flex; flex-direction: column; gap: 0.25rem; max-height: 16rem; overflow-y: auto; }
+.ais-measure-line { display: flex; align-items: center; gap: 0.4rem; }
+.ais-measure-line .form-control { flex: 1 1 auto; min-width: 0; }
+.ais-measure-line-um { white-space: nowrap; font-variant-numeric: tabular-nums; }
 .ais-stage canvas.ais-loupe { position: absolute; width: 160px; height: 160px; pointer-events: none; border: 2px solid rgba(255, 255, 255, 0.85);
   border-radius: 0.35rem; box-shadow: 0 0.25rem 1rem rgba(0, 0, 0, 0.6); image-rendering: pixelated; }
 .ais-stage canvas.ais-loupe[hidden] { display: none; }

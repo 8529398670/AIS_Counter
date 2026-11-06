@@ -56,7 +56,7 @@ import threading
 import time
 from typing import Any, Callable
 
-from app.core.db import BUCKET_AIS_BATCHES, BUCKET_AIS_RESULTS, Record, Store
+from app.core.db import BUCKET_AIS_BATCHES, BUCKET_AIS_MEASUREMENTS, BUCKET_AIS_RESULTS, Record, Store
 from app.models import to_iso, utc_now
 
 PROCESSED_SUFFIX = ".tif - Processed method 2.5.tif"
@@ -93,6 +93,9 @@ RESULT_NUMBERS = ("length_um", "start_um", "end_um", "mid_um", "max_um", "arc_um
                   *SOMA_NUMBERS)
 # origin: "auto" for one auto mode found, empty for a click.
 RESULT_TEXTS = ("length_str", "source", "notes", "file", "sha", "smooth", "origin")
+# A line the Measure tool recorded on an image, AIS or not: its ends in MATLAB
+# axes, its length, and the pixel size that length was worked out with.
+MEASUREMENT_NUMBERS = ("a_x", "a_y", "b_x", "b_y", "length_px", "length_um", "pixconv")
 
 
 class BatchError(ValueError):
@@ -419,6 +422,9 @@ def rerandomize(store: Store, batch_id: int, add_id: Any) -> tuple[Record, int, 
                 key, cell = keys[row["image"]]
                 tx.put(BUCKET_AIS_RESULTS, row["id"], row | {"image": key, "cell": cell,
                                                              "file": files.get(row.get("file", ""), row.get("file", ""))})
+        for key, line in tx.all(BUCKET_AIS_MEASUREMENTS):
+            if line["batch_id"] == batch_id and line["image"] in keys:
+                tx.put(BUCKET_AIS_MEASUREMENTS, key, line | {"image": keys[line["image"]][0]})
         for a in adds:
             if a["id"] == add_id:
                 a["randomized"] = True
@@ -598,6 +604,9 @@ def rename_batch(store: Store, batch_id: int, name: Any) -> Record | None:
         for key, row in tx.all(BUCKET_AIS_RESULTS):
             if row["batch_id"] == batch_id:
                 tx.put(BUCKET_AIS_RESULTS, key, row | {"batch_name": clean})
+        for key, line in tx.all(BUCKET_AIS_MEASUREMENTS):
+            if line["batch_id"] == batch_id:
+                tx.put(BUCKET_AIS_MEASUREMENTS, key, line | {"batch_name": clean})
     return batch
 
 
@@ -732,9 +741,10 @@ RESET_SCOPES = ("all", "auto")
 
 def reset_batch(store: Store, batch_id: int, scope: str) -> tuple[Record, int] | None:
     """An admin's fresh start on a batch, to run it again: scope "all" deletes
-    every accepted AIS and done mark, "auto" only the AIS auto mode saved (the
-    rest renumbered 1..k per image) and the done marks of the images they were
-    on. Images and the assignment stay. Returns (batch, AIS deleted)."""
+    every accepted AIS, recorded measurement and done mark, "auto" only the
+    AIS auto mode saved (the rest renumbered 1..k per image) and the done
+    marks of the images they were on. Images and the assignment stay. Returns
+    (batch, AIS deleted)."""
     if scope not in RESET_SCOPES:
         raise BatchError("scope must be all or auto")
     with store.transaction() as tx:
@@ -747,6 +757,7 @@ def reset_batch(store: Store, batch_id: int, scope: str) -> tuple[Record, int] |
             tx.delete(BUCKET_AIS_RESULTS, r["id"])
         if scope == "all":
             record["skipped"] = []
+            tx.delete_where(BUCKET_AIS_MEASUREMENTS, lambda _key, line: line["batch_id"] == batch_id)
         else:
             touched = {r["image"] for r in gone}
             record["skipped"] = [k for k in record["skipped"] if k not in touched]
@@ -768,6 +779,7 @@ def delete_batch(store: Store, batch_id: int) -> None:
     with store.transaction() as tx:
         tx.delete(BUCKET_AIS_BATCHES, batch_id)
         tx.delete_where(BUCKET_AIS_RESULTS, lambda _key, row: row["batch_id"] == batch_id)
+        tx.delete_where(BUCKET_AIS_MEASUREMENTS, lambda _key, line: line["batch_id"] == batch_id)
 
 
 # --- assignments ---------------------------------------------------------------
@@ -1004,6 +1016,90 @@ def delete_result(store: Store, result_id: int) -> list[dict[str, int]]:
     return changed
 
 
+# --- recorded measurements -----------------------------------------------------
+
+
+def clean_measurement(line: Any) -> dict[str, Any]:
+    """What a client sends for a recorded line: every MEASUREMENT_NUMBERS field
+    a number, and an optional label."""
+    if not isinstance(line, dict):
+        raise BatchError("measurement must be an object")
+    out: dict[str, Any] = {}
+    for k in MEASUREMENT_NUMBERS:
+        v = line.get(k)
+        if not isinstance(v, (int, float)) or isinstance(v, bool) or not math.isfinite(v) or v < 0:
+            raise BatchError(f"{k} must be a number")
+        out[k] = v
+    out["label"] = _text(line.get("label", ""), "label", empty=True)
+    return out
+
+
+def add_measurement(store: Store, batch_id: int, image_key: str, line: Any, user_id: int) -> Record:
+    """A recorded line on an image, numbered after the image's others. It has
+    no bearing on the image's AIS or whether the image counts as done."""
+    clean = clean_measurement(line)
+    with store.transaction() as tx:
+        batch = tx.get(BUCKET_AIS_BATCHES, batch_id)
+        if batch is None:
+            raise BatchError("no such batch")
+        if not any(im["key"] == image_key for im in batch["images"]):
+            raise BatchError("no such image in this batch")
+        same = [m["n"] for _, m in tx.all(BUCKET_AIS_MEASUREMENTS) if m["batch_id"] == batch_id and m["image"] == image_key]
+        line_id = tx.next_sequence(BUCKET_AIS_MEASUREMENTS)
+        record = clean | {
+            "id": line_id,
+            "batch_id": batch_id,
+            "batch_name": batch["name"],
+            "image": image_key,
+            "n": max(same, default=0) + 1,
+            "created_by": user_id,
+            "created_at": to_iso(utc_now()),
+        }
+        tx.put(BUCKET_AIS_MEASUREMENTS, line_id, record)
+    return record
+
+
+def list_measurements(store: Store, batch_id: int | None = None) -> list[Record]:
+    """Oldest first, like the order they were recorded in."""
+    return [line for _, line in store.all(BUCKET_AIS_MEASUREMENTS) if batch_id is None or line["batch_id"] == batch_id]
+
+
+def get_measurement(store: Store, line_id: int) -> Record | None:
+    return store.get(BUCKET_AIS_MEASUREMENTS, line_id)
+
+
+def update_measurement(store: Store, line_id: int, line: Any, user_id: int) -> Record | None:
+    """New ends, length or label for a recorded line, keeping which image it
+    is on, its number and who recorded it. None when it is gone."""
+    clean = clean_measurement(line)
+    with store.transaction() as tx:
+        record = tx.get(BUCKET_AIS_MEASUREMENTS, line_id)
+        if record is None:
+            return None
+        record = record | clean | {"edited_at": to_iso(utc_now()), "edited_by": user_id}
+        tx.put(BUCKET_AIS_MEASUREMENTS, line_id, record)
+    return record
+
+
+def delete_measurement(store: Store, line_id: int) -> list[dict[str, int]]:
+    """Delete one, and renumber the rest of its image 1..k in their order.
+    Returns the new numbers, [{id, n}], of the lines that changed."""
+    changed = []
+    with store.transaction() as tx:
+        record = tx.get(BUCKET_AIS_MEASUREMENTS, line_id)
+        if record is None:
+            return []
+        tx.delete(BUCKET_AIS_MEASUREMENTS, line_id)
+        rest = sorted((m for _, m in tx.all(BUCKET_AIS_MEASUREMENTS)
+                       if m["batch_id"] == record["batch_id"] and m["image"] == record["image"]),
+                      key=lambda m: (m["n"], m["id"]))
+        for n, m in enumerate(rest, 1):
+            if m["n"] != n:
+                tx.put(BUCKET_AIS_MEASUREMENTS, m["id"], m | {"n": n})
+                changed.append({"id": m["id"], "n": n})
+    return changed
+
+
 def import_rows(store: Store, rows: Any, user_id: int, name: str) -> Record:
     """Rows accepted before results lived on the server (this browser's
     localStorage) become a batch of their own, one image per cell, so they
@@ -1044,7 +1140,8 @@ def backup_batch(store: Store, batch_id: int) -> Record | None:
     kept = {k: v for k, v in batch.items() if k != "assignment"}
     return {"batch": kept | {"path": None, "images": images, "excluded": sorted(excluded_keys(batch)),
                              "adds": [a | {"path": None} for a in batch.get("adds", [])]},
-            "results": list_results(store, batch_id)}
+            "results": list_results(store, batch_id),
+            "measurements": list_measurements(store, batch_id)}
 
 
 def backup_user_ids(backup: Record) -> set[int]:
@@ -1053,6 +1150,8 @@ def backup_user_ids(backup: Record) -> set[int]:
     ids = {batch.get("created_by")} | {a.get("added_by") for a in batch["adds"]}
     for row in backup["results"]:
         ids |= {row.get("created_by"), row.get("edited_by"), row.get("soma_by")}
+    for line in backup.get("measurements", []):
+        ids |= {line.get("created_by"), line.get("edited_by")}
     return {i for i in ids if i is not None}
 
 
@@ -1201,6 +1300,27 @@ def import_batch(store: Store, data: Any, local_users: dict[int, str], user_id: 
                 record |= {at: _date(row[at], at), by: person(row.get(by))}
         clean_rows.append(record)
 
+    # Backups from before measurements were recorded have none.
+    lines = data.get("measurements", [])
+    if not isinstance(lines, list):
+        raise BatchError("measurements must be a list")
+    clean_lines, numbered = [], set()
+    for line in lines:
+        if not isinstance(line, dict):
+            raise BatchError("a measurement must be an object")
+        image = line.get("image")
+        if image not in keys:
+            raise BatchError("a measurement names an image the batch does not have")
+        n = _whole(line.get("n"), "n", least=1)
+        if (image, n) in numbered:
+            raise BatchError("two measurements of an image share a number")
+        numbered.add((image, n))
+        record = clean_measurement(line) | {"image": image, "n": n, "created_by": person(line.get("created_by")),
+                                            "created_at": _date(line.get("created_at"), "created_at")}
+        if line.get("edited_at") is not None:
+            record |= {"edited_at": _date(line["edited_at"], "edited_at"), "edited_by": person(line.get("edited_by"))}
+        clean_lines.append(record)
+
     name = clean_name(batch.get("name"))
     created_at = _date(batch.get("created_at"), "created_at")
     cells = {im["key"]: im["cell"] for im in restored}
@@ -1230,6 +1350,9 @@ def import_batch(store: Store, data: Any, local_users: dict[int, str], user_id: 
             result_id = tx.next_sequence(BUCKET_AIS_RESULTS)
             tx.put(BUCKET_AIS_RESULTS, result_id, row | {"id": result_id, "batch_id": batch_id, "batch_name": name,
                                                          "cell": cells[row["image"]]})
+        for line in clean_lines:
+            line_id = tx.next_sequence(BUCKET_AIS_MEASUREMENTS)
+            tx.put(BUCKET_AIS_MEASUREMENTS, line_id, line | {"id": line_id, "batch_id": batch_id, "batch_name": name})
     return record
 
 

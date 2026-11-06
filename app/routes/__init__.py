@@ -142,6 +142,10 @@ def build_routes(static_server: StaticServer, cfg: Config) -> list[BaseRoute]:
         signed_in("/api/ais/results/{result_id}/delete", ais.result_delete, ["POST"]),
         signed_in("/api/ais/results/{result_id}/update", ais.result_update, ["POST"]),
         signed_in("/api/ais/results/{result_id}/soma", ais.result_soma, ["POST"]),
+        signed_in("/api/ais/measurements", ais.measurement_list),
+        signed_in("/api/ais/measurements", ais.measurement_add, ["POST"]),
+        signed_in("/api/ais/measurements/{measurement_id}/update", ais.measurement_update, ["POST"]),
+        signed_in("/api/ais/measurements/{measurement_id}/delete", ais.measurement_delete, ["POST"]),
         # Folders on this machine (Open path) and MATLAB: admins with a
         # session, and only when cfg.local_folders_enabled -- each handler
         # checks that too.

@@ -64,6 +64,8 @@ const Ais = {
   queuedBody: null,      // a nudge that arrived while a trace was running
   firstClick: null,      // two-click mode: waiting for the second click
   batchRows: [],         // accepted AIS of the open batch
+  measurements: [],      // its recorded lines (ais_measure.js)
+  allMeasurements: null, // every batch's, once the scope "all" has asked for them
   // What a click on the image does: "trace" a new AIS, "edit" one (its start
   // walked or clicked anew, Enter keeps it) or "delete" one. A target is an
   // auto candidate or a saved row: { kind: "candidate" | "row", item }.
@@ -427,6 +429,7 @@ const Ais = {
     this.reject();
     Dom.get( "ais-table-scope" ).value = "image";
     this.allRows = null;
+    this.allMeasurements = null;
     await this.loadBatchRows();
     this.renderPicker();
     this.draw();
@@ -498,6 +501,7 @@ const Ais = {
     this.batch = null;
     this.images = [];
     this.batchRows = [];
+    this.measurements = [];
     this.index = -1;
     this.source = null;
     this.bitmap = null;
@@ -1920,6 +1924,7 @@ const Ais = {
     if ( this.historyBatch !== batchId ) this.clearHistory( batchId );
     if ( !this.batch ) {
       this.batchRows = [];
+      this.measurements = [];
       return;
     }
     try {
@@ -1928,13 +1933,36 @@ const Ais = {
       this.batchRows = [];
       App.showError( error.message );
     }
+    await this.loadMeasurements();
     this.renderTable();
+  },
+
+  // The batch's recorded lines (the Measure tool's Record switch), each with
+  // its ends as a and b, the way the tool works on them.
+  async loadMeasurements() {
+    try {
+      const found = await Api.request( "/api/ais/measurements?batch=" + this.batch.id );
+      this.measurements = found.measurements.map( ( line ) => this.lineEnds( line ) );
+    } catch ( error ) {
+      this.measurements = [];
+      App.showError( error.message );
+    }
+  },
+
+  lineEnds( line ) {
+    return Object.assign( line , { a: [ line.a_x , line.a_y ] , b: [ line.b_x , line.b_y ] } );
+  },
+
+  // An image's recorded lines, by number.
+  measurementsOn( entry ) {
+    return this.measurements.filter( ( line ) => line.image === entry.key ).sort( ( p , q ) => p.n - q.n );
   },
 
   async loadTable() {
     if ( Dom.get( "ais-table-scope" ).value === "all" ) {
       try {
         this.allRows = ( await Api.request( "/api/ais/results?batch=all" ) ).results;
+        this.allMeasurements = ( await Api.request( "/api/ais/measurements?batch=all" ) ).measurements;
       } catch ( error ) {
         App.showError( error.message );
       }
@@ -1952,6 +1980,21 @@ const Ais = {
       return entry ? this.savedRows( entry ) : [];
     }
     return this.batchRows;
+  },
+
+  // The recorded lines the exports write, by the same scope.
+  shownMeasurements() {
+    const scope = Dom.get( "ais-table-scope" ).value;
+    if ( scope === "all" || !this.batch ) {
+      // The open batch's as they are now: they change without a fetch.
+      const others = ( this.allMeasurements || [] ).filter( ( line ) => !this.batch || line.batch_id !== this.batch.id );
+      return others.concat( this.batch ? this.measurements : [] );
+    }
+    if ( scope === "image" ) {
+      const entry = this.images[ this.index ];
+      return entry ? this.measurementsOn( entry ) : [];
+    }
+    return this.measurements;
   },
 
   // Newest first.
@@ -1984,7 +2027,11 @@ const Ais = {
         Dom.el( "td" , { children: [ del ] } ),
       ] } ) );
     } );
-    Dom.get( "ais-export" ).disabled = !this.shownRows().length;
+    const rows = this.shownRows().length;
+    const lines = this.shownMeasurements().length;
+    Dom.get( "ais-export" ).disabled = !rows && !lines;
+    Dom.get( "ais-export-csv" ).disabled = !rows;
+    Dom.show( Dom.get( "ais-export-measurements-item" ) , Boolean( lines ) );
     AisMeasure.render();
   },
 

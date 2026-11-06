@@ -15,6 +15,10 @@ const AisExport = {
     "threshold_initial" , "threshold" , "click_x" , "click_y" , "click2_x" , "click2_y" , "profile_points" ,
     "smooth" , "pixconv" , "f" , "kernel" , "sigma" , "strel" , "min_pixels" , "max_path" , "max_passes" , "spline_p" , "window_um" ,
     "width_um" , "brightness" , "soma_um" , "soma_px" , "soma_ais_x" , "soma_ais_y" , "soma_x" , "soma_y" , "origin" , "accepted_at" , "edited_at" , "notes" ],
+  // A line the Measure tool recorded (Record): its own file and sheet, since it
+  // is no AIS and an image may have them without having any AIS.
+  measureCols: [ "batch_name" , "batch_id" , "image" , "n" , "label" , "length_um" , "length_px" , "a_x" , "a_y" , "b_x" , "b_y" ,
+    "pixconv" , "created_at" , "edited_at" ],
   // The method settings each row was measured with; rows from before these
   // were saved leave them blank.
   settingCols: [ "smooth" , "pixconv" , "f" , "kernel" , "sigma" , "strel" , "min_pixels" , "max_path" , "max_passes" , "spline_p" , "window_um" ],
@@ -30,6 +34,7 @@ const AisExport = {
   init() {
     Dom.get( "ais-export-csv" ).addEventListener( "click" , () => this.exportCsv() );
     Dom.get( "ais-export-zip" ).addEventListener( "click" , () => this.exportZip() );
+    Dom.get( "ais-export-measurements" ).addEventListener( "click" , () => this.exportMeasurements() );
     this.optionsModal = bootstrap.Modal.getOrCreateInstance( Dom.get( "export-options-modal" ) );
     Dom.get( "export-options-table" ).addEventListener( "change" , ( e ) => this.tickColumn( e.target ) );
     Dom.get( "export-options-names" ).addEventListener( "change" , () => this.renderOptions() );
@@ -183,11 +188,24 @@ const AisExport = {
   },
 
   csv( rows ) {
+    return this.table( this.cols , rows );
+  },
+
+  measurementsCsv( lines ) {
+    return this.table( this.measureCols , lines );
+  },
+
+  // Extra files for a ZIP: measurements.csv, when there are any.
+  measurementFiles( lines ) {
+    return lines.length ? [ { name: "measurements.csv" , data: this.measurementsCsv( lines ) } ] : [];
+  },
+
+  table( cols , rows ) {
     const quote = ( v ) => {
       const s = v == null ? "" : String( v );
       return /[",\n]/.test( s ) ? '"' + s.replace( /"/g , '""' ) + '"' : s;
     };
-    return [ this.cols.join( "," ) ].concat( rows.map( ( row ) => this.cols.map( ( c ) => quote( row[ c ] ) ).join( "," ) ) ).join( "\n" ) + "\n";
+    return [ cols.join( "," ) ].concat( rows.map( ( row ) => cols.map( ( c ) => quote( row[ c ] ) ).join( "," ) ) ).join( "\n" ) + "\n";
   },
 
   // "ais_<batch>_<yyyy-mm-dd>" for the current batch, "ais_<batch>_<image>_<date>"
@@ -218,11 +236,18 @@ const AisExport = {
     this.download( new Blob( [ this.csv( rows ) ] , { type: "text/csv" } ) , this.baseName() + ".csv" );
   },
 
+  exportMeasurements() {
+    const lines = Ais.shownMeasurements();
+    if ( !lines.length ) return;
+    this.download( new Blob( [ this.measurementsCsv( lines ) ] , { type: "text/csv" } ) , this.baseName() + "_measurements.csv" );
+  },
+
   exportZip() {
     const rows = Ais.shownRows();
-    if ( !rows.length ) return;
+    const lines = Ais.shownMeasurements();
+    if ( !rows.length && !lines.length ) return;
     return this.zip( rows , this.baseName() , ( done , total ) => Ais.status( total
-      ? I18n.get( "ais.exporting" ).replace( "{done}" , done ).replace( "{total}" , total ) : "" ) );
+      ? I18n.get( "ais.exporting" ).replace( "{done}" , done ).replace( "{total}" , total ) : "" ) , this.measurementFiles( lines ) );
   },
 
   // The ZIP: results.csv, extra (more files, e.g. a batch report) and, with
@@ -323,13 +348,15 @@ const AisExport = {
       b.name , a.name || "" , a.images , a.completed , Math.round( a.percent ) , a.ais , date( a.last_at ) ] ) ) );
     const ais = [];
     items.forEach( ( { rows } ) => rows.forEach( ( row ) => ais.push( this.cols.map( ( c ) => row[ c ] ) ) ) );
+    const lines = items.flatMap( ( item ) => item.measurements || [] ).map( ( line ) => this.measureCols.map( ( c ) => line[ c ] ) );
+    const measured = lines.length ? [ { name: I18n.get( "report.sheet_measurements" ) , rows: lines , cols: this.measureCols } ] : [];
     return [
       { name: I18n.get( "report.sheet_summary" ) , rows: summary , cols: this.header( [ "batch" , "batch_id" , "opened_by" , "created" , "archived" ,
         "images" , "completed" , "duplicates" , "ais" , "mean_um" , "median_um" , "sd_um" , "min_um" , "max_um" , "ais_per_image" ] ) },
       { name: I18n.get( "report.sheet_images" ) , rows: images , cols: this.header( [ "batch" , "image" , "state" , "ais" , "mean_um" , "median_um" , "assignee" ] ) },
       { name: I18n.get( "report.sheet_assignees" ) , rows: assignees , cols: this.header( [ "batch" , "person" , "images" , "completed" , "percent" , "ais" , "last_activity" ] ) },
       { name: I18n.get( "report.sheet_ais" ) , rows: ais , cols: this.cols },
-    ];
+    ].concat( measured );
   },
 
   sheetCsv( sheet ) {
@@ -376,7 +403,7 @@ const AisExport = {
     await this.zip( rows , base , progress , [
       { name: "report.xlsx" , data: new Uint8Array( await workbook.arrayBuffer() ) },
       { name: "summary.csv" , data: this.sheetCsv( sheets[ 0 ] ) },
-    ].concat( files , backup.files ) , opts.traces !== false );
+    ].concat( this.measurementFiles( items.flatMap( ( item ) => item.measurements || [] ) ) , files , backup.files ) , opts.traces !== false );
     if ( backup.failed ) App.showError( I18n.get( "batches.backup_failed" ).replace( "{n}" , backup.failed ) );
   },
 
@@ -403,6 +430,7 @@ const AisExport = {
         images: ( item.images || [] ).map( ( image ) => Object.assign( {} , image , { key: keys.get( image.key ) || image.key } ) ),
         rows: item.rows.map( ( row ) => Object.assign( {} , row , { random_image: row.image , image: keys.get( row.image ) || row.image ,
           file: files.get( row.file ) || row.file } ) ),
+        measurements: ( item.measurements || [] ).map( ( line ) => Object.assign( {} , line , { image: keys.get( line.image ) || line.image } ) ),
       } );
     } ) );
   },
@@ -444,7 +472,7 @@ const AisExport = {
     }
     const users = Object.assign( {} , ...parts.map( ( part ) => part.users ) );
     const manifest = { format: parts[ 0 ].format , version: parts[ 0 ].version , exported_at: new Date().toISOString() ,
-      users: users , batches: parts.map( ( part ) => ( { batch: part.batch , results: part.results } ) ) };
+      users: users , batches: parts.map( ( part ) => ( { batch: part.batch , results: part.results , measurements: part.measurements } ) ) };
     files.unshift( { name: "manifest.json" , data: JSON.stringify( manifest ) } );
     return { files: files , failed: failed };
   },
