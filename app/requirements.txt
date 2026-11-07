@@ -15,3 +15,6 @@ bcrypt==5.0.0
 numpy==2.5.4
 scipy==1.18.1
 tifffile==2026.10.15
+# Decodes the LZW TIFFs ZEN exports. tifffile would use imagecodecs, which has
+# no musllinux wheel, so adding it would break the Docker build.
+Pillow==13.0.0

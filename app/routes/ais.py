@@ -20,7 +20,7 @@ from starlette.responses import JSONResponse, Response
 
 from app.analysis import ais_auto as aa
 from app.analysis import detect as auto
-from app.analysis import local, matlab, matlab_bundle
+from app.analysis import local, matlab, matlab_bundle, zlength
 from app.analysis.images import ImageError
 from app.analysis.service import Library, NotStored
 from app.core.middleware import from_this_computer
@@ -122,6 +122,18 @@ async def channel(request: Request) -> Response:
     return Response(png, media_type="image/png", headers={"Cache-Control": "private, max-age=86400"})
 
 
+async def slice_view(request: Request) -> Response:
+    """One slice of a Z-stack, for the viewer's Z slider."""
+    try:
+        index = int(request.path_params["index"])
+        png = await run(_library(request).slice_png, request.path_params["sha"], index)
+    except ImageError as exc:
+        return _unshown(exc)
+    except ValueError as exc:
+        return not_found(str(exc))
+    return Response(png, media_type="image/png", headers={"Cache-Control": "private, max-age=86400"})
+
+
 async def composite(request: Request) -> Response:
     """A .czi's channels merged in their display colors, for exports."""
     try:
@@ -197,6 +209,15 @@ def _settings(value: Any) -> tuple[aa.Settings | None, str]:
         return None, str(exc)
 
 
+def _z_method(value: Any) -> tuple[str | None, str]:
+    """The Z method a body asks for (zlength.METHODS). (None, why) when it
+    can't be used; on an ordinary image nothing reads it."""
+    try:
+        return zlength.method(value).id, ""
+    except ValueError as exc:
+        return None, str(exc)
+
+
 def _engine(value: Any) -> bool | None:
     """Whether a body's engine asks for app/analysis/fast.py; None if it is
     neither that nor left out."""
@@ -229,9 +250,13 @@ async def trace(request: Request) -> Response:
     quick = _engine(body.get("engine"))
     if quick is None:
         return bad_request("engine must be fast, or left out")
+    z_method, why = _z_method(body.get("z_method"))
+    if z_method is None:
+        return bad_request(why)
     library = _library(request)
     try:
-        result = await run(library.trace_fast if quick else library.trace, processed, raw, click, click2, threshold, settings)
+        result = await run(library.trace_fast if quick else library.trace, processed, raw, click, click2, threshold,
+                           settings, z_method)
     except ImageError as exc:
         return bad_request(str(exc))
     return JSONResponse(result)
@@ -278,9 +303,13 @@ async def detect(request: Request) -> Response:
     quick = _engine(body.get("engine"))
     if quick is None:
         return bad_request("engine must be fast, or left out")
+    z_method, why = _z_method(body.get("z_method"))
+    if z_method is None:
+        return bad_request(why)
     library = _library(request)
     try:
-        result = await run(library.detect_fast if quick else library.detect, processed, raw, threshold, settings, start, exclude)
+        result = await run(library.detect_fast if quick else library.detect, processed, raw, threshold, settings, start,
+                           exclude, z_method)
     except ImageError as exc:
         return bad_request(str(exc))
     return JSONResponse(result)
@@ -298,7 +327,12 @@ def _has(request: Request) -> Callable[[dict[str, Any]], bool]:
     local folders are allowed) knows where on this machine it lives."""
     library = _library(request)
     by_path = get_config(request).local_folders_enabled
-    return lambda f: bool(by_path and f.get("path")) or library.has(f["sha"])
+
+    def one(f: dict[str, Any]) -> bool:
+        return bool(by_path and f.get("path")) or library.has(f["sha"])
+
+    # A stack's own sha is no file: it is there when its slices are.
+    return lambda f: all(one(part) for part in f["slices"]) if "slices" in f else one(f)
 
 
 def _blind(request: Request) -> bool:
@@ -309,14 +343,31 @@ def _blind(request: Request) -> bool:
 def _unnamed_file(f: dict[str, Any]) -> dict[str, Any]:
     """A blinded file without what it was called: its original name, the
     path on this machine (which has that name in it) and the random names it
-    had before (which old exports could be matched against)."""
+    had before (which old exports could be matched against). A stack's slices
+    keep their names at rest, so here they lose them."""
     if "original" not in f:
         return f
-    return {k: v for k, v in f.items() if k not in ("original", "path", "earlier")}
+    out = {k: v for k, v in f.items() if k not in ("original", "path", "earlier")}
+    if "slices" in out:
+        out["slices"] = [{k: part[k] for k in ("z", "sha", "size", "stored") if k in part} for part in out["slices"]]
+    return out
 
 
 def _unnamed_image(image: dict[str, Any]) -> dict[str, Any]:
-    return {k: v for k, v in image.items() if k not in ("original_cell", "original_key", "earlier_keys")}
+    return {k: v for k, v in image.items() if k not in ("original_cell", "original_key", "original_dir", "earlier_keys")}
+
+
+def _unnamed_add(add: dict[str, Any]) -> dict[str, Any]:
+    """An add without what was picked, kept for admins when it was a stack's folder."""
+    return {k: v for k, v in add.items() if k not in ("original_name", "original_path")}
+
+
+def _stored(f: dict[str, Any], has: Callable[[dict[str, Any]], bool]) -> dict[str, Any]:
+    """f with whether the server can show it, and each slice of a stack with its own."""
+    out = f | {"stored": has(f)}
+    if "slices" in f:
+        out["slices"] = [part | {"stored": has(part)} for part in f["slices"]]
+    return out
 
 
 def _batch_json(request: Request, batch: dict[str, Any]) -> dict[str, Any]:
@@ -326,7 +377,7 @@ def _batch_json(request: Request, batch: dict[str, Any]) -> dict[str, Any]:
     blind = _blind(request)
     images = []
     for image in batch["images"]:
-        files = {role: f | {"stored": has(f)} for role, f in image["files"].items()}
+        files = {role: _stored(f, has) for role, f in image["files"].items()}
         if blind:
             files = {role: _unnamed_file(f) for role, f in files.items()}
             image = _unnamed_image(image)
@@ -334,9 +385,10 @@ def _batch_json(request: Request, batch: dict[str, Any]) -> dict[str, Any]:
     names = _names(request)
     assigned = {share["user_id"] for share in (batch.get("assignment") or {}).get("shares", [])}
     adders = {a.get("added_by") for a in batch.get("adds", [])}
+    adds = [_unnamed_add(a) if blind else a for a in batch.get("adds", [])]
     return batch | {"images": images, "created_by_name": names.get(batch["created_by"], ""),
                     "assignee_names": {str(u): names.get(u, "") for u in assigned},
-                    "adds": [a | {"added_by_name": names.get(a.get("added_by"), "")} for a in batch.get("adds", [])],
+                    "adds": [a | {"added_by_name": names.get(a.get("added_by"), "")} for a in adds],
                     "excluded": sorted(batches.excluded_keys(batch)),
                     "adder_names": {str(u): names.get(u, "") for u in adders if u is not None}}
 
@@ -351,12 +403,14 @@ async def batch_list(request: Request) -> Response:
     rows = await run(batches.list_batches, get_store(request), _user_id(request), _has(request))
     names = await run(_names, request)
     live = _activity(request).current()
+    blind = _blind(request)
     for row in rows:
         row["created_by_name"] = names.get(row["created_by"], "")
         for a in row["assignees"]:
             a["name"] = names.get(a["user_id"], "")
         row["activity"] = [a | {"name": names.get(a["user_id"], "")} for a in live.get(row["id"], [])]
-        row["adds"] = [a | {"added_by_name": names.get(a.get("added_by"), "")} for a in row["adds"]]
+        row["adds"] = [(_unnamed_add(a) if blind else a) | {"added_by_name": names.get(a.get("added_by"), "")}
+                       for a in row["adds"]]
     return JSONResponse({"batches": rows})
 
 
@@ -453,7 +507,7 @@ async def batch_add(request: Request) -> Response:
     try:
         batch = await run(batches.add_files, get_store(request), batch_id, "upload", body.get("files"),
                           randomize_names=_randomize(body), user_id=_user_id(request), name=_add_name(body),
-                          translations=body.get("translations"))
+                          translations=body.get("translations"), stack=body.get("stack"))
     except batches.BatchError as exc:
         return bad_request(str(exc))
     if batch is None:
@@ -614,7 +668,7 @@ async def batch_upload(request: Request) -> Response:
     try:
         batch = await run(batches.create_batch, get_store(request), body.get("name"), "upload",
                           body.get("files"), _user_id(request), randomize_names=_randomize(body),
-                          translations=body.get("translations"))
+                          translations=body.get("translations"), stack=body.get("stack"))
     except batches.BatchError as exc:
         return bad_request(str(exc))
     return JSONResponse(await run(_batch_json, request, batch))
@@ -629,7 +683,7 @@ def _backup(request: Request, batch_id: int) -> dict[str, Any] | None:
     named = batches.backup_user_ids(backup)
     has = _has(request)
     stored = {f["sha"] for image in batches.get_batch(get_store(request), batch_id)["images"]
-              for f in image["files"].values() if has(f)}
+              for f in batches.real_files(image) if has(f)}
     return backup | {"format": batches.BACKUP_FORMAT, "version": batches.BACKUP_VERSION,
                      "users": {str(i): n for i, n in _names(request).items() if i in named},
                      "stored": sorted(stored)}
@@ -949,17 +1003,45 @@ async def local_list(request: Request) -> Response:
         return bad_request(str(exc))
 
 
+async def local_stacks(request: Request) -> Response:
+    """Body: {path}. The Z-stacks under a folder, by name, for the Add dialog
+    to ask about before the server hashes anything."""
+    body, refused = await _local_body(request)
+    if refused:
+        return refused
+    try:
+        return JSONResponse({"stacks": await run(local.stacks_under, body.get("path"))})
+    except ImageError as exc:
+        return bad_request(str(exc))
+
+
+def _hashed(body: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
+    """An Open-path folder's files. With stacks, refused if the file limit
+    would leave one short."""
+    if body.get("stack") is not None:
+        local.stacks_under(body.get("path"))
+    return local.hashed_files(body.get("path"))
+
+
+def _path_name(folder: str, body: dict[str, Any]) -> str:
+    """What an Open-path add is called: its folder, unless that is a blinded
+    stack's folder, which would say what it is."""
+    if body.get("stack") is not None and _randomize(body):
+        return "Z-stacks"
+    return folder.rstrip("/\\").replace("\\", "/").split("/")[-1] or folder
+
+
 async def batch_path(request: Request) -> Response:
     """Body: {path}: an Open-path batch, hashed and recorded by the server."""
     body, refused = await _local_body(request)
     if refused:
         return refused
     try:
-        folder, files = await run(local.hashed_files, body.get("path"))
-        name = folder.rstrip("/\\").replace("\\", "/").split("/")[-1] or folder
+        folder, files = await run(_hashed, body)
+        name = _path_name(folder, body)
         translations = await run(local.translations_under, folder)
         batch = await run(batches.create_batch, get_store(request), name, "path", files, _user_id(request), folder,
-                          randomize_names=_randomize(body), translations=translations)
+                          randomize_names=_randomize(body), translations=translations, stack=body.get("stack"))
     except (ImageError, batches.BatchError) as exc:
         return bad_request(str(exc))
     return JSONResponse(await run(_batch_json, request, batch))
@@ -974,12 +1056,12 @@ async def batch_add_path(request: Request) -> Response:
     if not batch_id:
         return not_found("no such batch")
     try:
-        folder, files = await run(local.hashed_files, body.get("path"))
-        name = folder.rstrip("/\\").replace("\\", "/").split("/")[-1] or folder
+        folder, files = await run(_hashed, body)
+        name = _path_name(folder, body)
         translations = await run(local.translations_under, folder)
         batch = await run(batches.add_files, get_store(request), batch_id, "path", files, folder,
                           randomize_names=_randomize(body), user_id=_user_id(request), name=name,
-                          translations=translations)
+                          translations=translations, stack=body.get("stack"))
     except (ImageError, batches.BatchError) as exc:
         return bad_request(str(exc))
     if batch is None:

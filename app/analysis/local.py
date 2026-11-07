@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from app.analysis import zstack
 from app.analysis.images import ImageError
 
 TIFF_SUFFIXES = (".tif", ".tiff", ".czi")   # the images: TIFFs and CZI mode's .czi
@@ -93,6 +94,24 @@ def images_under(base: Path, limit: int = MAX_FILES) -> list[Path]:
                 if len(found) >= limit:
                     return found
     return found
+
+
+def stacks_under(raw: Any) -> list[dict[str, Any]]:
+    """The Z-stacks in the folder and its subfolders, [{cell, slices}], by name
+    alone: what the Add dialog must ask about before anything is hashed. A
+    folder over the limit is refused, as images_under's cut would land inside
+    a stack and leave it short with nothing to show for it."""
+    paths = images_under(folder(raw), MAX_FILES + 1)
+    found: dict[tuple[str, str, str], int] = {}
+    for path in paths:
+        parsed = zstack.parse(path.name)
+        if parsed:
+            key = (str(path.parent), parsed[0], parsed[2])
+            found[key] = found.get(key, 0) + 1
+    stacks = [{"cell": cell, "slices": n} for (_, cell, _), n in sorted(found.items()) if n >= zstack.MIN_SLICES]
+    if stacks and len(paths) > MAX_FILES:
+        raise ImageError(f"this folder has more than {MAX_FILES} images, which would cut a Z-stack short")
+    return stacks
 
 
 def translations_under(raw: Any) -> list[dict[str, str]]:

@@ -312,7 +312,7 @@ const AisMeasure = {
   // The two ends' distance, px and µm, rounded as stored.
   distance( a , b ) {
     const px = Math.hypot( b[ 0 ] - a[ 0 ] , b[ 1 ] - a[ 1 ] );
-    return { px: Math.round( px * 1000 ) / 1000 , um: Math.round( px * Settings.pixconv() * 10000 ) / 10000 };
+    return { px: Math.round( px * 1000 ) / 1000 , um: Math.round( px * Ais.pixconvFor( Ais.images[ Ais.index ] ) * 10000 ) / 10000 };
   },
 
   // Whether what is placed is not what the row has saved.
@@ -415,7 +415,7 @@ const AisMeasure = {
   placed( line ) {
     const d = this.distance( line.a , line.b );
     return { a_x: line.a[ 0 ] , a_y: line.a[ 1 ] , b_x: line.b[ 0 ] , b_y: line.b[ 1 ] ,
-      length_px: d.px , length_um: d.um , pixconv: Settings.pixconv() };
+      length_px: d.px , length_um: d.um , pixconv: Ais.pixconvFor( Ais.images[ Ais.index ] ) };
   },
 
   // What the server keeps of a line.

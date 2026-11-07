@@ -188,6 +188,15 @@ the start of an AIS gives the original's trace and length. **Enter** accepts,
   colors, each on or off and blended (a TIFF pair: *Raw*). The last
   channel off brings *Processed* back; the choice carries to the next
   image. Clicks always trace the processed image.
+- **Z-stacks.** A folder of per-slice TIFFs named `<cell>_z01c1+2.tif` is one
+  image. Adding it asks for the AIS channel (red or green, every time), the
+  z step and the pixel size, none of which the files carry. Clicks trace the
+  stack's max projection as on any image, and the trace is then followed
+  through the slices for a 3D length beside an XY length. The slider along the
+  bottom of the image shows one slice at a time, with the part of each trace at
+  that depth in pink. **Compare 3D with XY length, not with `length_um`**, and
+  note these lengths have not yet been checked against AIS measured by hand.
+  See [docs/z-stack.md](docs/z-stack.md).
 - **Edit and Delete.** Tools at the top of the image (T / E / X) act on
   any trace, saved or pink.
   - **Delete:** locks on to the trace under the pointer, and a click

@@ -73,9 +73,9 @@ async def send(request: Request) -> Response:
     if not jobs.live(user_id):
         return error(409, "the MATLAB helper is not running on your computer")
     try:
-        await run(_library(request).file_path, wanted.processed)
+        await run(_library(request).require, wanted.processed)
         if wanted.raw:
-            await run(_library(request).file_path, wanted.raw)
+            await run(_library(request).require, wanted.raw)
     except ImageError as exc:
         return bad_request(str(exc))
     job = jobs.add(user_id, wanted)

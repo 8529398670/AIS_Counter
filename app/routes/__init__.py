@@ -103,6 +103,7 @@ def build_routes(static_server: StaticServer, cfg: Config) -> list[BaseRoute]:
         signed_in("/api/ais/files/{sha}/thumb.png", ais.thumb),
         signed_in("/api/ais/files/{sha}/channels", ais.channels),
         signed_in("/api/ais/files/{sha}/channel/{index}.png", ais.channel),
+        signed_in("/api/ais/files/{sha}/slice/{index}.png", ais.slice_view),
         signed_in("/api/ais/files/{sha}/composite.png", ais.composite),
         signed_in("/api/ais/files/{sha}/somata", ais.somata),
         signed_in("/api/ais/files/{sha}/file", ais.file_bytes),
@@ -112,7 +113,8 @@ def build_routes(static_server: StaticServer, cfg: Config) -> list[BaseRoute]:
         signed_in("/api/ais/detect", ais.detect, ["POST"]),
         signed_in("/api/ais/batches", ais.batch_list),
         signed_in("/api/ais/batches", ais.batch_create, ["POST"]),
-        signed_in("/api/ais/batches/upload", ais.batch_upload, ["POST"]),
+        # A folder's manifest is the whole of it: thousands of slices fill the default limit.
+        signed_in("/api/ais/batches/upload", ais.batch_upload, ["POST"], max_body_size=ais.UPLOAD_LIMIT_BYTES),
         # The team's priority order: admins.
         admins("/api/ais/batches/order", ais.batch_order, ["POST"]),
         # Backups hold the original names: admins.
@@ -123,7 +125,7 @@ def build_routes(static_server: StaticServer, cfg: Config) -> list[BaseRoute]:
         signed_in("/api/ais/batches/{batch_id}", ais.batch_get),
         signed_in("/api/ais/batches/{batch_id}/status", ais.batch_status),
         signed_in("/api/ais/batches/{batch_id}/channels", ais.batch_channels),
-        signed_in("/api/ais/batches/{batch_id}/upload", ais.batch_add, ["POST"]),
+        signed_in("/api/ais/batches/{batch_id}/upload", ais.batch_add, ["POST"], max_body_size=ais.UPLOAD_LIMIT_BYTES),
         signed_in("/api/ais/batches/{batch_id}/rename", ais.batch_rename, ["POST"]),
         signed_in("/api/ais/batches/{batch_id}/archive", ais.batch_archive, ["POST"]),
         signed_in("/api/ais/batches/{batch_id}/activity", ais.batch_activity, ["POST"]),
@@ -153,6 +155,7 @@ def build_routes(static_server: StaticServer, cfg: Config) -> list[BaseRoute]:
         admin_sessions("/api/ais/batches/path", ais.batch_path, ["POST"]),
         admin_sessions("/api/ais/batches/{batch_id}/path", ais.batch_add_path, ["POST"]),
         admin_sessions("/api/ais/local/list", ais.local_list, ["POST"]),
+        admin_sessions("/api/ais/local/stacks", ais.local_stacks, ["POST"]),
         admin_sessions("/api/ais/local/reveal", ais.local_reveal, ["POST"]),
         admin_sessions("/api/ais/local/open", ais.local_open, ["POST"]),
         admin_sessions("/api/ais/local/choose", ais.local_choose, ["POST"]),

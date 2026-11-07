@@ -244,7 +244,7 @@ const AisAuto = {
           settings: run.params.settings,
           start: this.startFor( entry , run.params.start ),
           exclude: Ais.savedRows( entry ).map( ( row ) => row.pixels ),
-        } , run.params.engine ) );
+        } , run.params.engine , Ais.zBody( entry ) ) );
         out.candidates = out.candidates.map( ( c ) => Object.assign( c , { image: entry.key , source: Ais.kind( entry ) } ) );
         return out;
       } )();

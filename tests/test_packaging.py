@@ -26,3 +26,10 @@ def test_the_image_builds_the_helper_where_the_route_looks():
 def test_the_helper_launches_what_the_zip_does():
     from app.analysis import matlab_bundle
     assert f'launchLine = "{matlab_bundle.LAUNCH}"' in (ROOT / "helper" / "matlab.go").read_text()
+
+
+def test_the_image_decodes_lzw_without_imagecodecs():
+    # imagecodecs has no musllinux wheel, so --only-binary would fail the build.
+    requirements = (ROOT / "app" / "requirements.txt").read_text()
+    assert "Pillow==" in requirements
+    assert "imagecodecs==" not in requirements

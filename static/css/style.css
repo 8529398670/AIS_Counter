@@ -291,6 +291,9 @@ th { color: var(--bs-secondary-color); font-size: 0.8rem; text-transform: upperc
 .ais-viewtools { position: absolute; top: 0.75rem; right: 0.75rem; opacity: 0; transition: opacity 0.15s; }
 .ais-viewtools:hover, .ais-viewtools:focus-within { opacity: 1; }
 /* Invisible until the mouse is over the top left corner, so it never covers the image. */
+/* A Z-stack's slices, along the bottom of the stage. */
+.ais-z { position: absolute; bottom: 0.75rem; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 0.6rem; width: min(24rem, 70%); padding: 0.2rem 0.7rem; color: #fff; background: rgba(0, 0, 0, 0.65); border-radius: var(--bs-border-radius); }
+.ais-z[hidden] { display: none; }
 .ais-channels { position: absolute; top: 0.75rem; left: 0.75rem; display: flex; align-items: flex-start; gap: 0.35rem; opacity: 0; transition: opacity 0.15s; }
 .ais-channels:hover, .ais-channels:focus-within { opacity: 1; }
 .ais-channels[hidden], .ais-channels-list[hidden] { display: none; }

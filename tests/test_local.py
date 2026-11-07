@@ -124,3 +124,36 @@ def test_routes_refuse_when_switched_off(tmp_path):
     for handler in (ais.local_list, ais.batch_path, ais.batch_add_path, ais.local_reveal, ais.local_open, ais.local_choose, ais.local_matlab):
         response = asyncio.run(handler(_request("POST", body={"path": str(tmp_path / "a.tif")})))
         assert response.status_code == 403
+
+
+def _stack(folder, cell="IP-04", count=3):
+    folder.mkdir(parents=True, exist_ok=True)
+    for z in range(1, count + 1):
+        _tiff(folder / f"{cell}_z{z:02}c1+2.tif")
+
+
+def test_stacks_under_finds_them_by_name_alone(tmp_path):
+    _stack(tmp_path / "s1")
+    _stack(tmp_path / "s2", "IP-03", 2)
+    _tiff(tmp_path / "plain.tif")
+    _stack(tmp_path / "lone", "one", 1)
+    assert local.stacks_under(str(tmp_path)) == [{"cell": "IP-04", "slices": 3}, {"cell": "IP-03", "slices": 2}]
+
+
+def test_a_folder_of_ordinary_images_has_no_stacks(tmp_path):
+    _tiff(tmp_path / "a.tif")
+    assert local.stacks_under(str(tmp_path)) == []
+
+
+def test_a_folder_too_big_to_keep_its_stacks_whole_is_refused(tmp_path, monkeypatch):
+    monkeypatch.setattr(local, "MAX_FILES", 2)
+    _stack(tmp_path / "s1")
+    with pytest.raises(ImageError, match="cut a Z-stack short"):
+        local.stacks_under(str(tmp_path))
+
+
+def test_a_folder_too_big_with_no_stacks_is_left_to_the_limit_as_before(tmp_path, monkeypatch):
+    monkeypatch.setattr(local, "MAX_FILES", 1)
+    for name in ("a", "b", "c"):
+        _tiff(tmp_path / f"{name}.tif")
+    assert local.stacks_under(str(tmp_path)) == []

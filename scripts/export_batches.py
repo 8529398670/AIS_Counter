@@ -28,6 +28,11 @@ sys.path.insert(0, str(ROOT))
 from app.core import config, db  # noqa: E402
 
 
+def real_files(image: dict) -> list[dict]:
+    """The image's files on disk: a Z-stack's slices stand in for its file."""
+    return [part for f in image["files"].values() for part in f.get("slices", [f])]
+
+
 def source(storage: Path, f: dict) -> Path | None:
     """Where this machine holds the file's bytes, or None."""
     files = storage / "ais" / "files"
@@ -66,7 +71,7 @@ def export(batch: dict, storage: Path, out: Path) -> tuple[int, int, list[str]]:
     missing = []
     seen = set()
     for image in batch["images"]:
-        for f in image["files"].values():
+        for f in real_files(image):
             if f["rel"] in seen:
                 continue
             seen.add(f["rel"])
@@ -112,7 +117,7 @@ def main() -> None:
     if not args.batches and not args.all:
         print(f"{'id':>4}  {'files':>5}  {'stored':>6}  name")
         for b in batches:
-            files = {f["rel"]: f for im in b["images"] for f in im["files"].values()}.values()
+            files = {f["rel"]: f for im in b["images"] for f in real_files(im)}.values()
             stored = sum(1 for f in files if source(cfg.storage_dir, f))
             flag = "  (archived)" if b.get("archived_at") else ""
             print(f"{b['id']:>4}  {len(files):>5}  {stored:>6}  {b['name']}{flag}")

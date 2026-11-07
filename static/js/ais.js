@@ -19,6 +19,8 @@
 // pixel (x, y) covers [x-1, x) x [y-1, y) in image units.
 // The Soma button's outlines (a .czi's cell bodies, from its AMCA channel).
 const SOMA_COLOUR = "rgba(255, 140, 40, 0.85)";
+// The part of a trace at the slice shown.
+const SLICE_COLOUR = "rgba(255, 60, 255, 1)";
 
 const Ais = {
   processedSuffix: ".tif - Processed method 2.5.tif",
@@ -50,6 +52,7 @@ const Ais = {
   // color, src, img? }], on: Set of keys } -- none on shows the processed
   // image. viewWanted: the names last switched on, kept for the next image.
   views: null,
+  sliceZ: null,     // the z of the slice shown; null on the projection
   viewWanted: [],
   // The Soma button (a .czi): its soma outlines drawn over the image, fetched
   // once per image; switched on, it stays on for the next image.
@@ -137,6 +140,10 @@ const Ais = {
     Dom.get( "ais-zoom-out" ).addEventListener( "click" , () => this.zoomBy( 0.8 ) );
     Dom.get( "ais-zoom-level" ).addEventListener( "click" , () => this.zoomTo( 1 ) );
     Dom.get( "ais-view-reset" ).addEventListener( "click" , () => this.resetView() );
+    const zSlider = Dom.get( "ais-z-slider" );
+    zSlider.addEventListener( "input" , () => this.setSlice( Number( zSlider.value ) ) );
+    // Focus would stay on it, and it would keep the keyboard shortcuts.
+    zSlider.addEventListener( "change" , () => zSlider.blur() );
     Dom.get( "ais-undo" ).addEventListener( "click" , () => this.undo() );
     Dom.get( "ais-redo" ).addEventListener( "click" , () => this.redo() );
     Dom.get( "ais-view-lock" ).addEventListener( "click" , () => this.setLocked( !this.locked ) );
@@ -307,7 +314,7 @@ const Ais = {
     let carried = null;
     if ( this.batch && this.batch.id === want.id && this.stale ) {
       carried = new Map();
-      this.images.forEach( ( entry ) => Object.values( entry.files ).forEach( ( f ) => { if ( f.file ) carried.set( f.sha , f.file ); } ) );
+      this.images.forEach( ( entry ) => this.parts( entry ).forEach( ( f ) => { if ( f.file ) carried.set( f.sha , f.file ); } ) );
       if ( !want.key && this.images[ this.index ] ) want.key = this.images[ this.index ].key;
     }
     this.stale = false;
@@ -390,9 +397,11 @@ const Ais = {
 
   // Read by the server (Open path).
   async openPath( folder ) {
-    this.status( I18n.get( "ais.reading_path" ) );
     try {
-      const batch = await Api.post( "/api/ais/batches/path" , { path: folder , randomize: Batches.randomize() } );
+      const stack = await Batches.askStackAt( folder );
+      if ( stack === false ) return;
+      this.status( I18n.get( "ais.reading_path" ) );
+      const batch = await Api.post( "/api/ais/batches/path" , Object.assign( { path: folder , randomize: Batches.randomize() } , stack ? { stack: stack } : {} ) );
       this.status( "" );
       await this.loadBatch( batch , null , { fresh: true } );
     } catch ( error ) {
@@ -416,11 +425,13 @@ const Ais = {
     }
     this.images = batch.images.map( ( image ) => {
       const files = {};
+      const picked = ( f ) => Object.assign( {} , f , { file: bySha ? bySha.get( f.sha ) || null : null } );
       Object.entries( image.files ).forEach( ( [ role , f ] ) => {
-        files[ role ] = Object.assign( {} , f , { file: bySha ? bySha.get( f.sha ) || null : null } );
+        files[ role ] = picked( f );
+        if ( f.slices ) files[ role ].slices = f.slices.map( picked );
       } );
       return { key: image.key , cell: image.cell , dir: image.dir , dup_of: image.dup_of , add_id: image.add_id ,
-        original_key: image.original_key , files: files , included: false };
+        original_key: image.original_key , z_stack: image.z_stack , files: files , included: false };
     } );
     this.applyInclusion();
     this.index = -1;
@@ -537,8 +548,29 @@ const Ais = {
   // image exists to read the profile from. A .czi is both: the server traces
   // a processed version of its AIS channel and profiles the channel itself.
   traced( entry ) {
+    if ( entry.files.stack ) return "stack";
     if ( entry.files.czi ) return "czi";
     return entry.files.processed ? "processed" : "raw";
+  },
+
+  // What a file name must look like to be a slice of a Z-stack: the same as
+  // app/analysis/zstack.py SLICE_RE, which decides.
+  stackRe: /^(.+?)_z([0-9]{1,4})(c[0-9+]+)?\.tiff?$/i,
+
+  // The files of an image that are really files. A Z-stack has one that
+  // stands for its slices, with a sha nothing can upload or download.
+  parts( entry ) {
+    return Object.values( entry.files ).flatMap( ( f ) => f.slices || [ f ] );
+  },
+
+  // µm per pixel on entry: a Z-stack came with its own.
+  pixconvFor( entry ) {
+    return entry && entry.z_stack ? entry.z_stack.pixel_um : Settings.pixconv();
+  },
+
+  // What the trace and detect bodies add for a Z-stack.
+  zBody( entry ) {
+    return entry.files.stack ? { z_method: Settings.zMethod() } : {};
   },
 
   sha( entry , role ) {
@@ -547,6 +579,7 @@ const Ais = {
   },
 
   kind( entry ) {
+    if ( entry.files.stack ) return "stack";
     if ( entry.files.czi ) return "czi";
     if ( entry.files.processed && entry.files.raw ) return "pair";
     return entry.files.processed ? "processed only" : "raw only";
@@ -555,7 +588,7 @@ const Ais = {
   // Both the traced and the profiled image are there: a pair, or a .czi.
   whole( entry ) {
     const kind = this.kind( entry );
-    return kind === "pair" || kind === "czi";
+    return kind === "pair" || kind === "czi" || kind === "stack";
   },
 
   // Indices of the images to step through, in list order.
@@ -756,32 +789,36 @@ const Ais = {
   // upload (once); Open-path files the server fetches itself; a file only
   // someone else has is "not uploaded yet" until they upload it.
   async upload( entry ) {
-    for ( const role of [ "processed" , "raw" , "czi" ] ) {
-      const f = entry.files[ role ];
-      if ( !f || f.stored ) continue;
+    for ( const f of this.parts( entry ) ) {
+      if ( f.stored ) continue;
       // Picked on the Batches screen (Add images) rather than here.
       if ( !f.file ) f.file = Batches.fileFor( f.sha );
       if ( !f.file ) throw new Error( I18n.get( "ais.not_uploaded" ) );
       if ( !f.pending ) {
         f.pending = ( async () => {
-          await Api.postBytes( "/api/ais/files" , f.file );
+          await Batches.uploadPatiently( f.file );
+          // entry may be the Images dialog's copy, which fileStored can't see.
+          f.stored = true;
           this.fileStored( f.sha );
         } )().finally( () => { f.pending = null; } );
       }
       await f.pending;
     }
+    if ( entry.files.stack ) entry.files.stack.stored = true;
   },
 
   // A file is on the server now (uploaded here or by the Batches screen):
   // every copy of the same bytes (duplicates) is.
   fileStored( sha ) {
-    this.images.forEach( ( entry ) => Object.values( entry.files ).forEach( ( f ) => {
-      if ( f.sha === sha ) f.stored = true;
-    } ) );
+    this.images.forEach( ( entry ) => {
+      this.parts( entry ).forEach( ( f ) => { if ( f.sha === sha ) f.stored = true; } );
+      const stack = entry.files.stack;
+      if ( stack ) stack.stored = stack.slices.every( ( f ) => f.stored );
+    } );
   },
 
   isStored( sha ) {
-    return this.images.some( ( entry ) => Object.values( entry.files ).some( ( f ) => f.sha === sha && f.stored ) );
+    return this.images.some( ( entry ) => this.parts( entry ).some( ( f ) => f.sha === sha && f.stored ) );
   },
 
   // After an import: upload every included image this browser picked,
@@ -791,7 +828,7 @@ const Ais = {
     this.uploadToken = token;
     const busy = new Set();
     const waiting = () => this.images.filter( ( entry ) => entry.included && !busy.has( entry ) &&
-      Object.values( entry.files ).some( ( f ) => !f.stored && f.file ) );
+      this.parts( entry ).some( ( f ) => !f.stored && f.file ) );
     const total = waiting().length;
     let done = 0;
     let failed = false;
@@ -951,7 +988,7 @@ const Ais = {
       raw: this.kind( entry ) === "pair" ? this.sha( entry , "raw" ) : null,
       cell: entry.cell,
       threshold: threshold ?? Settings.threshold(),
-      settings: settings || Settings.methodSettings(),
+      settings: Object.assign( {} , settings || Settings.methodSettings() , entry.z_stack ? { pixconv: entry.z_stack.pixel_um } : {} ),
       clicks: clicks || null,
     };
   },
@@ -1056,10 +1093,18 @@ const Ais = {
     } else if ( this.kind( entry ) === "pair" ) {
       list = [ { key: "raw" , name: "raw" , label: I18n.get( "ais.view_raw" ) , color: "#ffffff" ,
         src: "/api/ais/files/" + this.sha( entry , "raw" ) + "/view.png" } ];
+    } else if ( this.kind( entry ) === "stack" ) {
+      // The Z slider's, not buttons of their own (renderViews).
+      list = entry.files.stack.slices.map( ( f , i ) => ( { key: "z" + i , name: "z" + f.z , label: String( f.z ) , color: "#ffffff" ,
+        slice: true , src: "/api/ais/files/" + this.sha( entry ) + "/slice/" + i + ".png" } ) );
     }
     if ( this.index !== index ) return;
     if ( this.showSomata ) this.loadSomata( entry , index );
     this.views = { list: list , on: new Set( list.filter( ( v ) => this.viewWanted.includes( v.name ) ).map( ( v ) => v.key ) ) };
+    const slider = Dom.get( "ais-z-slider" );
+    slider.max = list.filter( ( v ) => v.slice ).length;
+    slider.value = 0;
+    this.sliceZ = null;
     this.views.list.filter( ( v ) => this.views.on.has( v.key ) ).forEach( ( v ) => this.loadViewImage( v , index ) );
     this.renderViews();
     if ( this.views.on.size ) {
@@ -1072,6 +1117,46 @@ const Ais = {
   channelLabel( name ) {
     const number = /(\d{3})\s*$/.exec( name );
     return number ? number[ 1 ] : name;
+  },
+
+  // A Z-stack's slider: 0 is the projection, else that slice, which draw()
+  // picks the trace out on where it runs at that depth.
+  setSlice( at ) {
+    if ( !this.views ) return;
+    const view = this.views.list.filter( ( v ) => v.slice )[ at - 1 ];
+    this.views.on.clear();
+    if ( view ) {
+      this.views.on.add( view.key );
+      this.loadViewImage( view , this.index );
+    }
+    this.sliceZ = view ? Number( view.label ) : null;
+    this.renderZ();
+    this.buildBitmap();
+    this.draw();
+  },
+
+  renderZ() {
+    const list = this.views ? this.views.list.filter( ( v ) => v.slice ) : [];
+    Dom.show( Dom.get( "ais-z" ) , list.length > 0 );
+    const view = list[ Number( Dom.get( "ais-z-slider" ).value ) - 1 ];
+    Dom.text( Dom.get( "ais-z-label" ) , view
+      ? I18n.get( "ais.z_slice" ).replace( "{z}" , view.label ).replace( "{n}" , list.length ) : I18n.get( "ais.z_projection" ) );
+  },
+
+  // Where a trace runs at the slice shown, within half a slice of it, drawn
+  // over everything else on it.
+  drawAtSlice( pixels , zPath , width ) {
+    if ( this.sliceZ == null || !zPath ) return;
+    let run = [];
+    const flush = () => {
+      this.polyline( run , SLICE_COLOUR , width );
+      run = [];
+    };
+    pixels.forEach( ( p , i ) => {
+      if ( zPath[ i ] != null && Math.abs( zPath[ i ] - this.sliceZ ) <= 0.5 ) run.push( p );
+      else flush();
+    } );
+    flush();
   },
 
   loadViewImage( view , index ) {
@@ -1123,8 +1208,9 @@ const Ais = {
   },
 
   renderViews() {
+    this.renderZ();
     const bar = Dom.get( "ais-channels" );
-    const list = this.views ? this.views.list : [];
+    const list = this.views ? this.views.list.filter( ( v ) => !v.slice ) : [];
     Dom.show( bar , list.length > 0 );
     if ( !list.length ) {
       Dom.clear( bar );
@@ -1551,7 +1637,7 @@ const Ais = {
         raw: this.kind( entry ) === "pair" ? this.sha( entry , "raw" ) : null,
         threshold: Settings.threshold(),
         settings: Settings.methodSettings(),
-      } , Settings.engine() , body ) );
+      } , Settings.engine() , this.zBody( entry ) , body ) );
       if ( this.images[ this.index ] !== entry ) return;
       const twoClicks = Settings.twoClicks() === "manual";
       if ( twoClicks && !body.click2 && result.rethresholded ) {
@@ -1629,7 +1715,9 @@ const Ais = {
     Dom.show( Dom.get( "ais-replay" ) , this.canMatlab() );
     if ( !r ) return;
     const m = r.measures;
-    Dom.text( Dom.get( "ais-length" ) , m ? m.length_str : I18n.get( "ais.no_length" ) );
+    const z = r.z;
+    Dom.text( Dom.get( "ais-length" ) , z ? this.fmt( z.length_3d_um ) : m ? m.length_str : I18n.get( "ais.no_length" ) );
+    Dom.text( Dom.get( "ais-length-kind" ) , z ? I18n.get( "ais.length_3d" ) : "" );
     const err = Dom.get( "ais-error" );
     Dom.text( err , r.error || "" );
     Dom.show( err , Boolean( r.error ) && !waitingForSecond );
@@ -1641,6 +1729,15 @@ const Ais = {
       dl.appendChild( Dom.el( "dt" , { text: I18n.get( "ais." + key ) } ) );
       dl.appendChild( Dom.el( "dd" , { text: value } ) );
     };
+    if ( z ) {
+      // What to set 3D against; length_um counts rounded pixels, so it isn't.
+      row( "m_xy" , this.fmt( z.length_xy_um ) + " µm" );
+      row( "m_z_range" , this.fmt( z.z_start ) + " → " + this.fmt( z.z_end ) );
+      row( "m_z_span" , this.fmt( z.z_span_um ) + " µm" );
+      row( "m_z_step" , this.fmt( z.z_step_um ) + " µm" );
+      row( "m_z_clarity" , Math.round( z.z_confidence * 100 ) + "%" );
+      row( "m_pixel_length" , m.length_str + " µm" );
+    }
     if ( m ) {
       row( "m_start" , this.fmt( m.start_um ) + " µm" );
       row( "m_end" , this.fmt( m.end_um ) + " µm" );
@@ -1659,6 +1756,7 @@ const Ais = {
     const notes = Dom.get( "ais-notes" );
     Dom.clear( notes );
     ( r.notes || [] ).forEach( ( note ) => notes.appendChild( Dom.el( "li" , { text: note } ) ) );
+    if ( z && z.z_clipped ) notes.appendChild( Dom.el( "li" , { text: I18n.get( "ais.z_clipped" ) } ) );
     this.renderProfile( r.profile );
     Dom.get( "ais-accept" ).disabled = !( r.ok && !waitingForSecond );
     Dom.text( Dom.get( "ais-accept" ).querySelector( "span" ) , I18n.get( this.editing ? "ais.update" : "ais.accept" ) );
@@ -1759,7 +1857,7 @@ const Ais = {
     };
     // The constants it was measured with (app/analysis/ais_auto.py Settings).
     AisExport.settingCols.forEach( ( key ) => { if ( key !== "smooth" ) row[ key ] = r.settings[ key ]; } );
-    return row;
+    return Object.assign( row , r.z || {} );
   },
 
   // Store a row for entry; throws what the server said. The caller redraws.
@@ -2015,7 +2113,8 @@ const Ais = {
       body.appendChild( Dom.el( "tr" , { children: [
         Dom.el( "td" , { class: "text-truncate ais-cell-name" , children: [ name ] } ),
         Dom.el( "td" , { text: row.n } ),
-        Dom.el( "td" , { text: row.length_str , class: "fw-semibold" } ),
+        Dom.el( "td" , { text: row.length_3d_um != null ? this.fmt( row.length_3d_um ) + " " + I18n.get( "ais.length_3d" ) : row.length_str ,
+          class: "fw-semibold" } ),
         Dom.el( "td" , { text: this.fmt( row.start_um ) } ),
         Dom.el( "td" , { text: this.fmt( row.end_um ) } ),
         Dom.el( "td" , { text: this.fmt( row.max_um ) } ),
@@ -2170,6 +2269,7 @@ const Ais = {
     if ( entry && this.layer( "saved" ) ) {
       this.savedRows( entry ).forEach( ( row ) => {
         this.polyline( row.pixels , "rgba(60, 220, 120, 0.9)" , lw );
+        this.drawAtSlice( row.pixels , row.z_path , lw * 2.5 );
         const p = row.pixels[ 0 ];
         if ( p ) {
           ctx.fillStyle = "rgba(60, 220, 120, 1)";
@@ -2201,6 +2301,7 @@ const Ais = {
       if ( r.skeleton && this.layer( "skeleton" ) ) this.dots( r.skeleton , "rgba(255, 40, 40, 0.95)" );
       if ( r.pixels && this.layer( "trace" ) ) this.polyline( r.pixels , "rgba(40, 110, 255, 1)" , lw );
       if ( r.spline && this.layer( "spline" ) ) this.polyline( r.spline , "rgba(255, 225, 0, 1)" , lw );
+      if ( r.pixels && r.z ) this.drawAtSlice( r.pixels , r.z.z_path , lw * 2.5 );
       if ( r.start ) this.cross( r.start , "rgba(255, 255, 255, 1)" , ( 4 + Settings.lineWidth() ) / s , lw );
     }
     // The click(s) where they are now: a nudge shows before its trace returns.

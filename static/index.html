@@ -238,6 +238,11 @@
                 </div>
                 <!-- What the image shows (Ais.toggleView): the processed image, or a .czi's channels / a pair's raw file blended; on a .czi, Soma outlines the cell bodies over it. Hidden until hovered at the top left, folded into one button; open, they run along the top until the mouse leaves. -->
                 <div id="ais-channels" class="ais-channels" role="group" data-i18n-attr="aria-label:ais.views" hidden></div>
+                <!-- A Z-stack's slices (Ais.setSlice): the projection, or one slice with the part of each trace at that depth picked out. -->
+                <div id="ais-z" class="ais-z" hidden>
+                  <span id="ais-z-label" class="small text-nowrap"></span>
+                  <input id="ais-z-slider" class="form-range" type="range" min="0" max="0" step="1" value="0" data-i18n-attr="aria-label:ais.z_slider" />
+                </div>
                 <!-- What a click on the image does (Ais.setTool): trace a new AIS, edit one, delete one, or measure (ais_measure.js). Each stays on until another is picked. -->
                 <div class="ais-tools btn-group btn-group-sm" role="group" data-i18n-attr="aria-label:ais.tools">
                   <button class="btn btn-dark" type="button" data-tool="trace" data-i18n-attr="title:ais.tool_trace,aria-label:ais.tool_trace" aria-pressed="true"><i class="bi bi-crosshair" aria-hidden="true"></i></button>
@@ -343,7 +348,7 @@
                 <h2 class="h5 card-title" data-i18n="ais.result_heading"></h2>
                 <p id="ais-result-none" class="text-body-secondary small" data-i18n="ais.result_none"></p>
                 <div id="ais-result" hidden>
-                  <div class="ais-length"><span id="ais-length"></span> <span class="small text-body-secondary">µm</span></div>
+                  <div class="ais-length"><span id="ais-length"></span> <span class="small text-body-secondary">µm</span> <span id="ais-length-kind" class="small text-body-secondary"></span></div>
                   <p id="ais-error" class="alert alert-warning small py-2" hidden></p>
                   <dl class="ais-measures small" id="ais-measures"></dl>
                   <div id="ais-profile" class="ais-profile"></div>
@@ -440,6 +445,52 @@
           <input id="batches-add-files" type="file" accept=".tif,.tiff,.czi,.txt" multiple hidden />
           <input id="batches-translation" type="file" accept=".txt,text/plain" hidden />
           <input id="batches-import-file" type="file" accept=".zip,application/zip" hidden />
+
+          <!-- What the files can't say about Z-stacks being added (Batches.askStack). -->
+          <div class="modal fade" id="batches-stack-modal" tabindex="-1" aria-labelledby="batches-stack-title" aria-hidden="true">
+            <div class="modal-dialog">
+              <form class="modal-content" id="batches-stack-form" autocomplete="off">
+                <div class="modal-header">
+                  <h2 class="modal-title h5 mb-0" id="batches-stack-title" data-i18n="batches.stack_title"></h2>
+                  <button type="button" class="btn-close" data-bs-dismiss="modal" data-i18n-attr="aria-label:nav.close"></button>
+                </div>
+                <div class="modal-body">
+                  <p id="batches-stack-found" class="small"></p>
+                  <fieldset class="mb-3">
+                    <legend class="form-label fs-6" data-i18n="batches.stack_channel"></legend>
+                    <div class="form-check form-check-inline">
+                      <input class="form-check-input" type="radio" name="batches-stack-plane" id="batches-stack-red" value="0" required />
+                      <label class="form-check-label" for="batches-stack-red" data-i18n="batches.stack_red"></label>
+                    </div>
+                    <div class="form-check form-check-inline">
+                      <input class="form-check-input" type="radio" name="batches-stack-plane" id="batches-stack-green" value="1" required />
+                      <label class="form-check-label" for="batches-stack-green" data-i18n="batches.stack_green"></label>
+                    </div>
+                  </fieldset>
+                  <div class="mb-3">
+                    <label for="batches-stack-z" class="form-label" data-i18n="batches.stack_z_step"></label>
+                    <div class="input-group">
+                      <input id="batches-stack-z" class="form-control" type="number" min="0.001" max="100" step="any" required aria-describedby="batches-stack-z-help" />
+                      <span class="input-group-text">µm</span>
+                    </div>
+                    <div id="batches-stack-z-help" class="form-text" data-i18n="batches.stack_z_step_help"></div>
+                  </div>
+                  <div class="mb-1">
+                    <label for="batches-stack-pixel" class="form-label" data-i18n="batches.stack_pixel"></label>
+                    <div class="input-group">
+                      <input id="batches-stack-pixel" class="form-control" type="number" min="0.0001" max="100" step="any" required aria-describedby="batches-stack-pixel-help" />
+                      <span class="input-group-text">µm/px</span>
+                    </div>
+                    <div id="batches-stack-pixel-help" class="form-text" data-i18n="batches.stack_pixel_help"></div>
+                  </div>
+                </div>
+                <div class="modal-footer">
+                  <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal" data-i18n="ais.cancel"></button>
+                  <button type="submit" class="btn btn-primary" data-i18n="batches.stack_add"></button>
+                </div>
+              </form>
+            </div>
+          </div>
 
           <!-- Reset results: an admin deletes a batch's AIS to run it again, a backup first (static/js/batches.js). -->
           <div class="modal fade" id="batches-reset-modal" tabindex="-1" aria-labelledby="batches-reset-title" aria-hidden="true">
@@ -758,6 +809,15 @@
                 <label for="settings-line-width" class="form-label"><span data-i18n="settings.line_width_label"></span> <span id="settings-line-width-value" class="text-body-secondary"></span></label>
                 <input id="settings-line-width" class="form-range" type="range" min="0.5" max="6" step="0.5" value="1.5" aria-describedby="settings-line-width-help" />
                 <div id="settings-line-width-help" class="form-text" data-i18n="settings.line_width_help"></div>
+              </div>
+            </fieldset>
+            <!-- How a Z-stack's AIS is measured (app/analysis/zlength.py). -->
+            <fieldset class="mb-3">
+              <legend class="h6" data-i18n="settings.z"></legend>
+              <div class="mb-3 settings-field">
+                <label for="settings-z-method" class="form-label" data-i18n="settings.z_method_label"></label>
+                <select id="settings-z-method" class="form-select" aria-describedby="settings-z-method-help"></select>
+                <div id="settings-z-method-help" class="form-text" data-i18n="settings.z_method_help"></div>
               </div>
             </fieldset>
             <!-- Auto mode on the Process screen (static/js/ais_auto.js): it runs

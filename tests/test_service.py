@@ -1,9 +1,12 @@
 """The JSON one click produces, on a synthetic image (no example data needed)."""
 from __future__ import annotations
 
+import io
+import json
 import struct
 
 import numpy as np
+import pytest
 
 from app.analysis import ais_auto as aa
 from app.analysis.service import run_click
@@ -264,3 +267,232 @@ def test_a_library_composites_a_czi_and_keeps_its_channel_list(tmp_path):
     tiff = library.add(_tiff(synthetic()[0]))["sha256"]
     with pytest.raises(ImageError):
         library.composite_png(tiff)
+
+
+# --- Z-stacks ----------------------------------------------------------------------
+
+
+def stack_planes(plane=1, slices=5):
+    """synthetic()'s axon rising through a stack: each slice holds the columns
+    at its depth, so the projection is the axon again. RGB with the axon in
+    plane, as ZEN's merged export."""
+    pic = synthetic()[0].astype(np.float64)
+    pic = pic / pic.max() * 255
+    depth = np.arange(pic.shape[1]) / pic.shape[1] * (slices - 1)
+    out = []
+    for z in range(slices):
+        rgb = np.zeros((*pic.shape, 3), np.uint8)
+        rgb[..., plane] = (pic * np.exp(-((depth - z) ** 2) / 0.5)).astype(np.uint8)
+        out.append(rgb)
+    return out
+
+
+OPTIONS = {"plane": 1, "z_step_um": 0.5, "pixel_um": 0.2}
+
+
+def stored_stack(tmp_path, planes=None, options=OPTIONS, zs=None):
+    """(Library, stack sha, slices), the stack known as a batch would know it."""
+    from app.analysis import zstack
+    from app.analysis.service import Library
+
+    known = {}
+    lib = Library(tmp_path, stacks=known.get)
+    planes = stack_planes() if planes is None else planes
+    zs = zs or range(1, len(planes) + 1)
+    parts = [{"z": z, "sha": lib.add(_tiff_bytes(p))["sha256"]} for z, p in zip(zs, planes)]
+    manifest = zstack.manifest(parts, options)
+    sha = zstack.sha(manifest)
+    known[sha] = manifest
+    return lib, sha, parts
+
+
+def test_a_stack_is_the_max_projection_of_its_chosen_plane(tmp_path):
+    planes = stack_planes(plane=1)
+    lib, sha, _ = stored_stack(tmp_path, planes)
+    assert lib.is_stack(sha) and not lib.is_czi(sha)
+    assert np.array_equal(lib.array(sha), np.stack([p[..., 1] for p in planes]).max(axis=0))
+    assert lib.stack(sha).shape == (5, *planes[0].shape[:2])
+
+
+def test_the_other_plane_is_another_stack(tmp_path):
+    lib, sha, _ = stored_stack(tmp_path, stack_planes(plane=1), OPTIONS | {"plane": 0})
+    assert not lib.array(sha).any()
+
+
+def test_a_grey_stack_has_only_its_one_plane_to_give(tmp_path):
+    grey = [p[..., 1] for p in stack_planes()]
+    lib, sha, _ = stored_stack(tmp_path, grey)
+    assert np.array_equal(lib.array(sha), np.stack(grey).max(axis=0))
+
+
+def test_an_ordinary_image_is_not_a_stack_and_costs_no_search(tmp_path):
+    from app.analysis.service import Library
+
+    asked = []
+    lib = Library(tmp_path, stacks=lambda sha: asked.append(sha))
+    sha = lib.add(_tiff_bytes(synthetic()[0]))["sha256"]
+    assert not lib.is_stack(sha)
+    assert np.array_equal(lib.array(sha), synthetic()[0])
+    assert asked == []
+
+
+def test_a_stack_is_not_a_file(tmp_path):
+    from app.analysis.service import NotStored
+
+    lib, sha, _ = stored_stack(tmp_path)
+    assert lib.is_stack(sha)
+    assert not lib.has(sha)
+    with pytest.raises(NotStored):
+        lib.file_path(sha)
+
+
+def test_requiring_a_stack_means_every_slice(tmp_path):
+    from app.analysis.service import NotStored
+
+    lib, sha, parts = stored_stack(tmp_path)
+    lib.require(sha)
+    lib.require(parts[0]["sha"])
+    (lib.files / f"{parts[2]['sha']}.tif").unlink()
+    with pytest.raises(NotStored):
+        lib.require(sha)
+
+
+def test_a_missing_slice_is_not_stored_rather_than_unreadable(tmp_path):
+    from app.analysis.service import NotStored
+
+    lib, sha, parts = stored_stack(tmp_path)
+    (lib.files / f"{parts[2]['sha']}.tif").unlink()
+    with pytest.raises(NotStored):
+        lib.array(sha)
+
+
+def test_the_manifest_comes_back_from_the_batch_if_its_copy_is_lost_or_spoiled(tmp_path):
+    from app.analysis import zstack
+    from app.analysis.service import Library
+
+    lib, sha, _ = stored_stack(tmp_path)
+    lib.is_stack(sha)
+    copy = lib.files / f"{sha}{zstack.SUFFIX}"
+    assert zstack.sha(json.loads(copy.read_bytes())) == sha
+
+    good = json.loads(copy.read_bytes())
+    fresh = Library(tmp_path, stacks={sha: good}.get)
+    copy.unlink()
+    assert fresh.is_stack(sha) and copy.exists()
+
+    copy.write_text('{"format": "spoiled"}')
+    fresh = Library(tmp_path, stacks={sha: good}.get)
+    assert fresh.is_stack(sha)
+    assert zstack.sha(json.loads(copy.read_bytes())) == sha
+
+
+def test_a_spoiled_copy_with_no_batch_behind_it_is_not_a_stack(tmp_path):
+    from app.analysis import zstack
+    from app.analysis.service import Library
+
+    sha = "a" * 64
+    lib = Library(tmp_path)
+    lib.files.mkdir(parents=True)
+    (lib.files / f"{sha}{zstack.SUFFIX}").write_text('{"format": "spoiled"}')
+    assert not lib.is_stack(sha)
+
+
+def test_slices_that_differ_in_size_are_refused(tmp_path):
+    from app.analysis.images import ImageError
+
+    planes = stack_planes()
+    planes[1] = planes[1][:-4]
+    lib, sha, _ = stored_stack(tmp_path, planes)
+    with pytest.raises(ImageError, match="differ in size"):
+        lib.array(sha)
+
+
+def test_a_click_on_a_stack_gets_3d_measures_at_the_stacks_own_pixel_size(tmp_path):
+    lib, sha, _ = stored_stack(tmp_path)
+    out = lib.trace(sha, None, (38.0, 101.0), None, 0.01)
+    assert out["ok"], out["error"]
+    assert out["settings"]["pixconv"] == OPTIONS["pixel_um"] and out["profile"]["pixconv"] == OPTIONS["pixel_um"]
+    z = out["z"]
+    assert z["z_method"] == "trace_lift" and z["z_step_um"] == 0.5
+    assert z["length_3d_um"] >= z["length_xy_um"] > 0
+    assert len(z["z_path"]) == len(out["pixels"])
+
+
+def test_the_fast_engine_gives_a_stack_the_same_answer(tmp_path):
+    lib, sha, _ = stored_stack(tmp_path)
+    assert lib.trace_fast(sha, None, (38.0, 101.0), None, 0.01)["z"] == lib.trace(sha, None, (38.0, 101.0), None, 0.01)["z"]
+
+
+def test_a_correct_pixel_size_in_settings_can_not_overrule_the_stack(tmp_path):
+    lib, sha, _ = stored_stack(tmp_path)
+    out = lib.trace(sha, None, (38.0, 101.0), None, 0.01, aa.Settings(pixconv=9.0))
+    assert out["settings"]["pixconv"] == OPTIONS["pixel_um"]
+
+
+def test_auto_mode_lifts_every_candidate(tmp_path):
+    lib, sha, _ = stored_stack(tmp_path)
+    for run in (lib.detect, lib.detect_fast):
+        found = run(sha, None, 0.01, aa.DEFAULT, "both")["candidates"]
+        assert found and all("z" in c for c in found)
+
+
+def test_a_soma_start_on_a_stack_says_it_needs_a_czi(tmp_path):
+    from app.analysis.images import ImageError
+
+    lib, sha, _ = stored_stack(tmp_path)
+    for run in (lib.detect, lib.detect_fast):
+        with pytest.raises(ImageError, match="soma"):
+            run(sha, None, 0.01, aa.DEFAULT, "soma")
+    assert lib.soma(sha) is None
+
+
+def test_a_trace_that_can_not_be_lifted_still_counts(tmp_path, monkeypatch):
+    from app.analysis import zlength
+    from app.analysis.service import UNLIFTED_NOTE
+
+    lib, sha, _ = stored_stack(tmp_path)
+
+    def broken(*_):
+        raise ValueError("no")
+
+    monkeypatch.setattr(zlength, "METHODS", (zlength.Method("trace_lift", "x", True, broken),))
+    out = lib.trace(sha, None, (38.0, 101.0), None, 0.01)
+    assert out["ok"] and out["z"] is None and UNLIFTED_NOTE in out["notes"]
+    assert out["measures"]["length_um"] > 0
+
+
+def test_an_ordinary_image_gets_no_z(tmp_path):
+    from app.analysis.service import Library
+
+    lib = Library(tmp_path)
+    sha = lib.add(_tiff_bytes(synthetic()[0]))["sha256"]
+    assert "z" not in lib.trace(sha, None, (38.0, 101.0), None, 0.01)
+
+
+def test_slices_share_one_scale_so_a_dim_slice_stays_dim(tmp_path):
+    from PIL import Image
+
+    bright = stack_planes()[2]
+    lib, sha, _ = stored_stack(tmp_path, [bright, bright // 8])
+    shown = [np.asarray(Image.open(io.BytesIO(lib.slice_png(sha, z)))).astype(float) for z in (0, 1)]
+    assert shown[1].max() < shown[0].max() / 4
+
+
+def test_a_slice_outside_the_stack_is_refused(tmp_path):
+    from app.analysis.images import ImageError
+
+    lib, sha, _ = stored_stack(tmp_path)
+    for index in (-1, 5):
+        with pytest.raises(ImageError, match="no such slice"):
+            lib.slice_png(sha, index)
+
+
+def test_a_stack_exports_like_a_czi_with_one_channel(tmp_path):
+    lib, sha, _ = stored_stack(tmp_path)
+    assert lib.channels(sha) == []
+    assert lib.composite_png(sha)[:4] == b"\x89PNG"
+    assert lib.thumbnail(sha)[:4] == b"\x89PNG"
+    assert lib.preview(sha)[:4] == b"\x89PNG"
+    assert lib.processed_tiff(sha)[:2] in (b"II", b"MM")
+    traced, raw = lib.matlab_pair(sha, None)
+    assert traced[:2] in (b"II", b"MM") and raw[:2] in (b"II", b"MM")

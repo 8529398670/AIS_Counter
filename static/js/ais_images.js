@@ -228,10 +228,11 @@ const AisImages = {
     const ctx = this.ctx;
     const pair = Ais.kind( entry ) === "pair";
     const czi = Ais.kind( entry ) === "czi";
+    const stack = entry.files.stack;
     const count = ctx.count( entry );
     const badges = [
-      Dom.el( "span" , { class: "badge " + ( pair || czi ? "text-bg-secondary" : "text-bg-warning" ) ,
-        text: I18n.get( czi ? "ais.czi" : pair ? "ais.pair" : "ais.single" ) } ),
+      Dom.el( "span" , { class: "badge " + ( pair || czi || stack ? "text-bg-secondary" : "text-bg-warning" ) ,
+        text: stack ? I18n.get( "ais.z_badge" ).replace( "{n}" , stack.slices.length ) : I18n.get( czi ? "ais.czi" : pair ? "ais.pair" : "ais.single" ) } ),
     ];
     if ( entry.dup_of != null ) {
       badges.push( Dom.el( "span" , { class: "badge text-bg-danger" , text: I18n.get( "ais.duplicate_of" ).replace( "{n}" , entry.dup_of + 1 ) } ) );
@@ -419,10 +420,11 @@ const AisImages = {
     if ( !entry || !holder ) return;
     const f = entry.files[ Ais.traced( entry ) ];
     // Picked on the Batches screen and still waiting to upload: read here too.
-    const picked = f.file || Batches.fileFor( f.sha );
-    // A .czi only the server can draw: picked here and not up yet (a new
-    // batch's still queued), so upload it now rather than say nobody has.
-    if ( !entry.thumb && picked && !f.stored && Ais.kind( entry ) === "czi" ) {
+    const picked = Ais.parts( entry ).some( ( part ) => part.file || Batches.fileFor( part.sha ) );
+    const serverOnly = Ais.kind( entry ) === "czi" || Ais.kind( entry ) === "stack";
+    // A .czi or Z-stack only the server can draw: picked here and not up yet
+    // (a new batch's still queued), so upload it now rather than say nobody has.
+    if ( !entry.thumb && picked && !f.stored && serverOnly ) {
       holder.replaceChildren( Dom.el( "span" , { class: "small text-body-tertiary px-2 text-center" ,
         text: I18n.get( "ais.uploading" ).replace( "{name}" , f.name ) } ) );
       try {
@@ -430,9 +432,9 @@ const AisImages = {
       } catch ( error ) { /* falls through to "not uploaded" */ }
     }
     if ( !entry.thumb ) {
-      if ( picked && Ais.kind( entry ) !== "czi" ) {
+      if ( picked && !serverOnly ) {
         try {
-          entry.thumb = await Tiff.thumbnail( picked , this.thumbSide );
+          entry.thumb = await Tiff.thumbnail( f.file || Batches.fileFor( f.sha ) , this.thumbSide );
         } catch ( error ) {
           entry.thumb = null;
         }

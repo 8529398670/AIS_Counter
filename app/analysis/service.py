@@ -18,10 +18,18 @@ A .czi is one whole cell (CZI mode): its AIS channel (Czi.ais_name, usually
 of the "Processed method 2.5" Fiji macro) and profiled from the raw, like a
 TIFF pair; its soma channel (Czi.soma_name, usually "AMCA") gives the somata
 auto mode starts from (soma.py), if it has one.
+
+A Z-stack (zstack.py) is many stored slices under one sha that isn't a file. It
+behaves like a .czi with no soma channel: the max projection of its AIS plane is
+the raw image, traced on a processed version of it, and each trace is then
+followed through the slices (zlength.py). Its manifest comes from the batch that
+holds it (`stacks`); the copy kept beside the files is only a cache.
 """
 from __future__ import annotations
 
+import dataclasses
 import hashlib
+import json
 import mmap
 import os
 import re
@@ -40,8 +48,10 @@ from app.analysis import fast
 from app.analysis import mlcompat as ml
 from app.analysis import preprocess
 from app.analysis import soma as somata
+from app.analysis import zlength, zstack
 from app.analysis.czi import is_czi, read_channels, read_czi
-from app.analysis.images import ImageError, composite_png, preview_png, read_tiff, thumbnail_png, tiff_bytes
+from app.analysis.images import (ImageError, composite_png, preview_png, read_planes, read_tiff, scaled_png,
+                                 thumbnail_png, tiff_bytes)
 
 class NotStored(ImageError):
     """The server does not have the file (yet), as opposed to having one it
@@ -50,16 +60,24 @@ class NotStored(ImageError):
 
 SHA_RE = re.compile(r"^[0-9a-f]{64}$")
 CACHE_SIZE = 6
+STACK_CACHE_SIZE = 2    # a whole stack each: the container has 256 MB
 CHANNEL_PERCENTILES = (0.1, 99.9)
 SINGLE_NOTE = "single image: traced and profiled from the same file (the original profiles the raw <cell>.tif)"
+UNLIFTED_NOTE = "could not follow this trace through the slices: no 3D length"
 
 
 class Library:
-    def __init__(self, storage_dir: Path, resolver: Callable[[str], str | None] | None = None) -> None:
+    def __init__(self, storage_dir: Path, resolver: Callable[[str], str | None] | None = None,
+                 stacks: Callable[[str], dict[str, Any] | None] | None = None) -> None:
         self.root = storage_dir / "ais"
         self.files = self.root / "files"
         # sha -> a path on this machine holding those bytes (Open-path batches).
         self.resolver = resolver
+        # sha -> a Z-stack's manifest, from the batch that holds it.
+        self.stacks = stacks
+        self._manifests: dict[str, dict[str, Any]] = {}
+        self._stacks: OrderedDict[str, np.ndarray] = OrderedDict()
+        self._levels: dict[str, np.ndarray] = {}
         self._lock = threading.Lock()
         self._prepared: OrderedDict[tuple, aa.PreparedImage] = OrderedDict()
         self._arrays: OrderedDict[str, np.ndarray] = OrderedDict()
@@ -101,7 +119,107 @@ class Library:
         return self._path(sha).exists() or self._path(sha, czi=True).exists()
 
     def is_czi(self, sha: str) -> bool:
-        return self.file_path(sha).suffix == ".czi"
+        return not self.is_stack(sha) and self.file_path(sha).suffix == ".czi"
+
+    def is_stack(self, sha: str) -> bool:
+        return self._manifest(sha) is not None
+
+    def _preprocessed(self, sha: str) -> bool:
+        """Whether its traced image is made here, by preprocess.py."""
+        return self.is_stack(sha) or self.is_czi(sha)
+
+    def _manifest(self, sha: str) -> dict[str, Any] | None:
+        """A Z-stack's manifest; None for anything else. Kept beside the files
+        as a cache, and always checked against its sha."""
+        with self._lock:
+            if sha in self._manifests:
+                return self._manifests[sha]
+        # Before anything else, so a stored image never costs a look through
+        # the batches.
+        if self._path(sha).exists() or self._path(sha, czi=True).exists():
+            return None
+        path = self.files / f"{sha}{zstack.SUFFIX}"
+        try:
+            found = json.loads(path.read_bytes())
+        except (OSError, ValueError):
+            found = None
+        if not (isinstance(found, dict) and zstack.sha(found) == sha):
+            found = self.stacks(sha) if self.stacks else None
+            if found is None or zstack.sha(found) != sha:
+                return None
+            self._store(path, zstack.canonical(found))
+        with self._lock:
+            self._manifests[sha] = found
+        return found
+
+    def require(self, sha: str) -> None:
+        """NotStored unless the file, or every slice of a Z-stack, is here."""
+        manifest = self._manifest(sha)
+        for part in manifest["slices"] if manifest else [{"sha": sha}]:
+            self.file_path(part["sha"])
+
+    def stack(self, sha: str) -> np.ndarray:
+        """A Z-stack's AIS plane as (slices, height, width). What a stack is
+        made from is decided here alone, so a .czi's own Z planes can come in
+        later without the rest changing."""
+        with self._lock:
+            if sha in self._stacks:
+                self._stacks.move_to_end(sha)
+                return self._stacks[sha]
+        manifest = self._manifest(sha)
+        if manifest is None:
+            raise ImageError("not a Z-stack")
+        planes = []
+        for part in manifest["slices"]:
+            arr = read_planes(self.file_path(part["sha"]).read_bytes())
+            if arr.shape[2] > 1 and manifest["plane"] >= arr.shape[2]:
+                raise ImageError("a slice has no such channel")
+            planes.append(arr[:, :, 0 if arr.shape[2] == 1 else manifest["plane"]])
+        if len({(p.shape, p.dtype) for p in planes}) != 1:
+            raise ImageError("the slices of a stack differ in size")
+        stack = np.stack(planes)
+        with self._lock:
+            self._stacks[sha] = stack
+            while len(self._stacks) > STACK_CACHE_SIZE:
+                self._stacks.popitem(last=False)
+        return stack
+
+    def slice_png(self, sha: str, index: int) -> bytes:
+        """One slice of a Z-stack, on the scale of the whole stack."""
+        stack = self.stack(sha)
+        if not 0 <= index < len(stack):
+            raise ImageError("no such slice")
+        lo, hi = np.percentile(self.array(sha), CHANNEL_PERCENTILES)
+        return scaled_png(stack[index], float(lo), float(hi))
+
+    def _calibrated(self, sha: str, settings: aa.Settings) -> aa.Settings:
+        """settings with a Z-stack's own pixel size, which beats any in Settings."""
+        manifest = self._manifest(sha)
+        return settings if manifest is None else dataclasses.replace(settings, pixconv=manifest["pixel_um"])
+
+    def _lifted(self, sha: str, answer: dict[str, Any], z_method: str | None) -> dict[str, Any]:
+        """answer (run_click's) with, on a Z-stack, its 3D measures as z: None
+        and a note when the trace can't be followed. The click still counts."""
+        manifest = self._manifest(sha)
+        if manifest is None or not answer.get("ok"):
+            return answer
+        chosen = zlength.method(z_method)
+        stack = self.stack(sha)
+        with self._lock:
+            levels = self._levels.get(sha)
+        if levels is None:
+            levels = zlength.slice_levels(stack)
+            with self._lock:
+                self._levels[sha] = levels
+        try:
+            found = chosen.run(stack, levels, [s["z"] for s in manifest["slices"]], answer,
+                               manifest["pixel_um"], manifest["z_step_um"])
+        except (ValueError, IndexError, ArithmeticError, ml.MatlabError):
+            found = None
+        answer["z"] = None if found is None else found | {"z_method": chosen.id}
+        if found is None:
+            answer.setdefault("notes", []).append(UNLIFTED_NOTE)
+        return answer
 
     def file_path(self, sha: str) -> Path:
         """The stored file, fetched in if it is known elsewhere (see the
@@ -139,7 +257,7 @@ class Library:
             if sha in self._arrays:
                 self._arrays.move_to_end(sha)
                 return self._arrays[sha]
-        arr = _read(self.file_path(sha).read_bytes())
+        arr = self.stack(sha).max(axis=0) if self.is_stack(sha) else _read(self.file_path(sha).read_bytes())
         with self._lock:
             self._arrays[sha] = arr
             while len(self._arrays) > CACHE_SIZE * 2:
@@ -155,7 +273,7 @@ class Library:
                 self._prepared.move_to_end(key)
                 return self._prepared[key]
         arr = self.array(sha)
-        prep = aa.PreparedImage.from_array(preprocess.processed(arr) if self.is_czi(sha) else arr, settings)
+        prep = aa.PreparedImage.from_array(preprocess.processed(arr) if self._preprocessed(sha) else arr, settings)
         with self._lock:
             self._prepared[key] = prep
             while len(self._prepared) > CACHE_SIZE:
@@ -199,7 +317,7 @@ class Library:
                 self._previews.move_to_end(sha)
                 return self._previews[sha]
         arr = self.array(sha)
-        png = preview_png(preprocess.processed(arr) if self.is_czi(sha) else arr)
+        png = preview_png(preprocess.processed(arr) if self._preprocessed(sha) else arr)
         with self._lock:
             self._previews[sha] = png
             while len(self._previews) > CACHE_SIZE * 4:
@@ -232,7 +350,10 @@ class Library:
         return preview_png(planes[index], CHANNEL_PERCENTILES)
 
     def composite_png(self, sha: str) -> bytes:
-        """A CZI's channels merged in their display colors, its PNG for an export."""
+        """A CZI's channels merged in their display colors, its PNG for an
+        export; a Z-stack's projection, as it holds one plane."""
+        if self.is_stack(sha):
+            return preview_png(self.array(sha), CHANNEL_PERCENTILES)
         if not self.is_czi(sha):
             raise ImageError("only a .czi has channels")
         image = read_czi(self.file_path(sha).read_bytes())
@@ -248,8 +369,8 @@ class Library:
         return tiff_bytes(planes[index])
 
     def processed_tiff(self, sha: str) -> bytes:
-        """A CZI's processed AIS channel (what is traced) as a TIFF."""
-        if not self.is_czi(sha):
+        """A CZI's or Z-stack's processed AIS channel (what is traced) as a TIFF."""
+        if not self._preprocessed(sha):
             raise ImageError("only a .czi is processed here")
         return tiff_bytes(preprocess.processed(self.array(sha)))
 
@@ -257,7 +378,7 @@ class Library:
         """The TIFFs ais_auto.m reads for this cell (app/analysis/matlab.py):
         the files themselves, or for a CZI the pair trace() uses -- its
         processed AIS channel and the AIS channel as ZEN exports it."""
-        if not raw and self.is_czi(processed):
+        if not raw and self._preprocessed(processed):
             arr = self.array(processed)
             return tiff_bytes(preprocess.processed(arr)), tiff_bytes(arr)
         return self.file_path(processed).read_bytes(), self.file_path(raw).read_bytes() if raw else None
@@ -267,11 +388,12 @@ class Library:
 
     def trace(self, processed: str, raw: str | None,
               click: tuple[float, float], click2: tuple[float, float] | None,
-              threshold: float, settings: aa.Settings = aa.DEFAULT) -> dict[str, Any]:
+              threshold: float, settings: aa.Settings = aa.DEFAULT, z_method: str | None = None) -> dict[str, Any]:
+        settings = self._calibrated(processed, settings)
         prep = self.prepared(processed, settings)
-        if not raw and self.is_czi(processed):
-            return run_click(prep, self.array(processed), click, click2, threshold, settings,
-                             bright_ref=self.bright_ref(processed))
+        if not raw and self._preprocessed(processed):
+            return self._lifted(processed, run_click(prep, self.array(processed), click, click2, threshold, settings,
+                                                     bright_ref=self.bright_ref(processed)), z_method)
         if not raw:
             # Only one file for this cell: profile the image that was traced.
             out = run_click(prep, prep.pic, click, click2, threshold, settings, bright_ref=self.bright_ref(processed))
@@ -284,10 +406,15 @@ class Library:
 
     def detect(self, processed: str, raw: str | None, threshold: float,
                settings: aa.Settings = aa.DEFAULT, start: str = "both",
-               exclude: list[list[list[int]]] | None = None) -> dict[str, Any]:
+               exclude: list[list[list[int]]] | None = None, z_method: str | None = None) -> dict[str, Any]:
         """Auto mode: every AIS on the image (app/analysis/detect.py). On a
         CZI, with the somata it found (start "soma" needs them)."""
+        settings = self._calibrated(processed, settings)
         prep = self.prepared(processed, settings)
+        if not raw and self.is_stack(processed) and start != "soma":
+            out = auto.detect(prep, self.array(processed), threshold, settings, start, exclude)
+            out["candidates"] = [self._lifted(processed, c, z_method) for c in out["candidates"]]
+            return out
         if not raw and self.is_czi(processed):
             soma = self.soma(processed)
             if start == "soma" and soma is None:
@@ -307,13 +434,14 @@ class Library:
 
     def trace_fast(self, processed: str, raw: str | None,
                    click: tuple[float, float], click2: tuple[float, float] | None,
-                   threshold: float, settings: aa.Settings = aa.DEFAULT) -> dict[str, Any]:
+                   threshold: float, settings: aa.Settings = aa.DEFAULT, z_method: str | None = None) -> dict[str, Any]:
         """trace on Settings' Method "ais_auto.m (fast)" (fast.py): the same
         answer, from crops."""
+        settings = self._calibrated(processed, settings)
         prep = self.prepared(processed, settings)
-        if not raw and self.is_czi(processed):
-            return fast.run_click(prep, self.array(processed), click, click2, threshold, settings,
-                                  bright_ref=self.bright_ref(processed))
+        if not raw and self._preprocessed(processed):
+            return self._lifted(processed, fast.run_click(prep, self.array(processed), click, click2, threshold, settings,
+                                                          bright_ref=self.bright_ref(processed)), z_method)
         if not raw:
             out = fast.run_click(prep, prep.pic, click, click2, threshold, settings, bright_ref=self.bright_ref(processed))
             out.setdefault("notes", []).insert(0, SINGLE_NOTE)
@@ -325,9 +453,14 @@ class Library:
 
     def detect_fast(self, processed: str, raw: str | None, threshold: float,
                     settings: aa.Settings = aa.DEFAULT, start: str = "both",
-                    exclude: list[list[list[int]]] | None = None) -> dict[str, Any]:
+                    exclude: list[list[list[int]]] | None = None, z_method: str | None = None) -> dict[str, Any]:
         """detect on Settings' Method "ais_auto.m (fast)" (fast.py)."""
+        settings = self._calibrated(processed, settings)
         prep = self.prepared(processed, settings)
+        if not raw and self.is_stack(processed) and start != "soma":
+            out = fast.detect(prep, self.array(processed), threshold, settings, start, exclude)
+            out["candidates"] = [self._lifted(processed, c, z_method) for c in out["candidates"]]
+            return out
         if not raw and self.is_czi(processed):
             soma = self.soma(processed)
             if start == "soma" and soma is None:

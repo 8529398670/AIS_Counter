@@ -56,6 +56,7 @@ import threading
 import time
 from typing import Any, Callable
 
+from app.analysis import zstack
 from app.core.db import BUCKET_AIS_BATCHES, BUCKET_AIS_MEASUREMENTS, BUCKET_AIS_RESULTS, Record, Store
 from app.models import to_iso, utc_now
 
@@ -65,6 +66,7 @@ TIFF_RE = re.compile(r"\.tiff?$", re.IGNORECASE)
 CZI_RE = re.compile(r"\.czi$", re.IGNORECASE)
 MAX_FILES = 5000
 MAX_TEXT = 1000
+ROLES = ("processed", "raw", "czi", "stack")
 SOURCES = ("upload", "path")    # "mixed" once a batch has had both
 MAX_SHARES = 100
 # A cell already blinded the RandomNames.bat way, and the ending Zen's Image
@@ -96,6 +98,10 @@ RESULT_TEXTS = ("length_str", "source", "notes", "file", "sha", "smooth", "origi
 # A line the Measure tool recorded on an image, AIS or not: its ends in MATLAB
 # axes, its length, and the pixel size that length was worked out with.
 MEASUREMENT_NUMBERS = ("a_x", "a_y", "b_x", "b_y", "length_px", "length_um", "pixconv")
+# What a row measured on a Z-stack adds (app/analysis/zlength.py). Kept apart
+# from RESULT_NUMBERS so a row on an ordinary image stays exactly as it was:
+# these are written only when present. z_clipped is 0 or 1.
+Z_NUMBERS = ("length_3d_um", "length_xy_um", "z_start", "z_end", "z_span_um", "z_step_um", "z_confidence", "z_clipped")
 
 
 class BatchError(ValueError):
@@ -143,10 +149,52 @@ def clean_files(files: Any) -> list[dict[str, Any]]:
     return out
 
 
-def group(files: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _folder(f: dict[str, Any]) -> str:
+    """The folder a file is in, inside what was picked."""
+    parts = f["rel"].replace("\\", "/").split("/")
+    return "/".join(parts[1:-1]) if len(parts) > 2 else ""
+
+
+def _stack_image(folder: str, cell: str, slices: list[dict[str, Any]], options: dict[str, Any]) -> dict[str, Any]:
+    """A Z-stack as one image: one file, standing for its slices (zstack.py)."""
+    name = cell + zstack.SUFFIX
+    head, sep, _ = slices[0]["rel"].replace("\\", "/").rpartition("/")
+    file = {"name": name, "rel": head + sep + name, "sha": zstack.sha(zstack.manifest(slices, options)),
+            "size": sum(s["size"] for s in slices), "slices": slices}
+    return {"key": f"{folder}/{cell}" if folder else cell, "cell": cell, "dir": folder, "files": {"stack": file},
+            "z_stack": {"count": len(slices)} | options}
+
+
+def _take_stacks(files: list[dict[str, Any]], options: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """(Z-stacks as images, the files left over). A stack is two or more
+    slices of a cell in one folder with the same channel ending; a lone slice
+    stays an ordinary image."""
+    found: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+    for f in files:
+        parsed = None if f["name"].startswith(".") else zstack.parse(f["name"])
+        if parsed:
+            cell, z, tail = parsed
+            found.setdefault((_folder(f), cell, tail), []).append(f | {"z": z})
+    stacks = {k: sorted(v, key=lambda s: s["z"]) for k, v in found.items() if len(v) >= zstack.MIN_SLICES}
+    tails: dict[tuple[str, str], int] = {}
+    for folder, cell, _ in stacks:
+        tails[folder, cell] = tails.get((folder, cell), 0) + 1
+    images, used = [], set()
+    for (folder, cell, tail), slices in stacks.items():
+        zs = [s["z"] for s in slices]
+        if len(set(zs)) != len(zs):
+            raise BatchError(f"{cell} has two slices with the same z")
+        used |= {s["rel"] for s in slices}
+        images.append(_stack_image(folder, f"{cell}_{tail}" if tail and tails[folder, cell] > 1 else cell, slices, options))
+    return images, [f for f in files if f["rel"] not in used]
+
+
+def group(files: list[dict[str, Any]], stack: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     """Files -> images, sorted by folder and cell. A cell is keyed by its
     folder inside the batch too, so same-named files in two subfolders stay two
-    images. dup_of is the index of the first image with the same bytes."""
+    images. dup_of is the index of the first image with the same bytes. With
+    stack (zstack.clean_options), Z-stack slices make one image each stack."""
+    stacks, files = _take_stacks(files, stack) if stack else ([], files)
     images: dict[str, dict[str, Any]] = {}
     for f in files:
         name = f["name"]
@@ -160,16 +208,14 @@ def group(files: list[dict[str, Any]]) -> list[dict[str, Any]]:
             cell, role = CZI_RE.sub("", name), "czi"
         else:
             continue
-        parts = f["rel"].replace("\\", "/").split("/")
-        folder = "/".join(parts[1:-1]) if len(parts) > 2 else ""
+        folder = _folder(f)
         key = f"{folder}/{cell}" if folder else cell
         image = images.setdefault(key, {"key": key, "cell": cell, "dir": folder, "files": {}})
         image["files"][role] = f
-    ordered = sorted(images.values(), key=lambda im: (im["dir"].lower(), im["cell"].lower(), im["key"]))
-    seen: dict[tuple[str, str], int] = {}
+    ordered = sorted([*images.values(), *stacks], key=lambda im: (im["dir"].lower(), im["cell"].lower(), im["key"]))
+    seen: dict[tuple[str, ...], int] = {}
     for i, image in enumerate(ordered):
-        files_ = image["files"]
-        signature = tuple(files_.get(role, {}).get("sha", "") for role in ("processed", "raw", "czi"))
+        signature = _signature(image)
         if signature in seen:
             image["dup_of"] = seen[signature]
         else:
@@ -205,9 +251,13 @@ def _blind_image(image: dict[str, Any], taken: set[str]) -> dict[str, Any]:
     cell = image["cell"]
     ending = ZEN_SUFFIX_RE.search(cell)
     suffix = ending.group(0) if ending else ""
+    # A stack's folder is usually named after it, so it goes too. Its slices
+    # keep their names at rest and are hidden when sent (routes/ais.py).
+    stack = "stack" in image["files"]
+    folder = "" if stack else image["dir"]
     while True:
         new = "-".join(str(secrets.randbelow(32768)) for _ in range(3)) + suffix
-        key = f"{image['dir']}/{new}" if image["dir"] else new
+        key = f"{folder}/{new}" if folder else new
         if key not in taken:
             break
     taken.add(key)
@@ -219,13 +269,20 @@ def _blind_image(image: dict[str, Any], taken: set[str]) -> dict[str, Any]:
         head, sep, _ = f["rel"].replace("\\", "/").rpartition("/")
         kept = ({"earlier": f.get("earlier", []) + [f["name"]]} if blinded
                 else {"original": {"name": f["name"], "rel": f["rel"]}})
-        files[role] = f | {"name": name, "rel": head + sep + name} | kept
-    out = image | {"key": key, "cell": new, "files": files}
+        files[role] = f | {"name": name, "rel": name if stack else head + sep + name} | kept
+    out = image | {"key": key, "cell": new, "dir": folder, "files": files}
     if blinded:
         out["earlier_keys"] = image.get("earlier_keys", []) + [image["key"]]
     else:
         out |= {"original_cell": cell, "original_key": image["key"]}
+        if stack:
+            out["original_dir"] = image["dir"]
     return out
+
+
+def real_files(image: dict[str, Any]) -> list[dict[str, Any]]:
+    """The image's files on disk: a stack's slices stand in for its file."""
+    return [part for f in image["files"].values() for part in f.get("slices", [f])]
 
 
 def excluded_keys(batch: Record) -> set[str]:
@@ -248,7 +305,9 @@ def translation(batch: Record) -> str:
     for image in batch["images"]:
         for f in image["files"].values():
             if "original" in f:
-                lines.append(f"{f['original']['name']}/{f['name']}")
+                # Stacks of two slides can share a cell, and "/" would split the line.
+                folder = image.get("original_dir", "").replace("/", "__")
+                lines.append(f"{folder + '__' if folder else ''}{f['original']['name']}/{f['name']}")
             earlier += [f"{old}/{f['name']}" for old in f.get("earlier", [])]
     # Names given before a folder was randomized again, so exports made
     # under them can still be read.
@@ -320,7 +379,7 @@ def _name_image(image: dict[str, Any], names: dict[str, str]) -> dict[str, Any]:
                        else re.sub(r"\.[^.]*$", "", old))
     if not cells:
         return image
-    original = next(cells[role] for role in ("czi", "raw", "processed") if role in cells)
+    original = next(cells[role] for role in ("czi", "raw", "processed", "stack") if role in cells)
     return image | {"files": files, "original_cell": original,
                     "original_key": f"{image['dir']}/{original}" if image["dir"] else original}
 
@@ -429,9 +488,22 @@ def rerandomize(store: Store, batch_id: int, add_id: Any) -> tuple[Record, int, 
             if a["id"] == add_id:
                 a["randomized"] = True
                 a["rerandomized_at"] = to_iso(utc_now())
+                if any("z_stack" in batch["images"][i] for i in picked):
+                    _hide_add(a, batch)
         _stamp(batch)
         tx.put(BUCKET_AIS_BATCHES, batch_id, batch)
     return batch, len(picked), len(measured)
+
+
+def _hide_add(add: dict[str, Any], record: Record) -> None:
+    """An add of blinded stacks under the batch's own name, and with no path:
+    what was picked is usually a stack's folder, so both say what it is. What
+    they were stays for admins (routes/ais.py strips it for everyone else)."""
+    if "original_name" not in add:
+        add |= {"original_name": add["name"], "original_path": add["path"]}
+    if record.get("path") and record["path"] == add["path"]:
+        record["path"] = None
+    add |= {"name": record["name"], "path": None}
 
 
 def _add(record: Record, images: list[dict[str, Any]], source: str, path: str | None,
@@ -451,6 +523,8 @@ def _add(record: Record, images: list[dict[str, Any]], source: str, path: str | 
                  "path": path, "added_at": to_iso(utc_now()), "added_by": user_id,
                  "randomized": any("original_cell" in im for im in added),
                  "count": len(added)})
+    if any("z_stack" in im and "original_cell" in im for im in added):
+        _hide_add(adds[-1], record)
 
 
 def set_included(store: Store, batch_id: int, keys: Any, included: Any) -> Record | None:
@@ -543,20 +617,30 @@ def merge(existing: list[dict[str, Any]], added: list[dict[str, Any]]) -> list[d
 
 
 def _signature(image: dict[str, Any]) -> tuple[str, ...]:
-    return tuple(image["files"].get(role, {}).get("sha", "") for role in ("processed", "raw", "czi"))
+    return tuple(image["files"].get(role, {}).get("sha", "") for role in ROLES)
+
+
+def _stack_options(stack: Any) -> dict[str, Any] | None:
+    if stack is None:
+        return None
+    try:
+        return zstack.clean_options(stack)
+    except ValueError as exc:
+        raise BatchError(str(exc)) from exc
 
 
 def add_files(store: Store, batch_id: int, source: str, files: Any, path: str | None = None, *,
               randomize_names: bool = False, user_id: int | None = None, name: str | None = None,
-              translations: Any = None) -> Record | None:
+              translations: Any = None, stack: Any = None) -> Record | None:
     """More files into a batch: a folder or files picked later, named by the
     __Translation.txt files that came with them (clean_translations), blinded
-    with randomize_names, recorded as one add called name. None when the batch is
-    gone. A batch fed from both the browser and a server folder becomes
-    source "mixed"."""
+    with randomize_names, recorded as one add called name. With stack
+    (zstack.clean_options), Z-stack slices become one image each stack. None
+    when the batch is gone. A batch fed from both the browser and a server
+    folder becomes source "mixed"."""
     if source not in SOURCES:
         raise BatchError("unknown source")
-    images = group(clean_files(files))
+    images = group(clean_files(files), _stack_options(stack))
     if not images:
         raise BatchError("no TIFF or CZI files")
     images = name_images(images, clean_translations(translations))
@@ -576,12 +660,13 @@ def add_files(store: Store, batch_id: int, source: str, files: Any, path: str | 
 
 
 def create_batch(store: Store, name: str, source: str, files: list[dict[str, Any]], user_id: int,
-                 path: str | None = None, *, randomize_names: bool = False, translations: Any = None) -> Record:
+                 path: str | None = None, *, randomize_names: bool = False, translations: Any = None,
+                 stack: Any = None) -> Record:
     """A batch with its files in one go (Open folder, Open path), named by
     the __Translation.txt files that came with them."""
     if source not in SOURCES:
         raise BatchError("unknown source")
-    images = group(clean_files(files))
+    images = group(clean_files(files), _stack_options(stack))
     if not images:
         raise BatchError("no TIFF or CZI files")
     images = name_images(images, clean_translations(translations))
@@ -676,7 +761,7 @@ def list_batches(store: Store, viewer_id: int | None = None,
         by_image = rows.get(batch["id"], {})
         assignees = progress(batch, by_image)
         mine = next((a for a in assignees if a["user_id"] == viewer_id), None)
-        files = [f for im in batch["images"] for f in im["files"].values()]
+        files = [f for im in batch["images"] for f in real_files(im)]
         included = included_keys(batch)
         item = ({k: batch[k] for k in ("id", "name", "source", "path", "created_by", "created_at")}
                 | {"updated_at": batch.get("updated_at", batch["created_at"]),
@@ -708,7 +793,7 @@ def image_status(batch: Record, rows: list[Record], has: Callable[[dict[str, Any
     excluded = excluded_keys(batch)
     out = []
     for image in batch["images"]:
-        files = list(image["files"].values())
+        files = real_files(image)
         accepted = by_image.get(image["key"], [])
         item = {"key": image["key"], "cell": image["cell"], "dir": image["dir"],
                 "files": len(files), "stored": sum(1 for f in files if has(f)),
@@ -890,12 +975,23 @@ def progress(batch: Record, by_image: dict[str, list[Record]]) -> list[dict[str,
 def local_path_for(store: Store, sha: str) -> str | None:
     """Where an Open-path batch found the file with this sha, if any."""
     for _, batch in store.all(BUCKET_AIS_BATCHES):
-        if batch["source"] != "path":
+        if batch["source"] not in ("path", "mixed"):
             continue
         for image in batch["images"]:
-            for f in image["files"].values():
+            for f in real_files(image):
                 if f["sha"] == sha and f.get("path"):
                     return f["path"]
+    return None
+
+
+def stack_for(store: Store, sha: str) -> dict[str, Any] | None:
+    """The manifest of the Z-stack with this sha, from the batch record that
+    holds it, for Library to keep a copy of."""
+    for _, batch in store.all(BUCKET_AIS_BATCHES):
+        for image in batch["images"]:
+            f = image["files"].get("stack")
+            if f and f["sha"] == sha:
+                return zstack.manifest(f["slices"], image["z_stack"])
     return None
 
 
@@ -920,6 +1016,29 @@ def clean_row(row: Any) -> dict[str, Any]:
                        for p in pixels)):
         raise BatchError("pixels must be [x, y] pairs")
     out["pixels"] = pixels
+    return out | _clean_z(row, len(pixels))
+
+
+def _clean_z(row: dict[str, Any], pixels: int) -> dict[str, Any]:
+    """A row's Z-stack measures, only those it has: nothing on a row measured
+    on an ordinary image. z_path is the z of each of pixels, None outside the
+    AIS, so a length can be worked out again if the z step was wrong."""
+    out: dict[str, Any] = {}
+    for k in Z_NUMBERS:
+        v = row.get(k)
+        if v is not None:
+            if not isinstance(v, (int, float)) or isinstance(v, bool) or not math.isfinite(v):
+                raise BatchError(f"{k} must be a number")
+            out[k] = v
+    if row.get("z_method"):
+        out["z_method"] = _text(row["z_method"], "z_method")
+    path = row.get("z_path")
+    if path is not None:
+        if (not isinstance(path, list) or len(path) != pixels
+                or not all(z is None or (isinstance(z, (int, float)) and not isinstance(z, bool) and math.isfinite(z))
+                           for z in path)):
+            raise BatchError("z_path must give a z for each pixel")
+        out["z_path"] = path
     return out
 
 
@@ -1135,11 +1254,14 @@ def backup_batch(store: Store, batch_id: int) -> Record | None:
     batch = get_batch(store, batch_id)
     if batch is None:
         return None
-    images = [im | {"files": {role: {k: v for k, v in f.items() if k != "path"} for role, f in im["files"].items()}}
-              for im in batch["images"]]
+    def pathless(f: dict[str, Any]) -> dict[str, Any]:
+        return {k: [pathless(s) for s in v] if k == "slices" else v for k, v in f.items() if k != "path"}
+
+    images = [im | {"files": {role: pathless(f) for role, f in im["files"].items()}} for im in batch["images"]]
     kept = {k: v for k, v in batch.items() if k != "assignment"}
     return {"batch": kept | {"path": None, "images": images, "excluded": sorted(excluded_keys(batch)),
-                             "adds": [a | {"path": None} for a in batch.get("adds", [])]},
+                             "adds": [{k: v for k, v in a.items() if k != "original_path"} | {"path": None}
+                                      for a in batch.get("adds", [])]},
             "results": list_results(store, batch_id),
             "measurements": list_measurements(store, batch_id)}
 
@@ -1197,14 +1319,37 @@ def _restored_file(f: Any) -> dict[str, Any]:
     return out
 
 
+def _restored_stack(f: Any, options: dict[str, Any]) -> dict[str, Any]:
+    """A stack's file, its slices checked and its sha worked out again, since
+    a manifest is only as good as the record it comes from."""
+    out = _restored_file(f)
+    slices = f.get("slices")
+    if not isinstance(slices, list) or not zstack.MIN_SLICES <= len(slices) <= MAX_FILES:
+        raise BatchError("a stack needs its slices")
+    restored = [_restored_file(s) | {"z": _whole(s.get("z"), "z")} for s in slices]
+    if len({s["z"] for s in restored}) != len(restored):
+        raise BatchError("two slices share a z")
+    if zstack.sha(zstack.manifest(restored, options)) != out["sha"]:
+        raise BatchError("a stack does not match its slices")
+    return out | {"slices": restored}
+
+
 def _restored_image(image: Any, count: int) -> dict[str, Any]:
     if not isinstance(image, dict) or not isinstance(image.get("files"), dict) or not image["files"]:
         raise BatchError("each image needs its files")
-    if not set(image["files"]) <= {"raw", "processed", "czi"}:
+    if not set(image["files"]) <= set(ROLES):
         raise BatchError("unknown file role")
+    options = _stack_options(image.get("z_stack")) if "stack" in image["files"] else None
+    if "stack" in image["files"] and options is None:
+        raise BatchError("a stack needs its plane and calibration")
     out: dict[str, Any] = {"key": _text(image.get("key"), "key"), "cell": _text(image.get("cell"), "cell"),
                            "dir": _text(image.get("dir", ""), "dir", empty=True),
-                           "files": {role: _restored_file(f) for role, f in image["files"].items()}}
+                           "files": {role: _restored_stack(f, options) if role == "stack" else _restored_file(f)
+                                     for role, f in image["files"].items()}}
+    if options:
+        out["z_stack"] = {"count": len(out["files"]["stack"]["slices"])} | options
+    if image.get("original_dir") is not None:
+        out["original_dir"] = _text(image["original_dir"], "original_dir", empty=True)
     if image.get("dup_of") is not None:
         out["dup_of"] = _whole(image["dup_of"], "dup_of")
         if out["dup_of"] >= count:
@@ -1279,6 +1424,8 @@ def import_batch(store: Store, data: Any, local_users: dict[int, str], user_id: 
                            "source": "upload", "path": None, "added_at": _date(a.get("added_at"), "added_at"),
                            "added_by": person(a.get("added_by")), "randomized": bool(a.get("randomized")),
                            "count": _whole(a.get("count", 0), "count")})
+        if a.get("original_name") is not None:
+            clean_adds[-1] |= {"original_name": _text(a["original_name"], "add name"), "original_path": None}
     if {im["add_id"] for im in restored if "add_id" in im} - {a["id"] for a in clean_adds}:
         raise BatchError("an image names an add the batch does not have")
 

@@ -15,6 +15,9 @@ const AisExport = {
     "threshold_initial" , "threshold" , "click_x" , "click_y" , "click2_x" , "click2_y" , "profile_points" ,
     "smooth" , "pixconv" , "f" , "kernel" , "sigma" , "strel" , "min_pixels" , "max_path" , "max_passes" , "spline_p" , "window_um" ,
     "width_um" , "brightness" , "soma_um" , "soma_px" , "soma_ais_x" , "soma_ais_y" , "soma_x" , "soma_y" , "origin" , "accepted_at" , "edited_at" , "notes" ],
+  // What a row measured on a Z-stack adds, at the end so nothing else moves,
+  // and only when there are such rows (colsFor).
+  zCols: [ "length_3d_um" , "length_xy_um" , "z_start" , "z_end" , "z_span_um" , "z_step_um" , "z_confidence" , "z_clipped" , "z_method" ],
   // A line the Measure tool recorded (Record): its own file and sheet, since it
   // is no AIS and an image may have them without having any AIS.
   measureCols: [ "batch_name" , "batch_id" , "image" , "n" , "label" , "length_um" , "length_px" , "a_x" , "a_y" , "b_x" , "b_y" ,
@@ -187,8 +190,12 @@ const AisExport = {
     if ( this.optionsGo ) this.optionsGo( options );
   },
 
+  colsFor( rows ) {
+    return rows.some( ( row ) => row.z_method ) ? this.cols.concat( this.zCols ) : this.cols;
+  },
+
   csv( rows ) {
-    return this.table( this.cols , rows );
+    return this.table( this.colsFor( rows ) , rows );
   },
 
   measurementsCsv( lines ) {
@@ -347,7 +354,8 @@ const AisExport = {
     items.forEach( ( { batch: b } ) => ( b.assignees || [] ).forEach( ( a ) => assignees.push( [
       b.name , a.name || "" , a.images , a.completed , Math.round( a.percent ) , a.ais , date( a.last_at ) ] ) ) );
     const ais = [];
-    items.forEach( ( { rows } ) => rows.forEach( ( row ) => ais.push( this.cols.map( ( c ) => row[ c ] ) ) ) );
+    const aisCols = this.colsFor( items.flatMap( ( { rows } ) => rows ) );
+    items.forEach( ( { rows } ) => rows.forEach( ( row ) => ais.push( aisCols.map( ( c ) => row[ c ] ) ) ) );
     const lines = items.flatMap( ( item ) => item.measurements || [] ).map( ( line ) => this.measureCols.map( ( c ) => line[ c ] ) );
     const measured = lines.length ? [ { name: I18n.get( "report.sheet_measurements" ) , rows: lines , cols: this.measureCols } ] : [];
     return [
@@ -355,7 +363,7 @@ const AisExport = {
         "images" , "completed" , "duplicates" , "ais" , "mean_um" , "median_um" , "sd_um" , "min_um" , "max_um" , "ais_per_image" ] ) },
       { name: I18n.get( "report.sheet_images" ) , rows: images , cols: this.header( [ "batch" , "image" , "state" , "ais" , "mean_um" , "median_um" , "assignee" ] ) },
       { name: I18n.get( "report.sheet_assignees" ) , rows: assignees , cols: this.header( [ "batch" , "person" , "images" , "completed" , "percent" , "ais" , "last_activity" ] ) },
-      { name: I18n.get( "report.sheet_ais" ) , rows: ais , cols: this.cols },
+      { name: I18n.get( "report.sheet_ais" ) , rows: ais , cols: aisCols },
     ].concat( measured );
   },
 
@@ -448,12 +456,14 @@ const AisExport = {
     const stored = new Set( parts.flatMap( ( part ) => part.stored ) );
     const entries = new Map();   // zip name -> url
     const absent = new Set();
-    parts.forEach( ( part ) => part.batch.images.forEach( ( image ) => Object.entries( image.files ).forEach( ( [ role , f ] ) => {
-      if ( !stored.has( f.sha ) ) {
-        absent.add( f.sha );
-      } else {
-        entries.set( "files/" + f.sha + ( role === "czi" ? ".czi" : ".tif" ) , "/api/ais/files/" + f.sha + "/file" );
-      }
+    parts.forEach( ( part ) => part.batch.images.forEach( ( image ) => Object.entries( image.files ).forEach( ( [ role , file ] ) => {
+      ( file.slices || [ file ] ).forEach( ( f ) => {
+        if ( !stored.has( f.sha ) ) {
+          absent.add( f.sha );
+        } else {
+          entries.set( "files/" + f.sha + ( role === "czi" ? ".czi" : ".tif" ) , "/api/ais/files/" + f.sha + "/file" );
+        }
+      } );
     } ) ) );
     const files = [];
     let failed = 0;
@@ -511,6 +521,16 @@ const AisExport = {
     const url = ( sha , tail ) => "/api/ais/files/" + sha + "/" + tail;
     const file = ( folder , x ) => out.push( { folder: folder , name: x.name , url: url( x.sha , "file" ) , size: x.size || 0 } );
     const png = ( folder , name , address ) => out.push( { folder: folder , name: name , url: address , size: 0 } );
+    if ( f.stack ) {
+      // Named from the image, as a blinded stack's slices come without theirs.
+      if ( opts.originals ) {
+        f.stack.slices.forEach( ( s ) => file( "originals" , { name: image.cell + "_z" + String( s.z ).padStart( 3 , "0" ) + ".tif" , sha: s.sha , size: s.size } ) );
+      }
+      if ( opts.originalsPng ) png( "originals_png" , image.cell + ".png" , url( f.stack.sha , "composite.png" ) );
+      if ( opts.processedPng ) png( "processed_png" , image.cell + "_processed.png" , url( f.stack.sha , "view.png" ) );
+      if ( opts.processed ) png( "processed" , image.cell + Ais.processedSuffix , url( f.stack.sha , "processed.tif" ) );
+      return out;
+    }
     const original = f.czi || f.raw || f.processed;
     if ( opts.originals && original ) file( "originals" , original );
     if ( opts.originalsPng && original ) {
@@ -566,7 +586,9 @@ const AisExport = {
       const excluded = new Set( batch.excluded || [] );
       for ( const image of wantFiles ? batch.images : [] ) {
         if ( excluded.has( image.key ) ) continue;
-        const dir = image.dir ? image.dir + "/" : "";
+        // A blinded stack's folder went with its name, and comes back with it.
+        const folder = opts.unrandomize && image.original_dir || image.dir;
+        const dir = folder ? folder + "/" : "";
         const shown = prefix + ( opts.unrandomize && image.original_key || image.key );
         const fail = ( error ) => missing.push( shown + ": " + error.message );
         ( await this.planImage( image , opts , fail ) ).forEach( ( p ) => {

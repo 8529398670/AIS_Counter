@@ -38,6 +38,15 @@ const Settings = {
       constants: [ "pixconv" , "f" , "kernel" , "sigma" , "strel" , "min_pixels" , "max_path" , "max_passes" , "spline_p" , "window_um" ] },
   ],
 
+  // How a Z-stack's AIS is measured, as app/analysis/zlength.py METHODS: names
+  // from language.yaml (settings.z_method_<id>). One not ready is listed but
+  // can't be picked, until zlength.py has it and this says so.
+  zMethods: [
+    { id: "trace_lift" , ready: true },
+    { id: "end_clicks" , ready: false },
+    { id: "volume_trace" , ready: false },
+  ],
+
   // Settings for every method: field -> default, control id and allowed range
   // (numbers) or choices (text). A true/false default is a checkbox.
   general: {
@@ -47,14 +56,14 @@ const Settings = {
     // "fitted2" a second trial (start "fitted2", the fitted2_ filters);
     // "learned" its own detector (start "learned", app/analysis/learned.py)
     // with a lowest score and length.
-    defaults: { min_length: 0 , line_width: 1.5 ,
+    defaults: { min_length: 0 , line_width: 1.5 , z_method: "trace_lift" ,
       auto_review: "each" , auto_method: "fitted" , auto_start: "soma" , auto_min_length: 5 , auto_min_brightness: 30 ,
       auto_min_width: 2.4 , auto_max_soma_gap: 10 ,
       fitted_min_length: 13 , fitted_min_brightness: 55 , fitted_max_branchiness: 1.02 ,
       fitted2_min_length: 13 , fitted2_min_contrast: 30 , fitted2_min_brightness: 0 , fitted2_max_branchiness: 1.02 ,
       learned_min_score: 25 , learned_min_length: 0 ,
       auto_skip_done: true },
-    controls: { min_length: "settings-min-length" , line_width: "settings-line-width" ,
+    controls: { min_length: "settings-min-length" , line_width: "settings-line-width" , z_method: "settings-z-method" ,
       auto_review: "settings-auto-review" , auto_method: "settings-auto-method" , auto_start: "settings-auto-start" ,
       auto_min_length: "settings-auto-min-length" , auto_min_brightness: "settings-auto-min-brightness" ,
       auto_min_width: "settings-auto-min-width" , auto_max_soma_gap: "settings-auto-max-soma-gap" ,
@@ -83,6 +92,10 @@ const Settings = {
 
   init() {
     this.values = this.load();
+    const zSelect = Dom.get( "settings-z-method" );
+    this.zMethods.forEach( ( m ) => zSelect.appendChild( Dom.el( "option" , {
+      text: I18n.get( "settings.z_method_" + m.id ) + ( m.ready ? "" : " " + I18n.get( "settings.not_built" ) ) ,
+      attrs: Object.assign( { value: m.id } , m.ready ? {} : { disabled: "" } ) } ) ) );
     const select = Dom.get( "settings-method" );
     Dom.clear( select );
     this.methods.forEach( ( method ) => {
@@ -270,6 +283,8 @@ const Settings = {
   twoClicks() { return this.values.two_clicks; },
   // µm per pixel (the Measure tool's distances).
   pixconv() { return this.values.pixconv; },
+  // How a Z-stack's AIS is measured (zMethods).
+  zMethod() { return this.values.z_method; },
   // µm; 0 is off.
   minLength() { return this.values.min_length; },
   // Screen pixels, whatever the zoom.
@@ -302,3 +317,5 @@ const Settings = {
 // "ais_auto.m (fast)": ais_auto's settings and fieldset, its own saved values,
 // and the server's app/analysis/fast.py, which gives the same answers sooner.
 Settings.methods.push( Object.assign( {} , Settings.methods[ 0 ] , { key: "ais_fast" , fieldset: "ais_auto" , engine: "fast" } ) );
+// Only what is built can be chosen, so a stored choice of anything else falls back.
+Settings.general.choices.z_method = Settings.zMethods.filter( ( m ) => m.ready ).map( ( m ) => m.id );

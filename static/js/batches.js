@@ -66,6 +66,7 @@ const Batches = {
     window.addEventListener( "hashchange" , () => this.onView() );
     document.addEventListener( "visibilitychange" , () => this.onView() );
     this.initReset();
+    this.initStack();
     this.onView();
   },
 
@@ -303,7 +304,9 @@ const Batches = {
   async uploadPatiently( blob ) {
     for ( let tries = 0 ; ; tries += 1 ) {
       try {
-        return await Api.postBytes( "/api/ais/files" , blob );
+        const info = await Api.postBytes( "/api/ais/files" , blob );
+        if ( tries ) this.statusLine( "" );
+        return info;
       } catch ( error ) {
         if ( error.status !== 429 || tries >= AisExport.retries ) throw error;
         this.statusLine( I18n.get( "batches.export_waiting" ) );
@@ -336,7 +339,7 @@ const Batches = {
       if ( !manifest ) throw new Error( I18n.get( "batches.import_not_backup" ) );
       const shas = new Set();
       manifest.batches.forEach( ( part ) => part.batch.images.forEach( ( image ) =>
-        Object.values( image.files ).forEach( ( f ) => shas.add( f.sha ) ) ) );
+        Ais.parts( image ).forEach( ( f ) => shas.add( f.sha ) ) ) );
       const { missing } = await Api.post( "/api/ais/batches/import/missing" , { shas: Array.from( shas ) } );
       const inZip = ( sha ) => entries.get( "files/" + sha + ".tif" ) || entries.get( "files/" + sha + ".czi" );
       const todo = missing.filter( inZip );
@@ -567,9 +570,70 @@ const Batches = {
     await this.refresh( true );
   },
 
+  // --- Z-stacks -----------------------------------------------------------------
+
+  initStack() {
+    const element = Dom.get( "batches-stack-modal" );
+    // Open path can ask from the Process screen, with this one hidden.
+    document.body.appendChild( element );
+    this.stackModal = bootstrap.Modal.getOrCreateInstance( element );
+    Dom.get( "batches-stack-form" ).addEventListener( "submit" , ( e ) => { e.preventDefault(); this.answerStack(); } );
+    element.addEventListener( "hidden.bs.modal" , () => {
+      if ( this.stackAnswer ) this.stackAnswer( null );
+      this.stackAnswer = null;
+    } );
+  },
+
+  // The Z-stacks among picked files, by name alone, as the server will find
+  // them (app/models/ais.py _take_stacks): [{ cell , slices }].
+  stacksIn( fileList ) {
+    const found = new Map();
+    Array.from( fileList ).forEach( ( f ) => {
+      const match = f.name.startsWith( "." ) ? null : Ais.stackRe.exec( f.name );
+      if ( !match ) return;
+      const folder = ( f.webkitRelativePath || "" ).split( "/" ).slice( 0 , -1 ).join( "/" );
+      const key = [ folder , match[ 1 ] , ( match[ 3 ] || "" ).toLowerCase() ].join( "\n" );
+      found.set( key , { cell: match[ 1 ] , slices: ( found.has( key ) ? found.get( key ).slices : 0 ) + 1 } );
+    } );
+    return Array.from( found.values() ).filter( ( s ) => s.slices >= 2 );
+  },
+
+  // What the files can't say about these stacks, asked each time: the
+  // channel differs from batch to batch, so none is remembered. null when
+  // the person backs out.
+  askStack( stacks ) {
+    Dom.text( Dom.get( "batches-stack-found" ) , I18n.get( "batches.stack_found" )
+      .replace( "{count}" , stacks.length ).replace( "{slices}" , stacks.map( ( s ) => s.slices ).join( ", " ) ) );
+    Dom.get( "batches-stack-form" ).reset();
+    Dom.get( "batches-stack-pixel" ).value = Settings.methods[ 0 ].defaults.pixconv;
+    return new Promise( ( resolve ) => {
+      this.stackAnswer = resolve;
+      this.stackModal.show();
+    } );
+  },
+
+  answerStack() {
+    const plane = Dom.get( "batches-stack-form" ).querySelector( "input[name=batches-stack-plane]:checked" );
+    const answer = this.stackAnswer;
+    this.stackAnswer = null;
+    answer( { plane: Number( plane.value ) , z_step_um: Number( Dom.get( "batches-stack-z" ).value ) ,
+      pixel_um: Number( Dom.get( "batches-stack-pixel" ).value ) } );
+    this.stackModal.hide();
+  },
+
+  // The same for a folder on this machine, by asking the server what is in
+  // it: the answer, null with no stacks there, false if the person backs out.
+  async askStackAt( path ) {
+    const { stacks } = await Api.post( "/api/ais/local/stacks" , { path: path } );
+    return stacks.length ? ( await this.askStack( stacks ) ) || false : null;
+  },
+
   // Files picked in this browser: hash them, add them to the batch, then
   // upload them in the background.
   async addPicked( b , fileList ) {
+    const stacks = this.stacksIn( fileList );
+    const stack = stacks.length ? await this.askStack( stacks ) : null;
+    if ( stacks.length && !stack ) return;
     const progress = { reading: true , done: 0 , total: 0 };
     this.local.set( b.id , progress );
     let picked;
@@ -585,13 +649,13 @@ const Batches = {
         this.render();
         return;
       }
-      const batch = await Api.post( "/api/ais/batches/" + b.id + "/upload" , { files: picked.files ,
-        randomize: this.randomize() , add_name: picked.name , translations: picked.translations } );
+      const batch = await Api.post( "/api/ais/batches/" + b.id + "/upload" , Object.assign( { files: picked.files ,
+        randomize: this.randomize() , add_name: picked.name , translations: picked.translations } , stack ? { stack: stack } : {} ) );
       Ais.batchChanged( batch , true );
       Dom.toast( I18n.get( "batches.added" ).replace( "{n}" , picked.files.length ).replace( "{name}" , batch.name ) );
       // Only what the server does not have yet, each sha once.
       const waiting = new Set();
-      batch.images.forEach( ( image ) => Object.values( image.files ).forEach( ( f ) => {
+      batch.images.forEach( ( image ) => Ais.parts( image ).forEach( ( f ) => {
         if ( !f.stored ) waiting.add( f.sha );
       } ) );
       picked.files.forEach( ( f ) => {
@@ -614,10 +678,18 @@ const Batches = {
 
   // A folder on this machine (the Open path dialog), read by the server.
   async addPath( b , path ) {
+    let stack;
+    try {
+      stack = await this.askStackAt( path );
+    } catch ( error ) {
+      App.showError( error.message );
+      return;
+    }
+    if ( stack === false ) return;
     this.local.set( b.id , { reading: true , done: 0 , total: 0 } );
     this.render();
     try {
-      const batch = await Api.post( "/api/ais/batches/" + b.id + "/path" , { path: path , randomize: this.randomize() } );
+      const batch = await Api.post( "/api/ais/batches/" + b.id + "/path" , Object.assign( { path: path , randomize: this.randomize() } , stack ? { stack: stack } : {} ) );
       Ais.batchChanged( batch , true );
       Dom.toast( I18n.get( "batches.added_path" ).replace( "{name}" , batch.name ) );
       AisImages.openBatch( batch , this.lastAdd( batch ) );
@@ -656,7 +728,7 @@ const Batches = {
       this.renderLocal( item.batchId );
       if ( file ) {
         try {
-          await Api.postBytes( "/api/ais/files" , file );
+          await this.uploadPatiently( file );
         } catch ( error ) {
           App.showError( file.name + ": " + error.message );
           this.queue = this.queue.filter( ( q ) => q.batchId !== item.batchId );

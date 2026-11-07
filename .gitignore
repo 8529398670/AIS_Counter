@@ -1,6 +1,7 @@
 # Data (large, local only)
 /example-data
 /example-data-2
+/example-data-3
 .DS_Store
 .claude/
 .pytest_cache/

@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import hashlib
+import json
 
 import pytest
 
+from app.analysis import zstack
 from app.core import db
 from app.models import ais
 
@@ -850,3 +852,248 @@ def test_a_backup_names_the_people_of_its_measurements(store):
     line = ais.add_measurement(store, batch["id"], "a", LINE, 7)
     ais.update_measurement(store, line["id"], LINE, 8)
     assert ais.backup_user_ids(ais.backup_batch(store, batch["id"])) == {1, 7, 8}
+
+
+# --- Z-stacks ----------------------------------------------------------------------
+
+STACK = {"plane": 0, "z_step_um": 0.5, "pixel_um": 0.161}
+
+
+def slices(folder="root/Slide7_27", cell="IP-04", count=3, content="", tail="c1+2"):
+    return files(*[(f"{folder}/{cell}_z{z:02}{tail}.tif", f"{folder}{cell}{z}{content}") for z in range(1, count + 1)])
+
+
+def two_stacks():
+    return slices() + slices("root/Slide7_26", "IP-03", 2)
+
+
+def stack_batch(store, randomize_names=False, **kwargs):
+    return ais.create_batch(store, "z", "upload", two_stacks(), 1, stack=STACK, randomize_names=randomize_names, **kwargs)
+
+
+def test_without_the_stack_option_slices_are_ordinary_images_as_ever(store):
+    batch = ais.create_batch(store, "z", "upload", two_stacks(), 1)
+    assert len(batch["images"]) == 5
+    assert all(set(im["files"]) == {"raw"} and "z_stack" not in im for im in batch["images"])
+
+
+def test_a_stack_is_one_image_with_one_file_standing_for_its_slices(store):
+    batch = stack_batch(store)
+    assert [im["key"] for im in batch["images"]] == ["Slide7_26/IP-03", "Slide7_27/IP-04"]
+    image = batch["images"][1]
+    assert list(image["files"]) == ["stack"]
+    assert image["z_stack"] == {"count": 3} | STACK
+    file = image["files"]["stack"]
+    assert file["name"] == "IP-04.zstack" and file["rel"] == "root/Slide7_27/IP-04.zstack"
+    assert [s["z"] for s in file["slices"]] == [1, 2, 3] and file["size"] == 3
+    assert file["sha"] == zstack.sha(zstack.manifest(file["slices"], STACK))
+
+
+def test_slices_sort_by_number_not_by_name(store):
+    names = files(*[(f"f/s/a_z{z}c1.tif", str(z)) for z in (10, 2, 1)])
+    batch = ais.create_batch(store, "z", "upload", names, 1, stack=STACK)
+    assert [s["z"] for s in batch["images"][0]["files"]["stack"]["slices"]] == [1, 2, 10]
+
+
+def test_a_gap_in_the_slices_is_kept(store):
+    names = files(*[(f"f/s/a_z{z}.tif", str(z)) for z in (1, 2, 5)])
+    batch = ais.create_batch(store, "z", "upload", names, 1, stack=STACK)
+    assert [s["z"] for s in batch["images"][0]["files"]["stack"]["slices"]] == [1, 2, 5]
+
+
+def test_two_stacks_are_not_duplicates_of_each_other(store):
+    assert not any("dup_of" in im for im in stack_batch(store)["images"])
+
+
+def test_the_same_stack_again_is_a_duplicate_and_starts_left_out(store):
+    batch = stack_batch(store)
+    batch = ais.add_files(store, batch["id"], "upload", slices(), stack=STACK)
+    assert batch["images"][-1]["dup_of"] == 1
+    assert batch["images"][-1]["key"] in batch["excluded"]
+
+
+def test_the_same_slices_with_a_corrected_z_step_are_not_a_duplicate(store):
+    batch = stack_batch(store)
+    batch = ais.add_files(store, batch["id"], "upload", slices(), stack=STACK | {"z_step_um": 0.3})
+    assert "dup_of" not in batch["images"][-1]
+
+
+def test_a_lone_slice_stays_an_ordinary_image(store):
+    batch = ais.create_batch(store, "z", "upload", slices(count=1), 1, stack=STACK)
+    assert list(batch["images"][0]["files"]) == ["raw"]
+
+
+def test_two_slices_with_one_z_are_refused(store):
+    with pytest.raises(ais.BatchError, match="same z"):
+        ais.create_batch(store, "z", "upload", files(("f/s/a_z1.tif", "1"), ("f/s/a_z01.tif", "2")), 1, stack=STACK)
+
+
+def test_two_channels_exported_apart_stay_two_stacks(store):
+    batch = ais.create_batch(store, "z", "upload", slices(tail="c1") + slices(tail="c2", content="x"), 1, stack=STACK)
+    assert [im["cell"] for im in batch["images"]] == ["IP-04_c1", "IP-04_c2"]
+
+
+def test_other_files_in_the_add_stay_as_they_were(store):
+    batch = ais.create_batch(store, "z", "upload", slices() + files(("root/Slide7_27/IP-04.tif", "plain")), 1, stack=STACK)
+    assert sorted(tuple(im["files"]) for im in batch["images"]) == [("raw",), ("stack",)]
+    assert len({im["key"] for im in batch["images"]}) == 2
+
+
+@pytest.mark.parametrize("stack", [{}, "x", STACK | {"plane": 5}, STACK | {"z_step_um": None}])
+def test_an_add_with_bad_stack_options_is_refused(store, stack):
+    with pytest.raises(ais.BatchError):
+        ais.create_batch(store, "z", "upload", two_stacks(), 1, stack=stack)
+
+
+def seen_by_anyone(batch):
+    """What of a blinded stack is not a slice's own name, held back when sent."""
+    out = []
+    for image in batch["images"]:
+        out += [image["key"], image["cell"], image["dir"]]
+        file = image["files"]["stack"]
+        out += [file["name"], file["rel"]]
+    for add in batch["adds"]:
+        out += [add["name"], str(add["path"])]
+    return out + [str(batch["path"])]
+
+
+def test_blinding_a_stack_hides_its_folder_too(store):
+    batch = ais.new_batch(store, "b", "upload", 1)
+    batch = ais.add_files(store, batch["id"], "upload", two_stacks(), "/data/Slide7_27", randomize_names=True,
+                          user_id=1, name="Slide7_27", stack=STACK)
+    text = " ".join(seen_by_anyone(batch))
+    assert "Slide7" not in text and "IP-0" not in text
+    image = batch["images"][0]
+    assert image["dir"] == "" and image["key"] == image["cell"]
+    assert image["original_dir"].startswith("Slide7_") and image["original_cell"].startswith("IP-")
+    assert batch["adds"][0]["original_name"] == "Slide7_27"
+    assert batch["adds"][0]["original_path"] == "/data/Slide7_27"
+
+
+def test_blinding_leaves_the_slices_and_the_sha_alone(store):
+    plain, blinded = stack_batch(store), stack_batch(store, randomize_names=True)
+    by_sha = {im["files"]["stack"]["sha"]: im for im in plain["images"]}
+    for image in blinded["images"]:
+        same = by_sha[image["files"]["stack"]["sha"]]["files"]["stack"]["slices"]
+        assert image["files"]["stack"]["slices"] == same
+
+
+def test_blinded_stacks_from_two_slides_stay_two_lines_in_the_translation(store):
+    names = slices("root/S1", "same") + slices("root/S2", "same", content="x")
+    batch = ais.create_batch(store, "b", "upload", names, 1, randomize_names=True, stack=STACK)
+    lines = ais.translation(batch).split("\r\n")[2:-1]
+    assert sorted(line.split("/")[0] for line in lines) == ["S1__same.zstack", "S2__same.zstack"]
+    assert all(line.count("/") == 1 for line in lines)
+
+
+def test_a_stack_named_by_a_translation_keeps_working(store):
+    batch = ais.create_batch(store, "b", "upload", slices(cell="1-2-3"), 1, stack=STACK)
+    text = "Original Name/Random Name\r\n---\r\nreal.zstack/1-2-3.zstack\r\n"
+    batch, named, left = ais.apply_translation(store, batch["id"], text)
+    assert (named, left) == (1, 0)
+    assert batch["images"][0]["original_cell"] == "real"
+
+
+def test_rerandomizing_a_stack_moves_its_rows_and_hides_its_add(store):
+    batch = ais.new_batch(store, "b", "upload", 1)
+    batch = ais.add_files(store, batch["id"], "upload", slices(), "/data/Slide7_27", user_id=1, name="Slide7_27", stack=STACK)
+    key = batch["images"][0]["key"]
+    row = ais.add_result(store, batch["id"], key, {"length_um": 3.0, "pixels": [[1, 2]]}, 1)
+    batch, renamed, measured = ais.rerandomize(store, batch["id"], batch["adds"][0]["id"])
+    assert (renamed, measured) == (1, 1)
+    image = batch["images"][0]
+    assert image["key"] != key and image["dir"] == "" and image["original_dir"] == "Slide7_27"
+    assert ais.get_result(store, row["id"])["image"] == image["key"]
+    assert batch["adds"][0]["name"] == "b" and batch["adds"][0]["path"] is None and batch["path"] is None
+    again, _, _ = ais.rerandomize(store, batch["id"], batch["adds"][0]["id"])
+    assert again["images"][0]["original_dir"] == "Slide7_27"
+    assert again["images"][0]["earlier_keys"] == [image["key"]]
+    assert again["adds"][0]["original_name"] == "Slide7_27"
+
+
+def test_progress_counts_the_slices_a_stack_is_made_of(store):
+    batch = stack_batch(store)
+    held = {s["sha"] for s in batch["images"][1]["files"]["stack"]["slices"][:2]}
+    status = ais.image_status(batch, [], lambda f: f["sha"] in held)
+    assert [(s["files"], s["stored"]) for s in status] == [(2, 0), (3, 2)]
+    listed = ais.list_batches(store, 1, lambda f: f["sha"] in held)[0]
+    assert (listed["files"], listed["stored"]) == (5, 2)
+
+
+def test_real_files_are_a_stacks_slices_and_anything_elses_files():
+    plain = {"files": {"raw": {"sha": "r"}, "processed": {"sha": "p"}}}
+    stack = {"files": {"stack": {"sha": "m", "slices": [{"sha": "1"}, {"sha": "2"}]}}}
+    assert [f["sha"] for f in ais.real_files(plain)] == ["r", "p"]
+    assert [f["sha"] for f in ais.real_files(stack)] == ["1", "2"]
+
+
+def test_a_slice_found_on_this_machine_can_be_fetched(store):
+    names = [f | {"path": "/data/" + f["name"]} for f in slices()]
+    ais.create_batch(store, "z", "path", names, 1, "/data", stack=STACK)
+    assert ais.local_path_for(store, names[1]["sha"]) == "/data/" + names[1]["name"]
+
+
+def test_a_stack_is_found_by_its_sha_for_the_library(store):
+    batch = stack_batch(store)
+    file = batch["images"][0]["files"]["stack"]
+    manifest = ais.stack_for(store, file["sha"])
+    assert zstack.sha(manifest) == file["sha"]
+    assert ais.stack_for(store, sha("nothing")) is None
+
+
+def test_a_stack_comes_back_from_its_backup_as_it_was(store):
+    batch = stack_batch(store, randomize_names=True)
+    row = {"length_um": 3.0, "pixels": [[1, 2], [3, 4]], "length_3d_um": 3.5, "z_path": [1.2, None], "z_clipped": 0}
+    ais.add_result(store, batch["id"], batch["images"][0]["key"], row, 1)
+    back = ais.import_batch(store, backup_of(store, batch["id"]), {1: "Ann"}, 1)
+    for k in ("images", "adds", "excluded"):
+        assert back[k] == batch[k], k
+    again = ais.list_results(store, back["id"])[0]
+    assert again["length_3d_um"] == 3.5 and again["z_path"] == [1.2, None] and again["z_clipped"] == 0
+    assert ais.stack_for(store, back["images"][0]["files"]["stack"]["sha"]) is not None
+
+
+def test_a_stacks_backup_has_no_path_on_this_machine(store):
+    names = [f | {"path": "/data/" + f["name"]} for f in slices()]
+    batch = ais.create_batch(store, "z", "path", names, 1, "/data", randomize_names=True, stack=STACK)
+    backup = ais.backup_batch(store, batch["id"])
+    assert "/data" not in json.dumps(backup)
+
+
+@pytest.mark.parametrize("spoil", [
+    lambda im: im["files"]["stack"]["slices"].pop(),
+    lambda im: im["files"]["stack"]["slices"][0].update(sha=sha("other")),
+    lambda im: im["files"]["stack"]["slices"][1].update(z=1),
+    lambda im: im["files"]["stack"].pop("slices"),
+    lambda im: im.pop("z_stack"),
+    lambda im: im["z_stack"].update(z_step_um=9.0),
+    lambda im: im["files"]["stack"].update(sha=sha("other")),
+])
+def test_a_stack_that_does_not_match_its_slices_is_refused_from_a_backup(store, spoil):
+    batch = ais.create_batch(store, "z", "upload", slices(), 1, stack=STACK)
+    backup = json.loads(json.dumps(backup_of(store, batch["id"])))
+    spoil(backup["batch"]["images"][0])
+    with pytest.raises(ais.BatchError):
+        ais.import_batch(store, backup, {1: "Ann"}, 1)
+
+
+def test_a_row_on_an_ordinary_image_gets_no_z_fields():
+    row = ais.clean_row({"length_um": 3.0, "pixels": [[1, 2]]})
+    assert not set(row) & {*ais.Z_NUMBERS, "z_path", "z_method"}
+
+
+def test_a_rows_z_fields_survive_being_sent_back():
+    z = {"length_3d_um": 12.5, "length_xy_um": 11.0, "z_start": 2.1, "z_end": 5.5, "z_span_um": 1.7, "z_step_um": 0.5,
+         "z_confidence": 0.8, "z_clipped": 1, "z_method": "trace_lift", "z_path": [None, 2.5]}
+    row = ais.clean_row({"pixels": [[1, 2], [3, 4]]} | z)
+    assert ais.clean_row(row) == row
+    assert {k: row[k] for k in z} == z
+
+
+@pytest.mark.parametrize("change", [
+    {"length_3d_um": "x"}, {"z_clipped": True}, {"z_start": float("nan")}, {"z_end": float("inf")},
+    {"z_path": [1.0]}, {"z_path": "x"}, {"z_path": [1.0, True]}, {"z_path": [1.0, float("nan")]},
+])
+def test_a_bad_z_field_is_refused(change):
+    with pytest.raises(ais.BatchError):
+        ais.clean_row({"pixels": [[1, 2], [3, 4]]} | change)

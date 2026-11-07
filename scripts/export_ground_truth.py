@@ -43,7 +43,8 @@ def main() -> None:
     out = []
     for image in images:
         mine = sorted((r for r in rows if r.get("image") == image["key"]), key=lambda r: r["n"])
-        if not mine and not args.images:
+        # A Z-stack has no one file to re-click on: auto_eval is 2D.
+        if "stack" in image["files"] or (not mine and not args.images):
             continue
         file = next(iter(image["files"].values()))
         path = Path(file["path"])
