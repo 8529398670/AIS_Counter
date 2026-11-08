@@ -765,6 +765,34 @@ def test_a_measurement_must_be_numbers_and_a_label(store, line):
         ais.add_measurement(store, batch["id"], "a", line, 1)
 
 
+def test_a_measurement_keeps_its_type_trimmed_and_an_old_line_reads_as_untyped(store):
+    batch = ais.create_batch(store, "f", "upload", files(("f/a" + P, "a")), 1)
+    untyped = ais.add_measurement(store, batch["id"], "a", LINE, 1)
+    typed = ais.add_measurement(store, batch["id"], "a", LINE | {"type": "  Soma distance "}, 1)
+    assert (untyped["type"], typed["type"]) == ("", "Soma distance")
+    retagged = ais.update_measurement(store, typed["id"], LINE | {"type": "Node of Ranvier"}, 1)
+    assert retagged["type"] == "Node of Ranvier"
+
+
+@pytest.mark.parametrize("bad", [3, None, "x" * 101])
+def test_a_measurement_type_must_be_short_text(store, bad):
+    batch = ais.create_batch(store, "f", "upload", files(("f/a" + P, "a")), 1)
+    with pytest.raises(ais.BatchError):
+        ais.add_measurement(store, batch["id"], "a", LINE | {"type": bad}, 1)
+
+
+def test_the_team_measure_types_start_as_the_defaults_and_save_distinct_names(store):
+    assert ais.measure_types(store) == list(ais.DEFAULT_TYPES)
+    saved = ais.set_measure_types(store, [" Nodes ", "Soma distance", "nodes", "Spines"])
+    assert saved == ["Nodes", "Soma distance", "Spines"] == ais.measure_types(store)
+
+
+@pytest.mark.parametrize("bad", [[], "Soma", ["ok", ""], ["ok", 4], ["x"] * 51])
+def test_the_team_measure_types_must_be_a_list_of_names(store, bad):
+    with pytest.raises(ais.BatchError):
+        ais.set_measure_types(store, bad)
+
+
 def test_a_measurement_needs_a_batch_and_image_that_exist(store):
     batch = ais.create_batch(store, "f", "upload", files(("f/a" + P, "a")), 1)
     with pytest.raises(ais.BatchError):

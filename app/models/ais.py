@@ -54,10 +54,11 @@ import re
 import secrets
 import threading
 import time
+from collections import Counter
 from typing import Any, Callable
 
 from app.analysis import zstack
-from app.core.db import BUCKET_AIS_BATCHES, BUCKET_AIS_MEASUREMENTS, BUCKET_AIS_RESULTS, Record, Store
+from app.core.db import BUCKET_AIS_BATCHES, BUCKET_AIS_MEASUREMENTS, BUCKET_AIS_RESULTS, BUCKET_META, Record, Store
 from app.models import to_iso, utc_now
 
 PROCESSED_SUFFIX = ".tif - Processed method 2.5.tif"
@@ -98,6 +99,12 @@ RESULT_TEXTS = ("length_str", "source", "notes", "file", "sha", "smooth", "origi
 # A line the Measure tool recorded on an image, AIS or not: its ends in MATLAB
 # axes, its length, and the pixel size that length was worked out with.
 MEASUREMENT_NUMBERS = ("a_x", "a_y", "b_x", "b_y", "length_px", "length_um", "pixconv")
+# Its type (clean_type): what kind of thing it measures, picked in the
+# Measure tool from the team's list (measure_types, kept in the meta bucket).
+DEFAULT_TYPES = ("Soma distance", "AIS length", "Node of Ranvier")
+MEASURE_TYPES_KEY = "measure_types"
+MAX_TYPE = 100
+MAX_TYPES = 50
 # What a row measured on a Z-stack adds (app/analysis/zlength.py). Kept apart
 # from RESULT_NUMBERS so a row on an ordinary image stays exactly as it was:
 # these are written only when present. z_clipped is 0 or 1.
@@ -527,6 +534,181 @@ def _add(record: Record, images: list[dict[str, Any]], source: str, path: str | 
         _hide_add(adds[-1], record)
 
 
+# --- treatments ------------------------------------------------------------------
+#
+# What each image's culture was treated with ("DMSO+FK506"), kept on the image
+# as treatment so exports can group by it (app/analysis/compare.py). It gives
+# away what blinding hides, so like the original names only admins see it.
+# guess_treatment reads it off the original name the lab's way,
+# "<prep> <treatment> <coverslip>[-NN]" (BB50 DMSO+FK506 A-02);
+# guess_treatments then looks at the whole batch and drops a per-dish tag
+# ("C2 D6 TM+NaCl WO C-02" -> "TM+NaCl WO"). That is the guess "as written".
+# The "matched" guess also gives spellings that only differ the treatment_key
+# way one spelling, preferring one already saved in any batch, so batches
+# line up. The admin picks either per batch (static/js/treatments.js), checks
+# the result and saves it (set_treatments). Exports match saved treatments
+# ignoring only case, so what is saved decides what groups together.
+
+TRAILING_NUMBER_RE = re.compile(r"[-_ ]\d{1,3}$")
+COVERSLIP_RE = re.compile(r"^[A-Z]{1,2}$")
+PREP_RE = re.compile(r"^(?=.*[A-Za-z])(?=.*\d)[A-Za-z0-9_.-]+$")
+
+
+def guess_treatment(name: str) -> str:
+    """The treatment in an original cell name: what is left once the Zen
+    ending, a trailing -NN, the coverslip letter(s) at the end and the prep
+    id at the start (letters and digits, like BB50) are taken off. "" when
+    nothing is left or the name is not words with spaces between."""
+    name = ZEN_SUFFIX_RE.sub("", name.rsplit("/", 1)[-1]).strip()
+    name = TRAILING_NUMBER_RE.sub("", name).strip()
+    words = name.split()
+    if len(words) < 2:
+        return ""
+    if COVERSLIP_RE.match(words[-1]):
+        words = words[:-1]
+    if len(words) > 1 and PREP_RE.match(words[0]):
+        words = words[1:]
+    return " ".join(words) if words and words != name.split() else ""
+
+
+HOURS_RE = re.compile(r"(\d+(?:\.\d+)?)\s*(?:hours?|hrs?|h)\b")
+MINUTES_RE = re.compile(r"(\d+(?:\.\d+)?)\s*(?:minutes?|mins?)\b")
+DISH_TAG_RE = re.compile(r"^[A-Za-z]{1,3}\d+$")
+
+
+def treatment_key(name: str) -> str:
+    """What two spellings of one treatment share: no case, "+" and "," as
+    spaces, single spaces, and 3hrs / 3 Hr / 3hours as 3h (minutes as 3min).
+    "DMSO 24Hr + KCl 3Hr" and "dmso 24hr KCl 3hr" are both "dmso 24h kcl 3h"."""
+    key = re.sub(r"[+,]", " ", name.casefold())
+    key = MINUTES_RE.sub(r"\1min", HOURS_RE.sub(r"\1h", key))
+    return " ".join(key.split())
+
+
+def _drop_dish_tag(guesses: list[str]) -> list[str]:
+    """The guesses without a leading per-dish tag (D6, D78): only when every
+    guess starts with one followed by more words, there are two tags or
+    more, and tags and the rest pair off one to one, so the tag says nothing
+    the rest does not (a drug like FK506 in front of differing rests stays)."""
+    words = [g.split() for g in guesses if g]
+    if not words or any(len(w) < 2 or not DISH_TAG_RE.match(w[0]) for w in words):
+        return guesses
+    rest_of: dict[str, str] = {}
+    tag_of: dict[str, str] = {}
+    for w in words:
+        tag, rest = w[0].casefold(), treatment_key(" ".join(w[1:]))
+        if rest_of.setdefault(tag, rest) != rest or tag_of.setdefault(rest, tag) != tag:
+            return guesses
+    if len(rest_of) < 2:
+        return guesses
+    return [g.split(None, 1)[1] if g else "" for g in guesses]
+
+
+def guess_treatments(names: list[str], known: Any = (), matched: bool = True) -> list[str]:
+    """guess_treatment for every name of one batch with a per-dish tag
+    dropped (_drop_dish_tag): as written when not matched. Matched, each
+    group of guesses with one treatment_key is spelled the way most of them
+    are, or the way a known (saved) treatment with that key mostly is."""
+    guesses = _drop_dish_tag([guess_treatment(n) for n in names])
+    if not matched:
+        return guesses
+    seen: dict[str, Counter[str]] = {}
+    for g in guesses:
+        if g:
+            seen.setdefault(treatment_key(g), Counter())[g] += 1
+    saved: dict[str, Counter[str]] = {}
+    for k in known:
+        if k.strip():
+            saved.setdefault(treatment_key(k), Counter())[k.strip()] += 1
+    spelling = {key: (saved.get(key) or counts).most_common(1)[0][0] for key, counts in seen.items()}
+    return [spelling[treatment_key(g)] if g else "" for g in guesses]
+
+
+def saved_treatments(store: Store) -> list[str]:
+    """Every treatment saved on an image, in every batch (one per image)."""
+    return [im["treatment"] for _, b in store.all(BUCKET_AIS_BATCHES) for im in b["images"] if im.get("treatment")]
+
+
+def original_cell(image: dict[str, Any]) -> str:
+    """What an image was called before it was blinded (its cell if it never was)."""
+    return image.get("original_cell") or image["cell"]
+
+
+def treatments(batch: Record, known: Any = ()) -> list[dict[str, Any]]:
+    """Per image, for the admins' review: its key, original name, the folder
+    it came from (what was picked, then any subfolder), saved treatment (""
+    if none), the guesses (guess_treatments: "guess" matched, preferring the
+    known spellings, and "guess_written" as written), the matched guess's
+    treatment_key (for lining batches up in the dialog), and whether it is
+    included."""
+    left_out = excluded_keys(batch)
+    picked = {a["id"]: a.get("original_name") or a["name"] for a in batch.get("adds", [])}
+    def folder(im: dict[str, Any]) -> str:
+        sub = im.get("original_dir", im["dir"])
+        return "/".join(p for p in (picked.get(im.get("add_id"), ""), sub) if p)
+    names = [original_cell(im) for im in batch["images"]]
+    matched = guess_treatments(names, known)
+    written = guess_treatments(names, matched=False)
+    return [{"key": im["key"], "original": name, "folder": folder(im), "treatment": im.get("treatment", ""),
+             "guess": guess, "guess_written": as_written, "guess_key": treatment_key(guess),
+             "included": im["key"] not in left_out}
+            for im, name, guess, as_written in zip(batch["images"], names, matched, written)]
+
+
+def treatment_counts(batch: Record, included: set[str]) -> dict[str, Any]:
+    """The batch's saved treatments over its included images, for its card
+    (admins only): {treatments: [[name, n], ...] most images first, matched
+    ignoring case as the exports do and named the way most are spelled,
+    untreated: how many included images have none}."""
+    groups: dict[str, Counter[str]] = {}
+    untreated = 0
+    for im in batch["images"]:
+        if im["key"] not in included:
+            continue
+        given = im.get("treatment", "").strip()
+        if given:
+            groups.setdefault(given.casefold(), Counter())[given] += 1
+        else:
+            untreated += 1
+    named = [[c.most_common(1)[0][0], sum(c.values())] for c in groups.values()]
+    return {"treatments": sorted(named, key=lambda t: (-t[1], t[0].casefold())), "untreated": untreated}
+
+
+def review_treatments(store: Store, batch: Record) -> list[dict[str, Any]]:
+    """treatments() with the guesses spelled like those saved in any batch."""
+    return treatments(batch, saved_treatments(store))
+
+
+def set_treatments(store: Store, batch_id: int, given: Any) -> Record | None:
+    """{key: treatment} for images of the batch: each trimmed, "" taking it
+    off. None when the batch is gone."""
+    if not isinstance(given, dict) or len(given) > MAX_FILES:
+        raise BatchError("treatments must be an object of image keys")
+    clean = {}
+    for key, value in given.items():
+        if not isinstance(value, str) or len(value.strip()) > MAX_TYPE:
+            raise BatchError("a treatment must be text")
+        clean[key] = value.strip()
+    with store.transaction() as tx:
+        batch = tx.get(BUCKET_AIS_BATCHES, batch_id)
+        if batch is None:
+            return None
+        keys = {im["key"] for im in batch["images"]}
+        if not set(clean) <= keys:
+            raise BatchError("no such image in this batch")
+        images = []
+        for im in batch["images"]:
+            if im["key"] in clean:
+                im = {k: v for k, v in im.items() if k != "treatment"}
+                if clean[im["key"]]:
+                    im["treatment"] = clean[im["key"]]
+            images.append(im)
+        batch["images"] = images
+        _stamp(batch)
+        tx.put(BUCKET_AIS_BATCHES, batch_id, batch)
+    return batch
+
+
 def set_included(store: Store, batch_id: int, keys: Any, included: Any) -> Record | None:
     """Include (or leave out) these images, for everyone. None when the
     batch is gone."""
@@ -776,7 +958,8 @@ def list_batches(store: Store, viewer_id: int | None = None,
                    "ais": sum(len(v) for v in by_image.values()),
                    "auto": sum(1 for v in by_image.values() for r in v if r.get("origin") == "auto"),
                    "files": len(files),
-                   "assignees": assignees, "mine": mine})
+                   "assignees": assignees, "mine": mine}
+                | treatment_counts(batch, included))
         if has is not None:
             item["stored"] = sum(1 for f in files if has(f))
         out.append(item)
@@ -1140,7 +1323,7 @@ def delete_result(store: Store, result_id: int) -> list[dict[str, int]]:
 
 def clean_measurement(line: Any) -> dict[str, Any]:
     """What a client sends for a recorded line: every MEASUREMENT_NUMBERS field
-    a number, and an optional label."""
+    a number, and an optional label and type."""
     if not isinstance(line, dict):
         raise BatchError("measurement must be an object")
     out: dict[str, Any] = {}
@@ -1150,6 +1333,35 @@ def clean_measurement(line: Any) -> dict[str, Any]:
             raise BatchError(f"{k} must be a number")
         out[k] = v
     out["label"] = _text(line.get("label", ""), "label", empty=True)
+    out["type"] = clean_type(line.get("type", ""), empty=True)
+    return out
+
+
+def clean_type(value: Any, empty: bool = False) -> str:
+    """A measurement type ("Soma distance", ...): short text, trimmed."""
+    if not isinstance(value, str) or len(value.strip()) > MAX_TYPE or (not empty and not value.strip()):
+        raise BatchError("type must be text")
+    return value.strip()
+
+
+def measure_types(store: Store) -> list[str]:
+    """The team's list of measurement types for the Measure tool's picker:
+    what an admin saved, or DEFAULT_TYPES until then."""
+    saved = store.get(BUCKET_META, MEASURE_TYPES_KEY)
+    return list(saved["types"]) if saved else list(DEFAULT_TYPES)
+
+
+def set_measure_types(store: Store, types: Any) -> list[str]:
+    """Save the team's list: 1..MAX_TYPES distinct names, in the order given.
+    Lines already tagged with a type taken off the list keep it."""
+    if not isinstance(types, list) or not 1 <= len(types) <= MAX_TYPES:
+        raise BatchError(f"types must be a list of 1 to {MAX_TYPES}")
+    out: list[str] = []
+    for t in types:
+        t = clean_type(t)
+        if t.casefold() not in {o.casefold() for o in out}:
+            out.append(t)
+    store.put(BUCKET_META, MEASURE_TYPES_KEY, {"types": out})
     return out
 
 
@@ -1356,7 +1568,7 @@ def _restored_image(image: Any, count: int) -> dict[str, Any]:
             raise BatchError("dup_of must be an image of this batch")
     if image.get("add_id") is not None:
         out["add_id"] = _whole(image["add_id"], "add_id")
-    for k in ("original_cell", "original_key"):
+    for k in ("original_cell", "original_key", "treatment"):
         if image.get(k) is not None:
             out[k] = _text(image[k], k)
     if image.get("earlier_keys") is not None:

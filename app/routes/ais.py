@@ -20,7 +20,7 @@ from starlette.responses import JSONResponse, Response
 
 from app.analysis import ais_auto as aa
 from app.analysis import detect as auto
-from app.analysis import local, matlab, matlab_bundle, zlength
+from app.analysis import compare, local, matlab, matlab_bundle, zlength
 from app.analysis.images import ImageError
 from app.analysis.service import Library, NotStored
 from app.core.middleware import from_this_computer
@@ -354,7 +354,9 @@ def _unnamed_file(f: dict[str, Any]) -> dict[str, Any]:
 
 
 def _unnamed_image(image: dict[str, Any]) -> dict[str, Any]:
-    return {k: v for k, v in image.items() if k not in ("original_cell", "original_key", "original_dir", "earlier_keys")}
+    # A treatment gives away what blinding hides as much as a name does.
+    return {k: v for k, v in image.items()
+            if k not in ("original_cell", "original_key", "original_dir", "earlier_keys", "treatment")}
 
 
 def _unnamed_add(add: dict[str, Any]) -> dict[str, Any]:
@@ -411,6 +413,10 @@ async def batch_list(request: Request) -> Response:
         row["activity"] = [a | {"name": names.get(a["user_id"], "")} for a in live.get(row["id"], [])]
         row["adds"] = [(_unnamed_add(a) if blind else a) | {"added_by_name": names.get(a.get("added_by"), "")}
                        for a in row["adds"]]
+        if blind:
+            # A treatment gives away what blinding hides as much as a name does.
+            row.pop("treatments", None)
+            row.pop("untreated", None)
     return JSONResponse({"batches": rows})
 
 
@@ -580,6 +586,44 @@ async def batch_translation(request: Request) -> Response:
         return not_found("no such batch")
     return Response(batches.translation(batch), media_type="text/plain; charset=utf-8",
                     headers={"Content-Disposition": 'attachment; filename="__Translation.txt"'})
+
+
+async def batch_treatments(request: Request) -> Response:
+    """Each image's original name, saved treatment and guessed one (admins)."""
+    batch_id = parse_id(request.path_params["batch_id"])
+    batch = await run(batches.get_batch, get_store(request), batch_id) if batch_id else None
+    if batch is None:
+        return not_found("no such batch")
+    return JSONResponse({"treatments": await run(batches.review_treatments, get_store(request), batch)})
+
+
+async def batch_treatments_set(request: Request) -> Response:
+    """Body: {treatments: {key: name}} (admins); "" takes one off."""
+    body, refused = await _body(request)
+    if refused:
+        return refused
+    batch_id = parse_id(request.path_params["batch_id"])
+    try:
+        batch = await run(batches.set_treatments, get_store(request), batch_id, body.get("treatments")) if batch_id else None
+    except batches.BatchError as exc:
+        return bad_request(str(exc))
+    if batch is None:
+        return not_found("no such batch")
+    return JSONResponse({"treatments": await run(batches.review_treatments, get_store(request), batch)})
+
+
+async def compare_batches(request: Request) -> Response:
+    """Body: {batch_ids, labels?}: the batches' measurements grouped by
+    treatment, and with two or more, tested and plotted (admins: it has the
+    original names and treatments). See app/analysis/compare.py."""
+    body, refused = await _body(request)
+    if refused:
+        return refused
+    try:
+        out = await run(compare.compare, get_store(request), body.get("batch_ids"), body.get("labels"))
+    except compare.CompareError as exc:
+        return bad_request(str(exc))
+    return JSONResponse(out)
 
 
 async def batch_translation_load(request: Request) -> Response:
@@ -906,6 +950,24 @@ async def result_import(request: Request) -> Response:
 
 
 # --- recorded measurements (the Measure tool's Record switch) ----------------
+
+
+async def measure_types(request: Request) -> Response:
+    """The team's measurement types for the Measure tool's Type picker."""
+    types = await run(batches.measure_types, get_store(request))
+    return JSONResponse({"types": types})
+
+
+async def measure_types_set(request: Request) -> Response:
+    """Body: {types: [name, ...]}: the team's new list (admins)."""
+    body, refused = await _body(request)
+    if refused:
+        return refused
+    try:
+        types = await run(batches.set_measure_types, get_store(request), body.get("types"))
+    except batches.BatchError as exc:
+        return bad_request(str(exc))
+    return JSONResponse({"types": types})
 
 
 async def measurement_list(request: Request) -> Response:

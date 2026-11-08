@@ -288,6 +288,22 @@
                   <p id="ais-measure-saved" class="small text-success mb-1"></p>
                   <p id="ais-measure-help" class="small mb-2"></p>
                   <p id="ais-measure-locked" class="small text-warning mb-2" data-i18n="ais.measure_locked" hidden></p>
+                  <!-- The type each new free line gets; it stays picked (ais_measure.js). -->
+                  <div id="ais-measure-type-row" class="mb-2" hidden>
+                    <div class="d-flex align-items-center gap-2 small">
+                      <label for="ais-measure-type" class="text-nowrap" data-i18n="ais.measure_type"></label>
+                      <select id="ais-measure-type" class="form-select form-select-sm"></select>
+                      <button id="ais-measure-types-edit" class="btn btn-link btn-sm p-0 text-nowrap" type="button" data-i18n="ais.measure_types_edit" hidden></button>
+                    </div>
+                    <div id="ais-measure-types-box" class="mt-2" hidden>
+                      <label for="ais-measure-types-text" class="form-label small mb-1" data-i18n="ais.measure_types_help"></label>
+                      <textarea id="ais-measure-types-text" class="form-control form-control-sm" rows="5"></textarea>
+                      <div class="d-flex gap-2 mt-1">
+                        <button id="ais-measure-types-save" class="btn btn-primary btn-sm" type="button" data-i18n="ais.measure_types_save"></button>
+                        <button id="ais-measure-types-cancel" class="btn btn-outline-secondary btn-sm" type="button" data-i18n="ais.measure_types_cancel"></button>
+                      </div>
+                    </div>
+                  </div>
                   <div id="ais-measure-list" class="ais-measure-list mb-2" hidden></div>
                   <div class="row-actions" id="ais-measure-actions" hidden>
                     <button id="ais-measure-save" class="btn btn-primary btn-sm" type="button"><i class="bi bi-check-lg" aria-hidden="true"></i> <span data-i18n="ais.measure_save"></span></button>
@@ -423,6 +439,9 @@
                 <li><button class="dropdown-item" type="button" data-export-all="zip"><i class="bi bi-file-earmark-zip me-2" aria-hidden="true"></i><span data-i18n="batches.export_zip"></span></button></li>
               </ul>
             </div>
+            <button id="batches-compare" class="btn btn-outline-secondary btn-sm" type="button" data-i18n-attr="title:compare.button_help" hidden disabled>
+              <i class="bi bi-bar-chart-line" aria-hidden="true"></i> <span id="batches-compare-label"></span>
+            </button>
             <button id="batches-import" class="btn btn-outline-secondary btn-sm" type="button" data-i18n-attr="title:batches.import_help" hidden>
               <i class="bi bi-upload" aria-hidden="true"></i> <span data-i18n="batches.import"></span>
             </button>
@@ -493,6 +512,55 @@
           </div>
 
           <!-- Reset results: an admin deletes a batch's AIS to run it again, a backup first (static/js/batches.js). -->
+          <!-- Treatments: each included image's original name and treatment, guessed then checked (treatments.js). -->
+          <div class="modal fade" id="treatments-modal" tabindex="-1" aria-labelledby="treatments-title" aria-hidden="true">
+            <div class="modal-dialog modal-lg modal-dialog-scrollable">
+              <div class="modal-content">
+                <div class="modal-header">
+                  <div class="me-auto ais-images-heading">
+                    <h2 class="modal-title h5 mb-0" id="treatments-title" data-i18n="treatments.title"></h2>
+                    <div id="treatments-batches" class="small text-body-secondary text-truncate"></div>
+                  </div>
+                  <button type="button" class="btn-close" data-bs-dismiss="modal" data-i18n-attr="aria-label:nav.close"></button>
+                </div>
+                <div class="modal-body">
+                  <p class="small text-body-secondary" data-i18n="treatments.help"></p>
+                  <p id="treatments-empty" class="small" data-i18n="treatments.empty" hidden></p>
+                  <p id="treatments-blind" class="small text-warning-emphasis" data-i18n="treatments.blind" hidden></p>
+                  <datalist id="treatments-known"></datalist>
+                  <!-- Many at once: tick rows (a folder's header ticks the folder), or tick the names containing some text, then apply one treatment to them all. -->
+                  <div class="treatments-bulk d-flex flex-wrap align-items-center gap-2 mb-2">
+                    <input id="treatments-match" class="form-control form-control-sm treatments-match" type="search" data-i18n-attr="placeholder:treatments.match,aria-label:treatments.match" />
+                    <span class="vr d-none d-sm-block"></span>
+                    <span id="treatments-picked" class="small text-body-secondary text-nowrap"></span>
+                    <input id="treatments-bulk-name" class="form-control form-control-sm treatments-bulk-name" type="text" maxlength="100" list="treatments-known" data-i18n-attr="placeholder:treatments.bulk_name,aria-label:treatments.bulk_name" />
+                    <button id="treatments-apply" class="btn btn-primary btn-sm text-nowrap" type="button" data-i18n="treatments.apply" disabled></button>
+                  </div>
+                  <!-- The groups the treatments make right now, one chip each with its count; a chip ticks its rows. -->
+                  <div id="treatments-groups" class="treatments-groups d-flex flex-wrap align-items-center gap-1 mb-2"></div>
+                  <table class="table table-sm align-middle mb-0">
+                    <thead><tr>
+                      <th class="treatments-tick"><input id="treatments-all" class="form-check-input" type="checkbox" data-i18n-attr="aria-label:treatments.select_all,title:treatments.select_all" /></th>
+                      <th id="treatments-col-batch" data-i18n="treatments.col_batch" hidden></th>
+                      <th data-i18n="treatments.col_original"></th>
+                      <th data-i18n="treatments.col_treatment"></th>
+                    </tr></thead>
+                    <tbody id="treatments-rows"></tbody>
+                  </table>
+                </div>
+                <div class="modal-footer">
+                  <span id="treatments-status" class="small text-warning-emphasis me-auto"></span>
+                  <button id="treatments-fill" type="button" class="btn btn-outline-secondary btn-sm" data-i18n="treatments.fill"></button>
+                  <button id="treatments-guess-written" type="button" class="btn btn-outline-secondary btn-sm" data-i18n="treatments.guess_written" data-i18n-attr="title:treatments.guess_written_help"></button>
+                  <button id="treatments-clear" type="button" class="btn btn-outline-danger btn-sm" data-i18n="treatments.clear" data-i18n-attr="title:treatments.clear_help"></button>
+                  <button id="treatments-guess-matched" type="button" class="btn btn-outline-secondary btn-sm" data-i18n="treatments.guess_matched" data-i18n-attr="title:treatments.guess_matched_help"></button>
+                  <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal" data-i18n="ais.cancel"></button>
+                  <button id="treatments-save" type="button" class="btn btn-primary" data-i18n="treatments.save"></button>
+                </div>
+              </div>
+            </div>
+          </div>
+
           <div class="modal fade" id="batches-reset-modal" tabindex="-1" aria-labelledby="batches-reset-title" aria-hidden="true">
             <div class="modal-dialog">
               <div class="modal-content">
@@ -1409,6 +1477,8 @@
   <script src="/js/ais_export.js"></script>
   <script src="/js/ais_auto.js"></script>
   <script src="/js/ais_measure.js"></script>
+  <script src="/js/treatments.js"></script>
+  <script src="/js/compare.js"></script>
   <script src="/js/batches.js"></script>
   <script src="/js/app.js"></script>
 </body>

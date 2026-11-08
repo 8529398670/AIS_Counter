@@ -32,6 +32,7 @@ const Batches = {
   exports: new Map(),    // batch id -> progress text of an export from here
   addTarget: null,       // the batch the file pickers add to
   resetting: null,       // the batch the Reset results dialog is for
+  selected: new Set(),   // batch ids ticked for Compare selected (admins)
   pumping: 0,           // upload workers running
   randomizeKey: "batches-randomize",
 
@@ -67,7 +68,42 @@ const Batches = {
     document.addEventListener( "visibilitychange" , () => this.onView() );
     this.initReset();
     this.initStack();
+    Treatments.init();
+    Dom.get( "batches-compare" ).addEventListener( "click" , () => this.compareSelected() );
     this.onView();
+  },
+
+  // --- comparing batches by treatment (admins, compare.js) ---------------------
+
+  // One culture per batch: the ticked ones still on the list, in its order.
+  compareSelected() {
+    const list = ( this.list || [] ).filter( ( b ) => this.selected.has( b.id ) );
+    const line = Dom.get( "batches-export-status" );
+    Compare.run( list , ( text ) => {
+      Dom.text( line , text );
+      Dom.show( line , Boolean( text ) );
+    } );
+  },
+
+  renderCompare() {
+    const button = Dom.get( "batches-compare" );
+    const ids = new Set( ( this.list || [] ).map( ( b ) => b.id ) );
+    [ ...this.selected ].forEach( ( id ) => { if ( !ids.has( id ) ) this.selected.delete( id ); } );
+    Dom.show( button , this.admin() );
+    button.disabled = this.selected.size < 2;
+    Dom.text( Dom.get( "batches-compare-label" ) , I18n.get( "compare.button" ).replace( "{n}" , this.selected.size ) );
+  },
+
+  selectBox( b ) {
+    const box = Dom.el( "input" , { class: "form-check-input batches-select" ,
+      attrs: { type: "checkbox" , title: I18n.get( "compare.select" ) , "aria-label": I18n.get( "compare.select" ) + ": " + b.name } } );
+    box.checked = this.selected.has( b.id );
+    box.addEventListener( "change" , () => {
+      if ( box.checked ) this.selected.add( b.id );
+      else this.selected.delete( b.id );
+      this.renderCompare();
+    } );
+    return box;
   },
 
   showing() {
@@ -242,7 +278,7 @@ const Batches = {
       // The images stay through a reset, so it can be imported back without them.
       await AisExport.exportReport( items , b.name , "zip" , ( done , total ) => Dom.text( status ,
         total ? I18n.get( "batches.exporting" ).replace( "{done}" , done ).replace( "{total}" , total ) : "" ) ,
-      { traces: true , restorable: true , restorableFiles: false } );
+      { traces: true , restorable: true , restorableFiles: false , grouped: false } );
       this.backedUp = true;
       Dom.text( status , I18n.get( "batches.reset_backed_up" ) );
     } catch ( error ) {
@@ -777,6 +813,7 @@ const Batches = {
     Dom.show( Dom.get( "batches-none" ) , !shown.length );
     Dom.text( Dom.get( "batches-none" ) , I18n.get( this.list.length ? "batches.none_match" : "batches.none" ) );
     shown.forEach( ( b ) => holder.appendChild( this.card( b ) ) );
+    this.renderCompare();
     if ( this.fresh ) {
       const card = Dom.get( "batches-card-" + this.fresh );
       if ( card ) {
@@ -895,6 +932,7 @@ const Batches = {
       if ( b.images ) {
         items.push( divider() );
         items.push( this.menuItem( "bi-translate" , I18n.get( "batches.load_translation" ) , () => this.pick( b , "batches-translation" ) ) );
+        items.push( this.menuItem( "bi-tags" , I18n.get( "treatments.menu" ) , () => this.reviewTreatments( b ) ) );
       }
       if ( b.ais ) {
         items.push( divider() );
@@ -970,6 +1008,7 @@ const Batches = {
 
     const body = [
       Dom.el( "div" , { class: "batches-head" , children: [
+        ...( admin && b.images ? [ this.selectBox( b ) ] : [] ),
         Dom.el( "div" , { class: "min-w-0" , children: [
           this.title( b , canChange ),
           Dom.el( "div" , { class: "small text-body-secondary text-truncate" , text: meta.filter( Boolean ).join( " · " ) , attrs: { title: b.path || "" } } ),
@@ -1001,6 +1040,8 @@ const Batches = {
 
     const folders = this.folderChips( b );
     if ( folders ) body.push( folders );
+    const treatments = admin ? this.treatmentChips( b ) : null;
+    if ( treatments ) body.push( treatments );
 
     const local = Dom.el( "div" , { class: "small text-primary mt-1" , attrs: { id: "batches-local-" + b.id } } );
     body.push( local );
@@ -1046,6 +1087,28 @@ const Batches = {
   // the Images dialog on just those; "Earlier images" for what came in
   // before adds were recorded. Admins also get a menu on each to give its
   // images new random names (or random names at all).
+  // Admins: the batch's saved treatments with their image counts (and how
+  // many have none), each opening the Treatments dialog. Nothing until one
+  // is saved.
+  treatmentChips( b ) {
+    const list = b.treatments || [];
+    if ( !list.length ) return null;
+    const review = () => this.reviewTreatments( b );
+    const chip = ( text , cls , title ) => Dom.el( "button" , { class: "btn btn-sm border batches-treatment text-truncate " + cls ,
+      attrs: { type: "button" , title: title } , on: { click: review } , text: text } );
+    const chips = list.map( ( [ name , n ] ) => chip( name + " · " + n , "btn-light" , I18n.get( "batches.treatment_chip" ) ) );
+    if ( b.untreated ) chips.push( chip( I18n.get( "batches.untreated" ).replace( "{n}" , b.untreated ) , "btn-outline-warning" ,
+      I18n.get( "batches.untreated_hint" ) ) );
+    return Dom.el( "div" , { class: "batches-folders batches-treatments mt-1" , children: [
+      Dom.el( "i" , { class: "bi bi-tags text-body-secondary align-self-center" , attrs: { title: I18n.get( "treatments.title" ) } } ),
+      ...chips ] } );
+  },
+
+  // The Treatments dialog for one batch; the cards catch up once it saves.
+  reviewTreatments( b ) {
+    Treatments.review( [ b ] ).then( ( saved ) => { if ( saved ) this.refresh( true ); } ).catch( ( e ) => App.showError( e.message ) );
+  },
+
   folderChips( b ) {
     const adds = b.adds || [];
     if ( !adds.length ) return null;

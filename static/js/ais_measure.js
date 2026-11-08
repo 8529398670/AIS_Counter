@@ -29,6 +29,11 @@
 // own (measurements.csv, the report's Measurements sheet). In Manual [ and ]
 // step through every image; leaving it goes to the next AIS not yet measured.
 //
+// Each free line gets the Type picked in the panel (the team's list, GET
+// /api/ais/measure-types; admins edit it there): it stays on, here in this
+// browser, until another is picked, so a run of soma distances is tagged as
+// it is drawn. A line's own type can be changed in the list.
+//
 // Points are in MATLAB axes like everything in ais.js: pixel x's centre is x.
 // The options (loupe, snap, ...) are remembered in this browser only, like
 // Settings.
@@ -42,7 +47,9 @@ const AisMeasure = {
   storageKey: "measure-options",
   // ais_end: preset | click | manual (no AIS: lines on any image); zoom: times
   // the whole-image view.
-  defaults: { loupe: true , loupe_traces: true , snap: true , units: false , ais_end: "preset" , soma_hint: true , zoom: 4 },
+  defaults: { loupe: true , loupe_traces: true , snap: true , units: false , ais_end: "preset" , soma_hint: true , zoom: 4 ,
+    measure_type: "" },
+  types: [],          // the team's measurement types, for the Type picker
   options: null,
   on: false,
   row: null,          // the saved AIS being measured, or null: free lines, each recorded
@@ -91,6 +98,63 @@ const AisMeasure = {
     Dom.get( "ais-measure-clear" ).addEventListener( "click" , () => this.clear() );
     Dom.get( "ais-measure-swap" ).addEventListener( "click" , () => this.swapEnd() );
     Dom.get( "ais-measure-stop" ).addEventListener( "click" , () => Ais.setTool( "trace" ) );
+    const picker = Dom.get( "ais-measure-type" );
+    picker.addEventListener( "change" , () => {
+      this.options.measure_type = picker.value;
+      this.save();
+      picker.blur();   // keys typed in a control do not reach the tool
+    } );
+    Dom.get( "ais-measure-types-edit" ).addEventListener( "click" , () => this.editTypes( true ) );
+    Dom.get( "ais-measure-types-cancel" ).addEventListener( "click" , () => this.editTypes( false ) );
+    Dom.get( "ais-measure-types-save" ).addEventListener( "click" , () => this.saveTypes() );
+    this.loadTypes();
+  },
+
+  // --- measurement types ---------------------------------------------------
+
+  async loadTypes() {
+    try {
+      this.types = ( await Api.request( "/api/ais/measure-types" ) ).types;
+    } catch ( error ) {
+      this.types = [];   // offline or refused: lines go untyped
+    }
+    this.renderTypes();
+  },
+
+  // The picker: no type, the team's, and the one last used if it has since
+  // left the list (it stays picked until another is).
+  renderTypes() {
+    const picker = Dom.get( "ais-measure-type" );
+    const names = this.types.slice();
+    const current = this.options.measure_type;
+    if ( current && !names.includes( current ) ) names.push( current );
+    picker.replaceChildren( Dom.el( "option" , { attrs: { value: "" } , text: I18n.get( "ais.measure_type_none" ) } ) ,
+      ...names.map( ( name ) => Dom.el( "option" , { attrs: { value: name } , text: name } ) ) );
+    picker.value = current;
+    Dom.show( Dom.get( "ais-measure-types-edit" ) , Boolean( Ais.me && Ais.me.role === "admin" ) );
+    this.listKey = null;
+    this.renderList();
+  },
+
+  editTypes( open ) {
+    const box = Dom.get( "ais-measure-types-box" );
+    Dom.show( box , open );
+    if ( !open ) return;
+    const text = Dom.get( "ais-measure-types-text" );
+    text.value = this.types.join( "\n" );
+    text.focus();
+  },
+
+  async saveTypes() {
+    const names = Dom.get( "ais-measure-types-text" ).value.split( "\n" ).map( ( t ) => t.trim() ).filter( Boolean );
+    try {
+      this.types = ( await Api.post( "/api/ais/measure-types" , { types: names } ) ).types;
+    } catch ( error ) {
+      Ais.status( error.message , true );
+      return;
+    }
+    this.editTypes( false );
+    this.renderTypes();
   },
 
   load() {
@@ -421,7 +485,7 @@ const AisMeasure = {
   // What the server keeps of a line.
   fields( line ) {
     return { a_x: line.a_x , a_y: line.a_y , b_x: line.b_x , b_y: line.b_y , length_px: line.length_px ,
-      length_um: line.length_um , pixconv: line.pixconv , label: line.label };
+      length_um: line.length_um , pixconv: line.pixconv , label: line.label , type: line.type || "" };
   },
 
   // One write after another, each reading the line as it is by then, so the
@@ -447,7 +511,7 @@ const AisMeasure = {
     if ( !entry || !Ais.batch ) return;
     const same = Ais.measurementsOn( entry );
     const line = { a: a , b: b , image: entry.key , batch_id: Ais.batch.id , batch_name: Ais.batch.name , label: "" ,
-      n: same.length ? same[ same.length - 1 ].n + 1 : 1 };
+      type: this.options.measure_type , n: same.length ? same[ same.length - 1 ].n + 1 : 1 };
     Object.assign( line , this.placed( line ) );
     Ais.measurements.push( line );
     Ais.renderTable();
@@ -493,6 +557,12 @@ const AisMeasure = {
     this.saveLine( line );
   },
 
+  setType( line , type ) {
+    line.type = type;
+    line.dirty = true;
+    this.saveLine( line );
+  },
+
   deleteLine( line ) {
     if ( !line ) return;
     if ( this.nudged === line ) this.flushNudge();
@@ -517,6 +587,7 @@ const AisMeasure = {
   lineText( line ) {
     const parts = [ String( line.n ) + ":" , this.lineUm( line ) ];
     if ( this.options.units ) parts.push( "· " + line.length_px.toFixed( 1 ) + " px" );
+    if ( line.type ) parts.push( "· " + line.type );
     if ( line.label ) parts.push( "· " + line.label );
     return parts.join( " " );
   },
@@ -944,6 +1015,7 @@ const AisMeasure = {
     Dom.get( "ais-measure-prev" ).disabled = this.saving;
     Dom.get( "ais-measure-next" ).disabled = this.saving;
     Dom.show( Dom.get( "ais-measure-locked" ) , Boolean( r && Ais.locked ) );
+    Dom.show( Dom.get( "ais-measure-type-row" ) , !r );
     this.renderList();
   },
 
@@ -953,8 +1025,8 @@ const AisMeasure = {
     const list = Dom.get( "ais-measure-list" );
     const lines = this.row ? [] : this.recorded();
     Dom.show( list , lines.length > 0 );
-    const key = JSON.stringify( lines.map( ( line ) => [ line.id , line.n , line.label , line.length_um ] ) );
-    const typing = list.contains( document.activeElement ) && document.activeElement.tagName === "INPUT";
+    const key = JSON.stringify( lines.map( ( line ) => [ line.id , line.n , line.label , line.type , line.length_um ] ) );
+    const typing = list.contains( document.activeElement ) && [ "INPUT" , "SELECT" ].includes( document.activeElement.tagName );
     if ( key === this.listKey || typing ) return;
     this.listKey = key;
     list.replaceChildren( ...lines.map( ( line ) => {
@@ -974,7 +1046,25 @@ const AisMeasure = {
       return Dom.el( "div" , { class: "ais-measure-line small" , children: [
         Dom.el( "span" , { class: "text-body-secondary" , text: String( line.n ) } ),
         Dom.el( "span" , { class: "ais-measure-line-um" , text: this.lineUm( line ) } ),
-        input , gone ] } );
+        this.typeSelect( line ) , input , gone ] } );
     } ) );
+  },
+
+  // A line's own type, to change after it was drawn.
+  typeSelect( line ) {
+    const names = this.types.slice();
+    if ( line.type && !names.includes( line.type ) ) names.push( line.type );
+    const select = Dom.el( "select" , { class: "form-select form-select-sm ais-measure-line-type" ,
+      attrs: { "aria-label": I18n.get( "ais.measure_type" ) } ,
+      children: [ Dom.el( "option" , { attrs: { value: "" } , text: I18n.get( "ais.measure_type_none" ) } ) ,
+        ...names.map( ( name ) => Dom.el( "option" , { attrs: { value: name } , text: name } ) ) ] } );
+    select.value = line.type || "";
+    select.addEventListener( "change" , () => {
+      this.setType( line , select.value );
+      select.blur();
+      Ais.draw();
+    } );
+    select.addEventListener( "blur" , () => this.render() );
+    return select;
   },
 };

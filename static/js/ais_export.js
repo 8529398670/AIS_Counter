@@ -20,7 +20,7 @@ const AisExport = {
   zCols: [ "length_3d_um" , "length_xy_um" , "z_start" , "z_end" , "z_span_um" , "z_step_um" , "z_confidence" , "z_clipped" , "z_method" ],
   // A line the Measure tool recorded (Record): its own file and sheet, since it
   // is no AIS and an image may have them without having any AIS.
-  measureCols: [ "batch_name" , "batch_id" , "image" , "n" , "label" , "length_um" , "length_px" , "a_x" , "a_y" , "b_x" , "b_y" ,
+  measureCols: [ "batch_name" , "batch_id" , "image" , "n" , "type" , "label" , "length_um" , "length_px" , "a_x" , "a_y" , "b_x" , "b_y" ,
     "pixconv" , "created_at" , "edited_at" ],
   // The method settings each row was measured with; rows from before these
   // were saved leave them blank.
@@ -357,7 +357,9 @@ const AisExport = {
     const aisCols = this.colsFor( items.flatMap( ( { rows } ) => rows ) );
     items.forEach( ( { rows } ) => rows.forEach( ( row ) => ais.push( aisCols.map( ( c ) => row[ c ] ) ) ) );
     const lines = items.flatMap( ( item ) => item.measurements || [] ).map( ( line ) => this.measureCols.map( ( c ) => line[ c ] ) );
-    const measured = lines.length ? [ { name: I18n.get( "report.sheet_measurements" ) , rows: lines , cols: this.measureCols } ] : [];
+    const measured = lines.length ? [ { name: I18n.get( "report.sheet_measurements" ) , rows: lines , cols: this.measureCols } ,
+      { name: I18n.get( "report.sheet_types" ) , rows: this.typeRows( items ) ,
+        cols: this.header( [ "batch" , "image" , "type" , "count" , "mean_type_um" , "median_type_um" , "sd_type_um" ] ) } ] : [];
     return [
       { name: I18n.get( "report.sheet_summary" ) , rows: summary , cols: this.header( [ "batch" , "batch_id" , "opened_by" , "created" , "archived" ,
         "images" , "completed" , "duplicates" , "ais" , "mean_um" , "median_um" , "sd_um" , "min_um" , "max_um" , "ais_per_image" ] ) },
@@ -365,6 +367,22 @@ const AisExport = {
       { name: I18n.get( "report.sheet_assignees" ) , rows: assignees , cols: this.header( [ "batch" , "person" , "images" , "completed" , "percent" , "ais" , "last_activity" ] ) },
       { name: I18n.get( "report.sheet_ais" ) , rows: ais , cols: aisCols },
     ].concat( measured );
+  },
+
+  // The recorded lines per batch, image and type: how many, and their
+  // length. Lines with no type count under "(no type)".
+  typeRows( items ) {
+    const groups = new Map();
+    items.forEach( ( { batch: b , measurements } ) => ( measurements || [] ).forEach( ( line ) => {
+      const type = line.type || I18n.get( "ais.measure_type_none" );
+      const key = JSON.stringify( [ b.id , line.image , type ] );
+      if ( !groups.has( key ) ) groups.set( key , { batch: b.name , image: line.image , type: type , lengths: [] } );
+      groups.get( key ).lengths.push( line.length_um );
+    } ) );
+    return [ ...groups.values() ].map( ( g ) => {
+      const s = this.stats( g.lengths );
+      return [ g.batch , g.image , g.type , s.n , s.mean , s.median , s.sd ];
+    } );
   },
 
   sheetCsv( sheet ) {
@@ -397,7 +415,9 @@ const AisExport = {
     const base = "ais_" + this.safe( label ) + "_" + new Date().toISOString().slice( 0 , 10 );
     const opts = options || { traces: true };
     if ( opts.unrandomize ) items = await this.unrandomized( items );
-    const sheets = this.sheets( items );
+    // Admins: the original names and the groups by treatment (compare.js);
+    // not in a backup made before a reset, which asks nothing.
+    const sheets = this.sheets( items ).concat( opts.grouped === false ? [] : await Compare.extraSheets( items ) );
     const workbook = Xlsx.build( sheets );
     if ( kind === "xlsx" ) {
       this.download( workbook , base + ".xlsx" );

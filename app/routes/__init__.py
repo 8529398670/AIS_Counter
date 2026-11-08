@@ -136,6 +136,10 @@ def build_routes(static_server: StaticServer, cfg: Config) -> list[BaseRoute]:
         admins("/api/ais/batches/{batch_id}/assign", ais.batch_assign, ["POST"]),
         admins("/api/ais/batches/{batch_id}/reset", ais.batch_reset, ["POST"]),
         admins("/api/ais/batches/{batch_id}/translation.txt", ais.batch_translation),
+        # Treatments give away what blinding hides: admins.
+        admins("/api/ais/compare", ais.compare_batches, ["POST"]),
+        admins("/api/ais/batches/{batch_id}/treatments", ais.batch_treatments),
+        admins("/api/ais/batches/{batch_id}/treatments", ais.batch_treatments_set, ["POST"]),
         admins("/api/ais/batches/{batch_id}/translation", ais.batch_translation_load, ["POST"]),
         admins("/api/ais/batches/{batch_id}/adds/{add_id}/randomize", ais.batch_rerandomize, ["POST"]),
         signed_in("/api/ais/results", ais.result_list),
@@ -144,6 +148,9 @@ def build_routes(static_server: StaticServer, cfg: Config) -> list[BaseRoute]:
         signed_in("/api/ais/results/{result_id}/delete", ais.result_delete, ["POST"]),
         signed_in("/api/ais/results/{result_id}/update", ais.result_update, ["POST"]),
         signed_in("/api/ais/results/{result_id}/soma", ais.result_soma, ["POST"]),
+        # The Measure tool's types: everyone reads them, admins set them.
+        signed_in("/api/ais/measure-types", ais.measure_types),
+        admins("/api/ais/measure-types", ais.measure_types_set, ["POST"]),
         signed_in("/api/ais/measurements", ais.measurement_list),
         signed_in("/api/ais/measurements", ais.measurement_add, ["POST"]),
         signed_in("/api/ais/measurements/{measurement_id}/update", ais.measurement_update, ["POST"]),
