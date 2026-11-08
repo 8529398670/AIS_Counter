@@ -500,6 +500,13 @@
             <button id="batches-compare" class="btn btn-outline-secondary btn-sm" type="button" data-i18n-attr="title:compare.button_help" hidden disabled>
               <i class="bi bi-bar-chart-line" aria-hidden="true"></i> <span id="batches-compare-label"></span>
             </button>
+            <!-- Admins: the team's folders (static/js/batch_folders.js). -->
+            <button id="batches-move-selected" class="btn btn-outline-secondary btn-sm" type="button" hidden>
+              <i class="bi bi-folder-symlink" aria-hidden="true"></i> <span id="batches-move-selected-label"></span>
+            </button>
+            <button id="batches-new-folder" class="btn btn-outline-secondary btn-sm" type="button" hidden>
+              <i class="bi bi-folder-plus" aria-hidden="true"></i> <span data-i18n="batches.folder_new"></span>
+            </button>
             <button id="batches-import" class="btn btn-outline-secondary btn-sm" type="button" data-i18n-attr="title:batches.import_help" hidden>
               <i class="bi bi-upload" aria-hidden="true"></i> <span data-i18n="batches.import"></span>
             </button>
@@ -516,6 +523,8 @@
           </form>
           <p id="batches-export-status" class="small text-primary" hidden></p>
           <p id="batches-none" class="text-body-secondary" data-i18n="batches.none" hidden></p>
+          <!-- The folders: a path and tiles, or the tree (static/js/batch_folders.js). -->
+          <div id="batches-shelf" class="batches-shelf"></div>
           <div id="batches-list" class="batches-list"></div>
           <!-- Pickers for Add images; batches.js remembers which batch asked. -->
           <input id="batches-add-folder" type="file" webkitdirectory multiple hidden />
@@ -564,6 +573,52 @@
                 <div class="modal-footer">
                   <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal" data-i18n="ais.cancel"></button>
                   <button type="submit" class="btn btn-primary" data-i18n="batches.stack_add"></button>
+                </div>
+              </form>
+            </div>
+          </div>
+
+          <!-- A folder's name, new or renamed (BatchFolders.openName). -->
+          <div class="modal fade" id="batches-folder-modal" tabindex="-1" aria-labelledby="batches-folder-title" aria-hidden="true">
+            <div class="modal-dialog">
+              <form class="modal-content" id="batches-folder-form" autocomplete="off">
+                <div class="modal-header">
+                  <div class="me-auto min-w-0">
+                    <h2 class="modal-title h5 mb-0" id="batches-folder-title"></h2>
+                    <div id="batches-folder-where" class="small text-body-secondary text-truncate"></div>
+                  </div>
+                  <button type="button" class="btn-close" data-bs-dismiss="modal" data-i18n-attr="aria-label:nav.close"></button>
+                </div>
+                <div class="modal-body">
+                  <label for="batches-folder-name" class="form-label" data-i18n="batches.folder_name"></label>
+                  <input id="batches-folder-name" class="form-control" maxlength="200" required />
+                </div>
+                <div class="modal-footer">
+                  <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal" data-i18n="ais.cancel"></button>
+                  <button type="submit" class="btn btn-primary" data-i18n="batches.folder_save"></button>
+                </div>
+              </form>
+            </div>
+          </div>
+
+          <!-- Move batches or a folder into another folder (BatchFolders.openMove). -->
+          <div class="modal fade" id="batches-move-modal" tabindex="-1" aria-labelledby="batches-move-title" aria-hidden="true">
+            <div class="modal-dialog">
+              <form class="modal-content" id="batches-move-form" autocomplete="off">
+                <div class="modal-header">
+                  <div class="me-auto min-w-0">
+                    <h2 class="modal-title h5 mb-0" id="batches-move-title" data-i18n="batches.move_title"></h2>
+                    <div id="batches-move-what" class="small text-body-secondary text-truncate"></div>
+                  </div>
+                  <button type="button" class="btn-close" data-bs-dismiss="modal" data-i18n-attr="aria-label:nav.close"></button>
+                </div>
+                <div class="modal-body">
+                  <label for="batches-move-to" class="form-label" data-i18n="batches.move_into"></label>
+                  <select id="batches-move-to" class="form-select" size="10"></select>
+                </div>
+                <div class="modal-footer">
+                  <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal" data-i18n="ais.cancel"></button>
+                  <button type="submit" class="btn btn-primary" data-i18n="batches.move_go"></button>
                 </div>
               </form>
             </div>
@@ -990,6 +1045,14 @@
                 <label for="settings-line-width" class="form-label"><span data-i18n="settings.line_width_label"></span> <span id="settings-line-width-value" class="text-body-secondary"></span></label>
                 <input id="settings-line-width" class="form-range" type="range" min="0.5" max="6" step="0.5" value="1.5" aria-describedby="settings-line-width-help" />
                 <div id="settings-line-width-help" class="form-text" data-i18n="settings.line_width_help"></div>
+              </div>
+              <div class="mb-3 settings-field">
+                <label for="settings-batches-view" class="form-label" data-i18n="settings.batches_view_label"></label>
+                <select id="settings-batches-view" class="form-select" aria-describedby="settings-batches-view-help">
+                  <option value="drill" data-i18n="settings.batches_view_drill"></option>
+                  <option value="tree" data-i18n="settings.batches_view_tree"></option>
+                </select>
+                <div id="settings-batches-view-help" class="form-text" data-i18n="settings.batches_view_help"></div>
               </div>
             </fieldset>
             <!-- How a Z-stack's AIS is measured (app/analysis/zlength.py). -->
@@ -1938,6 +2001,7 @@
   <script src="/js/ais_measure.js"></script>
   <script src="/js/treatments.js"></script>
   <script src="/js/compare.js"></script>
+  <script src="/js/batch_folders.js"></script>
   <script src="/js/batches.js"></script>
   <script src="/js/logs.js"></script>
   <script src="/js/jobs.js"></script>

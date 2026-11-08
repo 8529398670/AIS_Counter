@@ -417,16 +417,19 @@ async def batch_list(request: Request) -> Response:
             # A treatment gives away what blinding hides as much as a name does.
             row.pop("treatments", None)
             row.pop("untreated", None)
-    return JSONResponse({"batches": rows})
+    folders = await run(batches.list_folders, get_store(request))
+    return JSONResponse({"batches": rows, "folders": folders})
 
 
 async def batch_create(request: Request) -> Response:
-    """Body: {name}: an empty batch, its images added afterwards."""
+    """Body: {name, folder_id?}: an empty batch, its images added afterwards,
+    in that folder (the one the Batches screen is showing) or at the top."""
     body, refused = await _body(request)
     if refused:
         return refused
     try:
-        batch = await run(batches.new_batch, get_store(request), body.get("name"), "upload", _user_id(request))
+        batch = await run(batches.new_batch, get_store(request), body.get("name"), "upload", _user_id(request),
+                          None, body.get("folder_id"))
     except batches.BatchError as exc:
         return bad_request(str(exc))
     return JSONResponse(await run(_batch_json, request, batch))
@@ -484,6 +487,91 @@ async def batch_order(request: Request) -> Response:
         return refused
     try:
         await run(batches.order_batches, get_store(request), body.get("ids"))
+    except batches.BatchError as exc:
+        return bad_request(str(exc))
+    return JSONResponse({"ok": True})
+
+
+async def batch_move(request: Request) -> Response:
+    """Body: {ids, folder_id}: those batches into that folder, null for the
+    top (admins)."""
+    body, refused = await _body(request)
+    if refused:
+        return refused
+    try:
+        moved = await run(batches.move_batches, get_store(request), body.get("ids"), body.get("folder_id"))
+    except batches.BatchError as exc:
+        return bad_request(str(exc))
+    return JSONResponse({"moved": moved})
+
+
+# --- the Batches screen's folders (admins change them) --------------------------
+
+
+async def folder_list(request: Request) -> Response:
+    return JSONResponse({"folders": await run(batches.list_folders, get_store(request))})
+
+
+async def folder_create(request: Request) -> Response:
+    """Body: {name, parent_id}: a new folder, first in its parent (null: the top)."""
+    body, refused = await _body(request)
+    if refused:
+        return refused
+    try:
+        folder = await run(batches.create_folder, get_store(request), body.get("name"), body.get("parent_id"),
+                           _user_id(request))
+    except batches.BatchError as exc:
+        return bad_request(str(exc))
+    return JSONResponse(folder)
+
+
+def _folder_id(request: Request) -> int | None:
+    return parse_id(request.path_params["folder_id"])
+
+
+async def folder_rename(request: Request) -> Response:
+    """Body: {name}."""
+    body, refused = await _body(request)
+    if refused:
+        return refused
+    folder_id = _folder_id(request)
+    try:
+        folder = await run(batches.rename_folder, get_store(request), folder_id, body.get("name")) if folder_id else None
+    except batches.BatchError as exc:
+        return bad_request(str(exc))
+    return JSONResponse(folder) if folder else not_found("no such folder")
+
+
+async def folder_move(request: Request) -> Response:
+    """Body: {parent_id}: into another folder, null for the top."""
+    body, refused = await _body(request)
+    if refused:
+        return refused
+    folder_id = _folder_id(request)
+    try:
+        folder = await run(batches.move_folder, get_store(request), folder_id, body.get("parent_id")) if folder_id else None
+    except batches.BatchError as exc:
+        return bad_request(str(exc))
+    return JSONResponse(folder) if folder else not_found("no such folder")
+
+
+async def folder_delete(request: Request) -> Response:
+    """The folder gone, what was in it moved up to its parent."""
+    body, refused = await _body(request)
+    if refused:
+        return refused
+    folder_id = _folder_id(request)
+    folder = await run(batches.delete_folder, get_store(request), folder_id) if folder_id else None
+    return JSONResponse({"ok": True}) if folder else not_found("no such folder")
+
+
+async def folder_order(request: Request) -> Response:
+    """Body: {parent_id, ids}: the order of one folder's folders."""
+    body, refused = await _body(request)
+    if refused:
+        return refused
+    try:
+        await run(batches.order_folders, get_store(request), body.get("parent_id"), body.get("ids"))
     except batches.BatchError as exc:
         return bad_request(str(exc))
     return JSONResponse({"ok": True})

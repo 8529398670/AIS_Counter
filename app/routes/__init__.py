@@ -215,6 +215,14 @@ def build_routes(static_server: StaticServer, cfg: Config) -> list[BaseRoute]:
         signed_in("/api/ais/batches/upload", ais.batch_upload, ["POST"], max_body_size=ais.UPLOAD_LIMIT_BYTES),
         # The team's priority order: admins.
         admins("/api/ais/batches/order", ais.batch_order, ["POST"]),
+        # The team's folders, and filing batches in them: everyone sees them, admins change them.
+        admins("/api/ais/batches/move", ais.batch_move, ["POST"]),
+        signed_in("/api/ais/folders", ais.folder_list),
+        admins("/api/ais/folders", ais.folder_create, ["POST"]),
+        admins("/api/ais/folders/order", ais.folder_order, ["POST"]),
+        admins("/api/ais/folders/{folder_id}/rename", ais.folder_rename, ["POST"]),
+        admins("/api/ais/folders/{folder_id}/move", ais.folder_move, ["POST"]),
+        admins("/api/ais/folders/{folder_id}/delete", ais.folder_delete, ["POST"]),
         # Backups hold the original names: admins.
         admins("/api/ais/batches/import", ais.batch_import, ["POST"], max_body_size=ais.UPLOAD_LIMIT_BYTES),
         admins("/api/ais/batches/import/missing", ais.batch_import_missing, ["POST"],

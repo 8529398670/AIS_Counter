@@ -56,7 +56,7 @@ const Settings = {
     // "fitted2" a second trial (start "fitted2", the fitted2_ filters);
     // "learned" its own detector (start "learned", app/analysis/learned.py)
     // with a lowest score and length.
-    defaults: { min_length: 0 , line_width: 1.5 , z_method: "trace_lift" ,
+    defaults: { min_length: 0 , line_width: 1.5 , z_method: "trace_lift" , batches_view: "drill" ,
       auto_review: "each" , auto_method: "fitted" , auto_start: "soma" , auto_min_length: 5 , auto_min_brightness: 30 ,
       auto_min_width: 2.4 , auto_max_soma_gap: 10 ,
       fitted_min_length: 13 , fitted_min_brightness: 55 , fitted_max_branchiness: 1.02 ,
@@ -64,6 +64,7 @@ const Settings = {
       learned_min_score: 25 , learned_min_length: 0 ,
       auto_skip_done: true },
     controls: { min_length: "settings-min-length" , line_width: "settings-line-width" , z_method: "settings-z-method" ,
+      batches_view: "settings-batches-view" ,
       auto_review: "settings-auto-review" , auto_method: "settings-auto-method" , auto_start: "settings-auto-start" ,
       auto_min_length: "settings-auto-min-length" , auto_min_brightness: "settings-auto-min-brightness" ,
       auto_min_width: "settings-auto-min-width" , auto_max_soma_gap: "settings-auto-max-soma-gap" ,
@@ -78,7 +79,8 @@ const Settings = {
       fitted_min_length: [ 0 , 1000 ] , fitted_min_brightness: [ 0 , 100 ] , fitted_max_branchiness: [ 0 , 10 ] ,
       fitted2_min_length: [ 0 , 1000 ] , fitted2_min_contrast: [ 0 , 100 ] , fitted2_min_brightness: [ 0 , 100 ] ,
       fitted2_max_branchiness: [ 0 , 10 ] , learned_min_score: [ 0 , 100 ] , learned_min_length: [ 0 , 1000 ] },
-    choices: { auto_review: [ "each" , "end" , "all" ] , auto_method: [ "classic" , "fitted" , "fitted2" , "learned" ] ,
+    // batches_view: how the Batches screen shows its folders (batch_folders.js).
+    choices: { batches_view: [ "drill" , "tree" ] , auto_review: [ "each" , "end" , "all" ] , auto_method: [ "classic" , "fitted" , "fitted2" , "learned" ] ,
       auto_start: [ "soma" , "both" , "brighter" , "dimmer" ] },
     // A build that briefly made the fitted filters the auto_ ones (marked by
     // auto_max_branchiness) saved its values there: they move to fitted_,
@@ -285,6 +287,8 @@ const Settings = {
   pixconv() { return this.values.pixconv; },
   // How a Z-stack's AIS is measured (zMethods).
   zMethod() { return this.values.z_method; },
+  // The Batches screen's folders: "drill" (one folder at a time) or "tree".
+  batchesView() { return this.values.batches_view; },
   // µm; 0 is off.
   minLength() { return this.values.min_length; },
   // Screen pixels, whatever the zoom.

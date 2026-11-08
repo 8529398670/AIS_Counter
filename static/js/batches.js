@@ -6,7 +6,9 @@
 // list again every few seconds, so it is the team's live monitor.
 //
 // The cards are in the team's priority order; admins change it by dragging a
-// card's grip or from its menu. Reports (one batch, or every batch shown) are
+// card's grip or from its menu. They are filed in the team's folders, which
+// BatchFolders (batch_folders.js) lays out: one folder at a time or as a
+// tree, as Settings says. Reports (one batch, or every batch shown) are
 // built in AisExport: an Excel workbook, or a ZIP with it and the traced PNGs.
 //
 // Adding images blinds their names unless the Add menu's Randomize switch is
@@ -64,12 +66,14 @@ const Batches = {
     } );
     // A poll does not redraw under an open menu; it catches up once it closes.
     Dom.get( "batches-list" ).addEventListener( "hidden.bs.dropdown" , () => this.render() );
-    window.addEventListener( "hashchange" , () => this.onView() );
+    // Another folder opened (#batches/folder/<id>) draws at once, then polls.
+    window.addEventListener( "hashchange" , () => { if ( this.showing() ) this.render(); this.onView(); } );
     document.addEventListener( "visibilitychange" , () => this.onView() );
     this.initReset();
     this.initStack();
     Treatments.init();
     Compare.init();
+    BatchFolders.init();
     Dom.get( "batches-compare" ).addEventListener( "click" , () => this.compareSelected() );
     this.onView();
   },
@@ -93,6 +97,9 @@ const Batches = {
     Dom.show( button , this.admin() );
     button.disabled = this.selected.size < 2;
     Dom.text( Dom.get( "batches-compare-label" ) , I18n.get( "compare.button" ).replace( "{n}" , this.selected.size ) );
+    const move = Dom.get( "batches-move-selected" );
+    Dom.show( move , this.admin() && this.selected.size > 0 );
+    Dom.text( Dom.get( "batches-move-selected-label" ) , I18n.get( "batches.move_selected" ).replace( "{n}" , this.selected.size ) );
   },
 
   selectBox( b ) {
@@ -124,15 +131,16 @@ const Batches = {
     // A poll that started before a newer refresh must not draw its older list
     // over it (a batch just made would vanish until the next poll).
     const ask = this.asked = ( this.asked || 0 ) + 1;
-    let list;
+    let reply;
     try {
-      list = ( await Api.request( "/api/ais/batches" ) ).batches;
+      reply = await Api.request( "/api/ais/batches" );
     } catch ( error ) {
       if ( !quiet ) App.showError( error.message );
       return;
     }
     if ( ask !== this.asked ) return;
-    this.list = list;
+    BatchFolders.set( reply.folders );
+    this.list = reply.batches;
     // The open image lists follow along too.
     await Promise.all( Array.from( this.expanded ).map( ( id ) => this.loadStatus( id ) ) );
     if ( ask !== this.asked ) return;
@@ -173,7 +181,8 @@ const Batches = {
   async createNamed( name ) {
     let batch;
     try {
-      batch = await Api.post( "/api/ais/batches" , { name: name } );
+      // In the folder open, if one is.
+      batch = await Api.post( "/api/ais/batches" , { name: name , folder_id: BatchFolders.here() } );
     } catch ( error ) {
       App.showError( error.message );
       return null;
@@ -397,9 +406,11 @@ const Batches = {
       await Promise.all( Array.from( { length: Ais.concurrency } , worker ) );
       for ( let i = 0 ; i < manifest.batches.length ; i += 1 ) {
         this.statusLine( I18n.get( "batches.import_saving" ).replace( "{done}" , i + 1 ).replace( "{total}" , manifest.batches.length ) );
-        await Api.post( "/api/ais/batches/import" , { format: manifest.format , version: manifest.version ,
+        const imported = await Api.post( "/api/ais/batches/import" , { format: manifest.format , version: manifest.version ,
           users: manifest.users , batch: manifest.batches[ i ].batch , results: manifest.batches[ i ].results ,
           measurements: manifest.batches[ i ].measurements } );
+        // Into the folder open, as a new batch would be.
+        if ( BatchFolders.here() != null ) await Api.post( "/api/ais/batches/move" , { ids: [ imported.id ] , folder_id: BatchFolders.here() } );
       }
       const absent = missing.length - todo.length;
       this.statusLine( I18n.get( "batches.import_done" ).replace( "{batches}" , manifest.batches.length ).replace( "{files}" , todo.length ) +
@@ -448,7 +459,8 @@ const Batches = {
     const sides = [ "batches-drop-before" , "batches-drop-after" , "batches-drop-vertical" ];
     const side = ( e ) => {
       const rect = card.getBoundingClientRect();
-      const columns = window.getComputedStyle( Dom.get( "batches-list" ) ).gridTemplateColumns.split( " " ).length;
+      // Its own grid: in the tree view each folder has one.
+      const columns = window.getComputedStyle( card.parentElement ).gridTemplateColumns.split( " " ).length;
       return columns > 1 ? [ e.clientX > rect.left + rect.width / 2 , false ] : [ e.clientY > rect.top + rect.height / 2 , true ];
     };
     card.addEventListener( "dragstart" , ( e ) => {
@@ -529,9 +541,10 @@ const Batches = {
   },
 
   // Every batch the screen shows: the filter, Mine only and Show archived
-  // apply. A ZIP asks what to put in first.
+  // apply, and the folder open (with the folders inside it). A ZIP asks what
+  // to put in first.
   exportAll( kind ) {
-    const list = this.list ? this.shown() : [];
+    const list = this.list ? BatchFolders.inView( this.shown() ) : [];
     if ( !list.length ) {
       App.showError( I18n.get( "batches.nothing_to_export" ) );
       return;
@@ -811,9 +824,9 @@ const Batches = {
     const shown = this.shown();
     const holder = Dom.get( "batches-list" );
     Dom.clear( holder );
-    Dom.show( Dom.get( "batches-none" ) , !shown.length );
+    const any = BatchFolders.render( Dom.get( "batches-shelf" ) , holder , shown , ( b ) => this.card( b ) );
+    Dom.show( Dom.get( "batches-none" ) , !any );
     Dom.text( Dom.get( "batches-none" ) , I18n.get( this.list.length ? "batches.none_match" : "batches.none" ) );
-    shown.forEach( ( b ) => holder.appendChild( this.card( b ) ) );
     this.renderCompare();
     if ( this.fresh ) {
       const card = Dom.get( "batches-card-" + this.fresh );
@@ -929,6 +942,7 @@ const Batches = {
         this.menuItem( "bi-chevron-double-up" , I18n.get( "batches.move_top" ) , () => this.saveOrder( this.moved( b.id , null , false ) ) ),
         this.menuItem( "bi-chevron-up" , I18n.get( "batches.move_up" ) , () => this.move( b , -1 ) ),
         this.menuItem( "bi-chevron-down" , I18n.get( "batches.move_down" ) , () => this.move( b , 1 ) ),
+        this.menuItem( "bi-folder-symlink" , I18n.get( "batches.move_to_folder" ) , () => BatchFolders.openMove( { batchIds: [ b.id ] } ) ),
       );
       if ( b.images ) {
         items.push( divider() );

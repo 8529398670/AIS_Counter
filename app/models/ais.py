@@ -45,6 +45,13 @@ A backup (backup_batch, import_batch) is a batch and its results as data, to
 get a lost batch back or hand one to another server. It keeps blinded names,
 so only admins get one; the page adds it to a ZIP export, with the image files
 if asked (static/js/ais_export.js). Importing always makes a new batch.
+
+The Batches screen files batches in folders, which nest: a folder has a
+parent_id (None at the top), a batch a folder_id (missing or None at the
+top). They are the team's, changed by admins only (the routes see to that).
+Deleting a folder loses nothing: what was in it moves up to its parent. The
+batches' priority order stays one order for every batch; a folder shows its
+batches in that order.
 """
 from __future__ import annotations
 
@@ -58,7 +65,8 @@ from collections import Counter
 from typing import Any, Callable
 
 from app.analysis import zstack
-from app.core.db import BUCKET_AIS_BATCHES, BUCKET_AIS_MEASUREMENTS, BUCKET_AIS_RESULTS, BUCKET_META, Record, Store
+from app.core.db import (BUCKET_AIS_BATCHES, BUCKET_AIS_FOLDERS, BUCKET_AIS_MEASUREMENTS, BUCKET_AIS_RESULTS,
+                         BUCKET_META, Record, Store)
 from app.models import to_iso, utc_now
 
 PROCESSED_SUFFIX = ".tif - Processed method 2.5.tif"
@@ -740,10 +748,12 @@ def _stamp(record: Record) -> None:
     record["updated_at"] = to_iso(utc_now())
 
 
-def new_batch(store: Store, name: str, source: str, user_id: int, path: str | None = None) -> Record:
-    """An empty batch; images come with add_files."""
+def new_batch(store: Store, name: str, source: str, user_id: int, path: str | None = None,
+              folder_id: Any = None) -> Record:
+    """An empty batch, in folder_id (None: at the top); images come with add_files."""
     if source not in SOURCES:
         raise BatchError("unknown source")
+    folder_id = _folder_ref(store, folder_id)
     batch_id = store.next_sequence(BUCKET_AIS_BATCHES)
     now = to_iso(utc_now())
     top = min((_position(b) for _, b in store.all(BUCKET_AIS_BATCHES)), default=0)
@@ -762,6 +772,8 @@ def new_batch(store: Store, name: str, source: str, user_id: int, path: str | No
         "adds": [],
         "excluded": [],
     }
+    if folder_id is not None:
+        record["folder_id"] = folder_id
     store.put(BUCKET_AIS_BATCHES, batch_id, record)
     return record
 
@@ -914,6 +926,169 @@ def get_batch(store: Store, batch_id: int) -> Record | None:
     return store.get(BUCKET_AIS_BATCHES, batch_id)
 
 
+# --- folders -------------------------------------------------------------------
+
+MAX_FOLDERS = 2000
+MAX_FOLDER_DEPTH = 12   # folders inside folders, the top one counting 1
+
+
+def _is_id(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _folder_ref(store: Store | Any, folder_id: Any) -> int | None:
+    """folder_id checked: None (the top) or a folder that exists. store may be
+    a transaction."""
+    if folder_id is None:
+        return None
+    if not _is_id(folder_id) or store.get(BUCKET_AIS_FOLDERS, folder_id) is None:
+        raise BatchError("no such folder")
+    return folder_id
+
+
+def _parents(folders: list[Record]) -> dict[int, int | None]:
+    return {f["id"]: f.get("parent_id") for f in folders}
+
+
+def _depth(parents: dict[int, int | None], folder_id: int | None) -> int:
+    """How many folders deep folder_id is (0 for the top)."""
+    n = 0
+    while folder_id is not None and n <= len(parents):
+        folder_id, n = parents.get(folder_id), n + 1
+    return n
+
+
+def _height(parents: dict[int, int | None], folder_id: int) -> int:
+    """How many folders deep folder_id goes, itself counting 1."""
+    children = [f for f, p in parents.items() if p == folder_id]
+    return 1 + max((_height(parents, c) for c in children), default=0)
+
+
+def _folder_position(folder: Record) -> int:
+    position = folder.get("position")
+    return position if isinstance(position, int) else 0
+
+
+def list_folders(store: Store) -> list[Record]:
+    """Every folder, each parent's in their order."""
+    folders = [f for _, f in store.all(BUCKET_AIS_FOLDERS)]
+    return sorted(folders, key=lambda f: (f.get("parent_id") or 0, _folder_position(f), f["id"]))
+
+
+def create_folder(store: Store, name: Any, parent_id: Any, user_id: int) -> Record:
+    """A new folder, first in its parent (None: at the top)."""
+    clean = clean_name(name)
+    with store.transaction() as tx:
+        parent_id = _folder_ref(tx, parent_id)
+        folders = [f for _, f in tx.all(BUCKET_AIS_FOLDERS)]
+        if len(folders) >= MAX_FOLDERS:
+            raise BatchError(f"at most {MAX_FOLDERS} folders")
+        if _depth(_parents(folders), parent_id) + 1 > MAX_FOLDER_DEPTH:
+            raise BatchError(f"folders go at most {MAX_FOLDER_DEPTH} deep")
+        siblings = [f for f in folders if f.get("parent_id") == parent_id]
+        now = to_iso(utc_now())
+        folder_id = tx.next_sequence(BUCKET_AIS_FOLDERS)
+        record = {"id": folder_id, "name": clean, "parent_id": parent_id,
+                  "position": min((_folder_position(f) for f in siblings), default=0) - 1,
+                  "created_by": user_id, "created_at": now, "updated_at": now}
+        tx.put(BUCKET_AIS_FOLDERS, folder_id, record)
+    return record
+
+
+def rename_folder(store: Store, folder_id: int, name: Any) -> Record | None:
+    clean = clean_name(name)
+
+    def mutate(record: Record) -> None:
+        record["name"] = clean
+        _stamp(record)
+
+    return store.update_value(BUCKET_AIS_FOLDERS, folder_id, mutate)
+
+
+def move_folder(store: Store, folder_id: int, parent_id: Any) -> Record | None:
+    """Into another folder (None: the top), last there; not into itself or
+    anything inside it. None when the folder is gone."""
+    with store.transaction() as tx:
+        folder = tx.get(BUCKET_AIS_FOLDERS, folder_id)
+        if folder is None:
+            return None
+        parent_id = _folder_ref(tx, parent_id)
+        folders = [f for _, f in tx.all(BUCKET_AIS_FOLDERS)]
+        parents = _parents(folders)
+        at = parent_id
+        while at is not None:
+            if at == folder_id:
+                raise BatchError("a folder cannot go inside itself")
+            at = parents.get(at)
+        if _depth(parents, parent_id) + _height(parents, folder_id) > MAX_FOLDER_DEPTH:
+            raise BatchError(f"folders go at most {MAX_FOLDER_DEPTH} deep")
+        if folder.get("parent_id") != parent_id:
+            siblings = [f for f in folders if f.get("parent_id") == parent_id]
+            folder["parent_id"] = parent_id
+            folder["position"] = max((_folder_position(f) for f in siblings), default=0) + 1
+            _stamp(folder)
+            tx.put(BUCKET_AIS_FOLDERS, folder_id, folder)
+    return folder
+
+
+def order_folders(store: Store, parent_id: Any, ids: Any) -> None:
+    """The order of one folder's folders (None: the top's): ids first, then
+    the rest as they were."""
+    if not isinstance(ids, list) or len(ids) > MAX_FOLDERS or not all(_is_id(i) for i in ids):
+        raise BatchError("ids must be a list of folder ids")
+    if len(set(ids)) != len(ids):
+        raise BatchError("ids must not repeat")
+    with store.transaction() as tx:
+        parent_id = _folder_ref(tx, parent_id)
+        current = sorted((f for _, f in tx.all(BUCKET_AIS_FOLDERS) if f.get("parent_id") == parent_id),
+                         key=lambda f: (_folder_position(f), f["id"]))
+        rank = {folder_id: n for n, folder_id in enumerate(ids)}
+        ordered = sorted(current, key=lambda f: (0, rank[f["id"]]) if f["id"] in rank else (1, 0))
+        for position, folder in enumerate(ordered):
+            if folder.get("position") != position:
+                tx.put(BUCKET_AIS_FOLDERS, folder["id"], folder | {"position": position})
+
+
+def delete_folder(store: Store, folder_id: int) -> Record | None:
+    """The folder gone, its folders and batches moved up into its parent
+    (after what is there). Returns the folder that was deleted, None when it
+    was gone already."""
+    with store.transaction() as tx:
+        folder = tx.get(BUCKET_AIS_FOLDERS, folder_id)
+        if folder is None:
+            return None
+        parent_id = folder.get("parent_id")
+        folders = [f for _, f in tx.all(BUCKET_AIS_FOLDERS)]
+        end = max((_folder_position(f) for f in folders if f.get("parent_id") == parent_id), default=0)
+        children = sorted((f for f in folders if f.get("parent_id") == folder_id),
+                          key=lambda f: (_folder_position(f), f["id"]))
+        for n, child in enumerate(children, 1):
+            tx.put(BUCKET_AIS_FOLDERS, child["id"], child | {"parent_id": parent_id, "position": end + n})
+        for key, batch in tx.all(BUCKET_AIS_BATCHES):
+            if batch.get("folder_id") == folder_id:
+                tx.put(BUCKET_AIS_BATCHES, key, batch | {"folder_id": parent_id})
+        tx.delete(BUCKET_AIS_FOLDERS, folder_id)
+    return folder
+
+
+def move_batches(store: Store, ids: Any, folder_id: Any) -> int:
+    """Batches ids into folder_id (None: the top). Returns how many moved;
+    ids no longer there are skipped."""
+    if not isinstance(ids, list) or not ids or len(ids) > 10000 or not all(_is_id(i) for i in ids):
+        raise BatchError("ids must be a list of batch ids")
+    moved = 0
+    with store.transaction() as tx:
+        folder_id = _folder_ref(tx, folder_id)
+        for batch_id in set(ids):
+            batch = tx.get(BUCKET_AIS_BATCHES, batch_id)
+            if batch is None:
+                continue
+            moved += 1
+            if batch.get("folder_id") != folder_id:
+                tx.put(BUCKET_AIS_BATCHES, batch_id, batch | {"folder_id": folder_id})
+    return moved
+
+
 def _rows_by_image(store: Store) -> dict[int, dict[str, list[Record]]]:
     """Every accepted AIS, grouped by batch and then image."""
     out: dict[int, dict[str, list[Record]]] = {}
@@ -948,6 +1123,7 @@ def list_batches(store: Store, viewer_id: int | None = None,
         item = ({k: batch[k] for k in ("id", "name", "source", "path", "created_by", "created_at")}
                 | {"updated_at": batch.get("updated_at", batch["created_at"]),
                    "archived_at": batch.get("archived_at"), "position": _position(batch),
+                   "folder_id": batch.get("folder_id"),
                    "images": len(batch["images"]), "included": len(included),
                    "completed": len(_included_complete(batch, by_image)),
                    "adds": list(batch.get("adds", [])),

@@ -60,6 +60,9 @@ BUCKET_AIS_BATCHES = "ais_batches"
 BUCKET_AIS_RESULTS = "ais_results"
 # The Measure tool's recorded lines: per image, nothing to do with any AIS.
 BUCKET_AIS_MEASUREMENTS = "ais_measurements"
+# The Batches screen's folders (nested, shared), batches filed in them by
+# folder_id. See app/models/ais.py.
+BUCKET_AIS_FOLDERS = "ais_folders"
 
 BUCKETS = (
     BUCKET_USERS,
@@ -77,6 +80,7 @@ BUCKETS = (
     BUCKET_AIS_BATCHES,
     BUCKET_AIS_RESULTS,
     BUCKET_AIS_MEASUREMENTS,
+    BUCKET_AIS_FOLDERS,
 )
 
 # How long a writer waits for another writer before giving up. Without it a
