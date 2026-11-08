@@ -5,7 +5,8 @@
 //   have treatments: Original names, By treatment and Statistics (the
 //   ANOVA blocks on image means and individual values; extraSheets).
 // - Compare selected (the Batches screen) takes two batches or more, one
-//   culture each, and downloads a ZIP: comparison.xlsx (culture means, the
+//   culture each, asks which stats to compute (choose; the ANOVA blocks by
+//   default), and downloads a ZIP: comparison.xlsx (culture means, the
 //   pooled groups, every test, every value), summary.csv, and per measure a
 //   box plot of the culture means and the cumulative distributions, as SVG
 //   and PNG (run).
@@ -29,8 +30,68 @@ const Compare = {
     return name || I18n.get( "treatments.none" );
   },
 
-  fetch( list ) {
-    return Api.post( "/api/ais/compare" , { batch_ids: list.map( ( b ) => b.id ) , labels: this.labels() } );
+  // choice: { tests, units } from choose(); without one the server runs
+  // every test (a batch report's Statistics sheet).
+  fetch( list , choice ) {
+    return Api.post( "/api/ais/compare" , Object.assign( { batch_ids: list.map( ( b ) => b.id ) , labels: this.labels() } , choice || {} ) );
+  },
+
+  // --- the dialog: which stats to compute (app/analysis/compare.py TESTS, UNITS) ---
+
+  TESTS: [ "anova" , "tukey" , "welch" , "dunnett" , "paired" , "unpaired" , "ks" ],
+  BLOCK_TESTS: [ "anova" , "tukey" , "welch" , "dunnett" ],
+  UNITS: [ "culture means" , "image means" , "individual values" ],
+  // Ticked each time the dialog opens: the whole ANOVA blocks, on every unit.
+  DEFAULTS: [ "anova" , "tukey" , "welch" , "dunnett" , "culture means" , "image means" , "individual values" ],
+  modal: null,
+  resolve: null,     // choose()'s promise: { tests, units }, or null when closed
+
+  init() {
+    const element = Dom.get( "compare-modal" );
+    this.modal = bootstrap.Modal.getOrCreateInstance( element );
+    element.addEventListener( "hidden.bs.modal" , () => this.finish( null ) );
+    const boxes = ( keys , prefix , into ) => Dom.get( into ).replaceChildren( ...keys.map( ( key ) => {
+      const id = "compare-" + prefix + "-" + key.replace( / /g , "-" );
+      const box = Dom.el( "input" , { class: "form-check-input" , attrs: { type: "checkbox" , id , "data-key": key } } );
+      box.addEventListener( "change" , () => this.check() );
+      return Dom.el( "div" , { class: "form-check" , children: [ box ,
+        Dom.el( "label" , { class: "form-check-label" , attrs: { for: id } , text: I18n.get( "compare." + prefix + "_" + key.replace( / /g , "_" ) ) } ) ] } );
+    } ) );
+    boxes( this.TESTS , "test" , "compare-tests" );
+    boxes( this.UNITS , "unit" , "compare-units" );
+    Dom.get( "compare-go" ).addEventListener( "click" , () => {
+      const choice = this.picked();
+      this.finish( choice );
+      this.modal.hide();
+    } );
+  },
+
+  picked() {
+    const ticked = ( into ) => [ ...Dom.get( into ).querySelectorAll( "input:checked" ) ].map( ( b ) => b.dataset.key );
+    return { tests: ticked( "compare-tests" ) , units: ticked( "compare-units" ) };
+  },
+
+  // The ANOVA tests need a unit; the units mean nothing without one of them.
+  check() {
+    const { tests , units } = this.picked();
+    const blocks = tests.some( ( t ) => this.BLOCK_TESTS.includes( t ) );
+    const stuck = blocks && !units.length;
+    Dom.get( "compare-go" ).disabled = stuck;
+    Dom.show( Dom.get( "compare-need-unit" ) , stuck );
+    Dom.get( "compare-units" ).querySelectorAll( "input" ).forEach( ( b ) => { b.disabled = !blocks; } );
+  },
+
+  choose() {
+    Dom.get( "compare-modal" ).querySelectorAll( "input[data-key]" ).forEach( ( b ) => { b.checked = this.DEFAULTS.includes( b.dataset.key ); } );
+    this.check();
+    this.modal.show();
+    return new Promise( ( resolve ) => { this.resolve = resolve; } );
+  },
+
+  finish( choice ) {
+    const resolve = this.resolve;
+    this.resolve = null;
+    if ( resolve ) resolve( choice );
   },
 
   header( keys ) {
@@ -128,8 +189,11 @@ const Compare = {
     note( I18n.get( "compare.checking" ) );
     try {
       if ( !await Treatments.ensure( list , true ) ) return;
+      note( "" );
+      const choice = await this.choose();
+      if ( !choice ) return;
       note( I18n.get( "compare.working" ) );
-      const out = await this.fetch( list );
+      const out = await this.fetch( list , choice );
       if ( out.treatments.length < 2 ) {
         App.showError( I18n.get( "compare.need_treatments" ) );
         return;

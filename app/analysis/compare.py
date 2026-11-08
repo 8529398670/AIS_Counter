@@ -211,11 +211,12 @@ def rm_anova(data: np.ndarray) -> tuple[float, float, int, int] | None:
 
 
 def _row(measure: str, design: str, test: str, groups: str, n: int, statistic: Any = None, p: Any = None,
-         note: str = "", main: bool = False) -> dict[str, Any]:
+         note: str = "", main: bool = False, family: str = "") -> dict[str, Any]:
     ok = statistic is not None and p is not None and math.isfinite(statistic) and math.isfinite(p)
     return {"measure": measure, "design": design, "test": test, "groups": groups, "n": n,
             "statistic": _round(statistic) if ok else None, "p": _p(p) if ok else None,
-            "p_holm": None, "note": note if ok or note else "could not be worked out", "main": main}
+            "p_holm": None, "note": note if ok or note else "could not be worked out", "main": main,
+            "family": family}
 
 
 CONTROL_RE = re.compile(r"\b(dmso|vehicle|control|ctrl|untreated)\b", re.IGNORECASE)
@@ -252,11 +253,11 @@ def _anova_block(measure: str, design: str, groups: dict[str, list[float]], main
     unit = UNIT_NOTES[design]
     refused = refused or ("" if all(n >= 2 for n in sizes) else f"needs 2 {design} per treatment")
     if refused:
-        return [_row(measure, design, "one-way ANOVA", "all", total, note=refused, main=main)]
+        return [_row(measure, design, "one-way ANOVA", "all", total, note=refused, main=main, family="anova")]
     k = len(treatments)
     f, p = _try(sps.f_oneway, *data)
     rows = [_row(measure, design, "one-way ANOVA", "all", total, f, p,
-                 f"F({k - 1}, {total - k}); {unit}" if f is not None else "", main)]
+                 f"F({k - 1}, {total - k}); {unit}" if f is not None else "", main, "anova")]
     pairs = list(itertools.combinations(range(k), 2))
     name = lambda i, j: f"{treatments[i]} vs {treatments[j]}"  # noqa: E731
     try:
@@ -265,9 +266,9 @@ def _anova_block(measure: str, design: str, groups: dict[str, list[float]], main
         tukey = None
     rows += [_row(measure, design, "Tukey HSD", name(i, j), sizes[i] + sizes[j],
                   *((float(tukey.statistic[i, j]), float(tukey.pvalue[i, j])) if tukey is not None else (None, None)),
-                  "p adjusted for every pair", main) for i, j in pairs]
+                  "p adjusted for every pair", main, "tukey") for i, j in pairs]
     rows += _pairwise([_row(measure, design, "Welch t-test (Holm)", name(i, j), sizes[i] + sizes[j],
-                            *_try(sps.ttest_ind, data[i], data[j], equal_var=False), "", main) for i, j in pairs])
+                            *_try(sps.ttest_ind, data[i], data[j], equal_var=False), "", main, "welch") for i, j in pairs])
     control = _control(treatments)
     c = treatments.index(control)
     others = [i for i in range(k) if i != c]
@@ -278,7 +279,7 @@ def _anova_block(measure: str, design: str, groups: dict[str, list[float]], main
         dunnett = None
     rows += [_row(measure, design, "Dunnett vs control", f"{treatments[i]} vs {control}", sizes[i] + sizes[c],
                   *((float(dunnett.statistic[n]), float(dunnett.pvalue[n])) if dunnett is not None else (None, None)),
-                  f"control: {control}; p adjusted", main) for n, i in enumerate(others)]
+                  f"control: {control}; p adjusted", main, "dunnett") for n, i in enumerate(others)]
     return rows
 
 
@@ -297,11 +298,14 @@ def _pairwise(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [r | {"p_holm": _p(a) if a is not None else None} for r, a in zip(rows, adjusted)]
 
 
-def tests_for(values: list[dict[str, Any]], measure: str, names: dict[int, str]) -> dict[str, Any]:
+def tests_for(values: list[dict[str, Any]], measure: str, names: dict[int, str],
+              units: tuple[str, ...] | list[str] = ()) -> dict[str, Any]:
     """Every test of one measure's treatments: {rows (the three ANOVA
     blocks, main first, then the others), dropped (the cultures left out of
     the paired tests: missing a treatment), brackets (the culture means'
-    Tukey HSD p per pair, for the box plot)}."""
+    Tukey HSD p per pair, for the box plot)}. units: the ANOVA blocks to
+    pick the main one from (every unit when empty); all three are worked
+    out regardless, for the box plot's brackets."""
     means = culture_means(values, measure)
     treatments = sorted({t for by in means.values() for t in by}, key=str.casefold)
     k = len(treatments)
@@ -310,10 +314,11 @@ def tests_for(values: list[dict[str, Any]], measure: str, names: dict[int, str])
     by_culture = {t: [by[t] for by in means.values() if t in by] for t in treatments}
     by_image = image_means(values, measure)
     by_value = {t: [v["value"] for v in values if v["measure"] == measure and v["treatment"] == t] for t in treatments}
-    units = [("culture means", by_culture), ("image means", by_image), ("individual values", by_value)]
-    main = next((d for d, g in units if all(len(g[t]) >= 2 for t in treatments)), "individual values")
-    blocks = {d: _anova_block(measure, d, g, d == main) for d, g in units}
-    anova_rows = blocks[main] + [r for d, _ in units if d != main for r in blocks[d]]
+    blocks_in = [("culture means", by_culture), ("image means", by_image), ("individual values", by_value)]
+    candidates = [(d, g) for d, g in blocks_in if not units or d in units] or blocks_in
+    main = next((d for d, g in candidates if all(len(g[t]) >= 2 for t in treatments)), candidates[-1][0])
+    blocks = {d: _anova_block(measure, d, g, d == main) for d, g in blocks_in}
+    anova_rows = blocks[main] + [r for d, _ in blocks_in if d != main for r in blocks[d]]
     brackets: dict[tuple[str, str], float | None] = {}
     for r in blocks["culture means"]:
         if r["test"] == "Tukey HSD":
@@ -328,17 +333,17 @@ def tests_for(values: list[dict[str, Any]], measure: str, names: dict[int, str])
     pairs = list(itertools.combinations(range(k), 2))
     if k == 2:
         a, b = (paired[:, 0], paired[:, 1]) if n else ([], [])
-        rows.append(_row(measure, "paired", "paired t-test", "all", n, *(_try(sps.ttest_rel, a, b) if n >= 2 else (None, None)), note))
+        rows.append(_row(measure, "paired", "paired t-test", "all", n, *(_try(sps.ttest_rel, a, b) if n >= 2 else (None, None)), note, family="paired"))
         rows.append(_row(measure, "paired", "Wilcoxon signed-rank", "all", n,
-                         *(_try(sps.wilcoxon, a, b) if n >= 2 else (None, None)), note))
+                         *(_try(sps.wilcoxon, a, b) if n >= 2 else (None, None)), note, family="paired"))
     else:
         anova = rm_anova(paired) if n >= 2 else None
         rows.append(_row(measure, "paired", "repeated-measures ANOVA", "all", n, *(anova[:2] if anova else (None, None)),
-                         note or (f"F({anova[2]}, {anova[3]})" if anova else "")))
+                         note or (f"F({anova[2]}, {anova[3]})" if anova else ""), family="paired"))
         rows.append(_row(measure, "paired", "Friedman", "all", n,
-                         *(_try(sps.friedmanchisquare, *paired.T) if n >= 2 else (None, None)), note))
+                         *(_try(sps.friedmanchisquare, *paired.T) if n >= 2 else (None, None)), note, family="paired"))
         pair_rows = [_row(measure, "paired", "paired t-test (Holm)", f"{treatments[i]} vs {treatments[j]}", n,
-                          *(_try(sps.ttest_rel, paired[:, i], paired[:, j]) if n >= 2 else (None, None)), note)
+                          *(_try(sps.ttest_rel, paired[:, i], paired[:, j]) if n >= 2 else (None, None)), note, family="paired")
                      for i, j in pairs]
         rows += _pairwise(pair_rows)
     groups = [[by[t] for by in means.values() if t in by] for t in treatments]
@@ -348,23 +353,23 @@ def tests_for(values: list[dict[str, Any]], measure: str, names: dict[int, str])
     total = sum(sizes)
     if k == 2:
         rows.append(_row(measure, "unpaired", "Welch t-test", "all", total,
-                         *(_try(sps.ttest_ind, groups[0], groups[1], equal_var=False) if enough else (None, None)), unote))
+                         *(_try(sps.ttest_ind, groups[0], groups[1], equal_var=False) if enough else (None, None)), unote, family="unpaired"))
         rows.append(_row(measure, "unpaired", "Mann-Whitney U", "all", total,
-                         *(_try(sps.mannwhitneyu, groups[0], groups[1]) if enough else (None, None)), unote))
+                         *(_try(sps.mannwhitneyu, groups[0], groups[1]) if enough else (None, None)), unote, family="unpaired"))
     else:
         rows.append(_row(measure, "unpaired", "one-way ANOVA", "all", total,
-                         *(_try(sps.f_oneway, *groups) if enough else (None, None)), unote))
+                         *(_try(sps.f_oneway, *groups) if enough else (None, None)), unote, family="unpaired"))
         rows.append(_row(measure, "unpaired", "Kruskal-Wallis", "all", total,
-                         *(_try(sps.kruskal, *groups) if enough else (None, None)), unote))
+                         *(_try(sps.kruskal, *groups) if enough else (None, None)), unote, family="unpaired"))
         rows += _pairwise([_row(measure, "unpaired", "Welch t-test (Holm)", f"{treatments[i]} vs {treatments[j]}",
                                 sizes[i] + sizes[j],
                                 *(_try(sps.ttest_ind, groups[i], groups[j], equal_var=False) if enough else (None, None)),
-                                unote) for i, j in pairs])
+                                unote, family="unpaired") for i, j in pairs])
     each = {t: [v["value"] for v in values if v["measure"] == measure and v["treatment"] == t] for t in treatments}
     rows += _pairwise([_row(measure, "individual values", "Kolmogorov-Smirnov (Holm)", f"{treatments[i]} vs {treatments[j]}",
                             len(each[treatments[i]]) + len(each[treatments[j]]),
                             *_try(sps.ks_2samp, each[treatments[i]], each[treatments[j]]),
-                            "individual values, not culture means") for i, j in pairs])
+                            "individual values, not culture means", family="ks") for i, j in pairs])
     return {"rows": anova_rows + rows, "dropped": dropped, "brackets": brackets}
 
 
@@ -509,16 +514,43 @@ def cdf_plot(measure_name: str, treatments: list[str], each: dict[str, list[floa
 # --- all of it -------------------------------------------------------------------
 
 
-def compare(store: Store, batch_ids: Any, labels: Any = None) -> dict[str, Any]:
+TESTS = ("anova", "tukey", "welch", "dunnett", "paired", "unpaired", "ks")
+BLOCK_TESTS = ("anova", "tukey", "welch", "dunnett")   # the ANOVA blocks' tests, run per unit
+UNITS = ("culture means", "image means", "individual values")
+
+
+def _choice(value: Any, known: tuple[str, ...], what: str) -> tuple[str, ...]:
+    """A list of known keys (None: all of them), in known's order."""
+    if value is None:
+        return known
+    if not isinstance(value, list) or not all(isinstance(v, str) and v in known for v in value):
+        raise CompareError(f"{what} must be a list of: {', '.join(known)}")
+    return tuple(k for k in known if k in value)
+
+
+def _chosen(row: dict[str, Any], tests: tuple[str, ...], units: tuple[str, ...]) -> bool:
+    if row["family"] not in tests:
+        return False
+    return row["family"] not in BLOCK_TESTS or row["design"] in units
+
+
+def compare(store: Store, batch_ids: Any, labels: Any = None, tests: Any = None, units: Any = None) -> dict[str, Any]:
     """The batches' values grouped by treatment: {measures, treatments,
     images, values, groups, pooled, stats, dropped, plots}. With one batch
     the stats are the ANOVA blocks and the KS tests (the culture means'
     block saying it needs 2 cultures), with no plots; the box plot and the
     cumulative distributions need two batches or more. labels: {measure:
-    name} for the plots' titles."""
+    name} for the plots' titles. tests (TESTS) and units (UNITS): which
+    stats rows to keep, every one when None; units narrows the ANOVA
+    blocks only (paired and unpaired are on culture means, KS on individual
+    values). The plots do not depend on them."""
     if not isinstance(batch_ids, list) or not batch_ids or len(batch_ids) > 200 or \
             not all(isinstance(b, int) and not isinstance(b, bool) for b in batch_ids):
         raise CompareError("batch_ids must be a list of batch ids")
+    tests = _choice(tests, TESTS, "tests")
+    units = _choice(units, UNITS, "units")
+    if not units and any(t in BLOCK_TESTS for t in tests):
+        raise CompareError("the ANOVA tests need at least one unit")
     batch_ids = list(dict.fromkeys(batch_ids))
     names = labels if isinstance(labels, dict) else {}
     found = collect(store, batch_ids)
@@ -532,13 +564,15 @@ def compare(store: Store, batch_ids: Any, labels: Any = None) -> dict[str, Any]:
         batch = batches.get_batch(store, b)
         batch_names[b] = batch["name"] if batch else str(b)
     for measure in out["measures"]:
-        tested = tests_for(values, measure, batch_names)
+        tested = tests_for(values, measure, batch_names, units)
+        rows = [r for r in tested["rows"] if _chosen(r, tests, units)]
         if not several:
             # One culture: the paired and unpaired culture-mean tests have nothing to work on.
-            out["stats"] += [r for r in tested["rows"] if r["design"] not in ("paired", "unpaired")]
+            out["stats"] += [r for r in rows if r["design"] not in ("paired", "unpaired")]
             continue
-        out["stats"] += tested["rows"]
-        out["dropped"] += [{"measure": measure, "batch": b} for b in tested["dropped"]]
+        out["stats"] += rows
+        if "paired" in tests:
+            out["dropped"] += [{"measure": measure, "batch": b} for b in tested["dropped"]]
         name = names.get(measure) if isinstance(names.get(measure), str) else None
         name = name or DEFAULT_LABELS.get(measure) or measure[len(TYPE_PREFIX):] or "(no type)"
         means = culture_means(values, measure)
@@ -548,25 +582,5 @@ def compare(store: Store, batch_ids: Any, labels: Any = None) -> dict[str, Any]:
         each = {t: [v["value"] for v in values if v["measure"] == measure and v["treatment"] == t] for t in treatments}
         out["plots"].append({"measure": measure, "kind": "box",
                              "svg": box_plot(name, treatments, means, batch_names, tested["brackets"], len(means))})
-        out["plots"].append({"measure": measure, "kind": "cdf", "svg": cdf_plot(name, treatments, each)})
-    return out
-    batch_names = {}
-    for b in batch_ids:
-        batch = batches.get_batch(store, b)
-        batch_names[b] = batch["name"] if batch else str(b)
-    for measure in out["measures"]:
-        name = names.get(measure) if isinstance(names.get(measure), str) else None
-        name = name or DEFAULT_LABELS.get(measure) or measure[len(TYPE_PREFIX):] or "(no type)"
-        tested = tests_for(values, measure, batch_names)
-        out["stats"] += tested["rows"]
-        out["dropped"] += [{"measure": measure, "batch": b} for b in tested["dropped"]]
-        means = culture_means(values, measure)
-        treatments = sorted({t for by in means.values() for t in by}, key=str.casefold)
-        if not treatments:
-            continue
-        paired_n = sum(1 for by in means.values() if all(t in by for t in treatments))
-        each = {t: [v["value"] for v in values if v["measure"] == measure and v["treatment"] == t] for t in treatments}
-        out["plots"].append({"measure": measure, "kind": "box",
-                             "svg": box_plot(name, treatments, means, batch_names, tested["brackets"], paired_n)})
         out["plots"].append({"measure": measure, "kind": "cdf", "svg": cdf_plot(name, treatments, each)})
     return out

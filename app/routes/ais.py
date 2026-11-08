@@ -613,14 +613,16 @@ async def batch_treatments_set(request: Request) -> Response:
 
 
 async def compare_batches(request: Request) -> Response:
-    """Body: {batch_ids, labels?}: the batches' measurements grouped by
-    treatment, and with two or more, tested and plotted (admins: it has the
-    original names and treatments). See app/analysis/compare.py."""
+    """Body: {batch_ids, labels?, tests?, units?}: the batches' measurements
+    grouped by treatment, and with two or more, tested and plotted (admins:
+    it has the original names and treatments). tests/units pick the stats
+    rows (every one when left out). See app/analysis/compare.py."""
     body, refused = await _body(request)
     if refused:
         return refused
     try:
-        out = await run(compare.compare, get_store(request), body.get("batch_ids"), body.get("labels"))
+        out = await run(compare.compare, get_store(request), body.get("batch_ids"), body.get("labels"),
+                        body.get("tests"), body.get("units"))
     except compare.CompareError as exc:
         return bad_request(str(exc))
     return JSONResponse(out)

@@ -265,6 +265,51 @@ def test_too_few_cultures_say_so_instead_of_a_p_value(store):
     assert welch["p"] is None and welch["note"] == "needs 2 cultures per treatment"
 
 
+# --- choosing the stats (the Compare dialog) ----------------------------------------
+
+
+def _three_cultures(store):
+    means = {"DMSO": [40.0, 42.0, 41.0], "TTX": [30.0, 33.0, 31.5], "KCl": [35.0, 36.0, 36.5]}
+    return [culture(store, f"C{c}", {t: [vs[c] - 1, vs[c] + 1] for t, vs in means.items()})["id"] for c in range(3)]
+
+
+def test_every_row_says_its_family_and_no_choice_keeps_every_test(store):
+    ids = _three_cultures(store)
+    everything = compare.compare(store, ids)
+    assert {r["family"] for r in everything["stats"]} == set(compare.TESTS)
+    chosen = compare.compare(store, ids, tests=list(compare.TESTS), units=list(compare.UNITS))
+    assert chosen["stats"] == everything["stats"]
+
+
+def test_the_anova_blocks_alone_leave_out_paired_unpaired_and_ks(store):
+    a = culture(store, "C1", {"DMSO": [10, 11], "TTX": [5, 6]})
+    b = culture(store, "C2", {"DMSO": [12, 13], "TTX": [6, 7]})
+    c = culture(store, "C3", {"DMSO": [11, 12]})
+    out = compare.compare(store, [a["id"], b["id"], c["id"]], tests=["anova", "tukey", "welch", "dunnett"])
+    assert {r["family"] for r in out["stats"]} == {"anova", "tukey", "welch", "dunnett"}
+    assert {r["design"] for r in out["stats"]} == set(compare.UNITS)
+    assert out["dropped"] == []
+    everything = compare.compare(store, [a["id"], b["id"], c["id"]])
+    assert [p["svg"] for p in out["plots"]] == [p["svg"] for p in everything["plots"]]
+
+
+def test_units_narrow_the_blocks_and_main_moves_to_a_chosen_one(store):
+    ids = _three_cultures(store)
+    out = compare.compare(store, ids, tests=["anova", "tukey"], units=["image means"])
+    assert {r["design"] for r in out["stats"]} == {"image means"}
+    assert all(r["main"] for r in out["stats"])
+    ks = compare.compare(store, ids, tests=["ks"], units=["culture means"])
+    assert {r["test"] for r in ks["stats"]} == {"Kolmogorov-Smirnov (Holm)"}
+    assert compare.compare(store, ids, tests=[])["stats"] == []
+
+
+@pytest.mark.parametrize("tests, units", [("anova", None), (["nope"], None), (None, ["cultures"]), (["anova"], [])])
+def test_a_bad_choice_of_stats_is_refused(store, tests, units):
+    ids = _three_cultures(store)
+    with pytest.raises(compare.CompareError):
+        compare.compare(store, ids, tests=tests, units=units)
+
+
 # --- the ANOVA blocks ---------------------------------------------------------------
 
 

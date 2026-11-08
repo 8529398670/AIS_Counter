@@ -69,6 +69,7 @@ const Batches = {
     this.initReset();
     this.initStack();
     Treatments.init();
+    Compare.init();
     Dom.get( "batches-compare" ).addEventListener( "click" , () => this.compareSelected() );
     this.onView();
   },

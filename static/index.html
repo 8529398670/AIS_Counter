@@ -570,6 +570,32 @@
           </div>
 
           <!-- Reset results: an admin deletes a batch's AIS to run it again, a backup first (static/js/batches.js). -->
+          <!-- Compare selected: which stats the Statistics sheet gets; the boxes are made by compare.js (choose). -->
+          <div class="modal fade" id="compare-modal" tabindex="-1" aria-labelledby="compare-title" aria-hidden="true">
+            <div class="modal-dialog">
+              <div class="modal-content">
+                <div class="modal-header">
+                  <h2 class="modal-title h5" id="compare-title" data-i18n="compare.stats_title"></h2>
+                  <button type="button" class="btn-close" data-bs-dismiss="modal" data-i18n-attr="aria-label:nav.close"></button>
+                </div>
+                <div class="modal-body">
+                  <fieldset class="mb-3">
+                    <legend class="h6" data-i18n="compare.stats_tests"></legend>
+                    <div id="compare-tests"></div>
+                  </fieldset>
+                  <fieldset>
+                    <legend class="h6" data-i18n="compare.stats_units"></legend>
+                    <div id="compare-units"></div>
+                  </fieldset>
+                  <p id="compare-need-unit" class="small text-warning-emphasis mt-2 mb-0" data-i18n="compare.stats_need_unit" hidden></p>
+                </div>
+                <div class="modal-footer">
+                  <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal" data-i18n="ais.cancel"></button>
+                  <button id="compare-go" type="button" class="btn btn-primary" data-i18n="compare.stats_go"></button>
+                </div>
+              </div>
+            </div>
+          </div>
           <!-- Treatments: each included image's original name and treatment, guessed then checked (treatments.js). -->
           <div class="modal fade" id="treatments-modal" tabindex="-1" aria-labelledby="treatments-title" aria-hidden="true">
             <div class="modal-dialog modal-lg modal-dialog-scrollable">

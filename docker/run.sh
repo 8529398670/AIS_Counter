@@ -180,9 +180,12 @@ fi
 # whatever the host says. Get this wrong and the container starts, fails to
 # create app.db, and crash-loops on "permission denied" -- a slow thing to
 # diagnose from the outside, so it is worth settling here.
-touch "${DATA_DIR}/${DATA_MARKER}"
+#
+# The marker is made inside that root container, not here: after the first
+# run data/ belongs to the container's user, so a host-side touch as you
+# fails on any machine where the app has started before.
 docker run --rm --user 0:0 -v "${DATA_DIR}:/data" \
-  --entrypoint sh "$IMAGE_ID" -c "chown -R ${APP_UID}:${APP_GID} /data" >/dev/null 2>&1 || true
+  --entrypoint sh "$IMAGE_ID" -c "touch /data/${DATA_MARKER} && chown -R ${APP_UID}:${APP_GID} /data" >/dev/null 2>&1 || true
 
 if ! docker run --rm --user "${APP_UID}:${APP_GID}" -v "${DATA_DIR}:/data" \
      --entrypoint sh "$IMAGE_ID" -c 'touch /data/.probe' >/dev/null 2>&1; then
