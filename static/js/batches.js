@@ -82,7 +82,12 @@ const Batches = {
 
   // One culture per batch: the ticked ones still on the list, in its order.
   compareSelected() {
-    const list = ( this.list || [] ).filter( ( b ) => this.selected.has( b.id ) );
+    this.compareList( ( this.list || [] ).filter( ( b ) => this.selected.has( b.id ) ) );
+  },
+
+  // Compare.run on list, its progress on the line above the cards (also a
+  // folder's Compare, batch_folders.js).
+  compareList( list ) {
     const line = Dom.get( "batches-export-status" );
     Compare.run( list , ( text ) => {
       Dom.text( line , text );

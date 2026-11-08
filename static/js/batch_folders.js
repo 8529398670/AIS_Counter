@@ -14,6 +14,8 @@
 // Admins file a batch by dragging its card onto a folder (tile, heading or a
 // step of the path) or from its menu (Move to folder); folders have a menu
 // of their own. Deleting a folder loses nothing: what was in it moves up.
+// Admins can also Compare a folder: every batch in it and the folders inside
+// it, one culture each, through Compare.run (compare.js) as Compare selected.
 const BatchFolders = {
   folders: [],
   byId: new Map(),
@@ -144,7 +146,10 @@ const BatchFolders = {
       return this.folders.length > 0 || loose.length > 0;
     }
     const here = this.current();
-    holder.appendChild( this.breadcrumb( here ) );
+    const crumbs = this.breadcrumb( here );
+    holder.appendChild( here != null && Batches.admin()
+      ? Dom.el( "div" , { class: "d-flex align-items-center flex-wrap gap-2" , children: [ crumbs , this.compareButton( here , false ) ] } )
+      : crumbs );
     const tiles = this.childrenOf( here );
     if ( tiles.length ) holder.appendChild( Dom.el( "div" , { class: "batches-tiles" ,
       children: tiles.map( ( f ) => this.tile( f , shown ) ) } ) );
@@ -212,9 +217,9 @@ const BatchFolders = {
     bar.firstChild.style.width = share + "%";
     const tile = Dom.el( "div" , { class: "card batches-tile" , children: [ Dom.el( "div" , { class: "card-body" , children: [
       Dom.el( "div" , { class: "d-flex align-items-center gap-2 min-w-0" , children: [
-        Dom.el( "a" , { class: "stretched-link text-truncate fw-semibold batches-tile-name" , attrs: { href: "#batches/folder/" + f.id } ,
+        Dom.el( "a" , { class: "stretched-link text-truncate fw-semibold batches-tile-name me-auto" , attrs: { href: "#batches/folder/" + f.id } ,
           children: [ Dom.el( "i" , { class: "bi bi-folder-fill me-2 text-warning" } ) , Dom.el( "span" , { text: f.name } ) ] } ),
-        ...( Batches.admin() ? [ this.menu( f ) ] : [] ),
+        ...( Batches.admin() ? [ this.compareButton( f.id , true ) , this.menu( f ) ] : [] ),
       ] } ),
       Dom.el( "div" , { class: "small text-body-secondary mt-1" , text: this.countLine( c ) } ),
       ...( c.total ? [ bar ] : [] ),
@@ -234,8 +239,8 @@ const BatchFolders = {
           Dom.el( "i" , { class: "bi " + ( isOpen ? "bi-folder2-open" : "bi-folder-fill" ) + " text-warning" } ),
           Dom.el( "span" , { class: "fw-semibold text-truncate" , text: f.name } ),
         ] } ),
-      Dom.el( "span" , { class: "small text-body-secondary text-nowrap" , text: this.countLine( c ) } ),
-      ...( Batches.admin() ? [ this.menu( f ) ] : [] ),
+      Dom.el( "span" , { class: "small text-body-secondary text-nowrap me-auto" , text: this.countLine( c ) } ),
+      ...( Batches.admin() ? [ this.compareButton( f.id , true ) , this.menu( f ) ] : [] ),
     ] } );
     this.dropTarget( head , f.id );
     const children = [ head ];
@@ -300,6 +305,37 @@ const BatchFolders = {
     } );
   },
 
+  // --- comparing a folder (admins) -----------------------------------------------
+
+  // The batches a folder's Compare takes: shown (so archived ones only with
+  // Show archived), with images, in it or in a folder inside it.
+  compareSet( id ) {
+    const inside = this.subtree( id );
+    return Batches.shown().filter( ( b ) => b.images && inside.has( this.folderOf( b ) ) );
+  },
+
+  compareFolder( id ) {
+    Batches.compareList( this.compareSet( id ) );
+  },
+
+  // The bar-chart button (small: on a tile or heading; else with its words,
+  // beside the path), disabled with fewer than two batches to compare.
+  compareButton( id , small ) {
+    const n = this.compareSet( id ).length;
+    const ready = n >= 2;
+    const title = I18n.get( ready ? "batches.folder_compare_help" : "batches.folder_compare_few" );
+    const button = Dom.el( "button" , {
+      class: "btn btn-sm btn-outline-secondary batches-folder-compare" + ( small ? " border-0 py-0" : "" ) ,
+      attrs: { type: "button" , "aria-label": I18n.get( "batches.folder_compare" ) + ": " + ( this.byId.get( id ) || {} ).name } ,
+      on: { click: () => this.compareFolder( id ) } ,
+      children: [ Dom.el( "i" , { class: "bi bi-bar-chart-line" + ( small ? "" : " me-1" ) } ) ,
+        ...( small ? [] : [ Dom.el( "span" , { text: I18n.get( "batches.folder_compare" ) } ) ] ) ],
+    } );
+    button.disabled = !ready;
+    // A disabled button gets no hover: its wrapper carries the title.
+    return Dom.el( "span" , { class: "d-inline-block batches-folder-compare-wrap" , attrs: { title: title } , children: [ button ] } );
+  },
+
   // --- changing (admins) ---------------------------------------------------------
 
   menu( f ) {
@@ -309,6 +345,9 @@ const BatchFolders = {
       Batches.menuItem( "bi-pencil" , I18n.get( "batches.folder_rename" ) , () => this.openName( f.id , null ) ),
       Batches.menuItem( "bi-folder-symlink" , I18n.get( "batches.folder_move" ) , () => this.openMove( { folderId: f.id } ) ),
     ];
+    if ( this.compareSet( f.id ).length >= 2 ) {
+      items.push( Batches.menuItem( "bi-bar-chart-line" , I18n.get( "batches.folder_compare" ) , () => this.compareFolder( f.id ) ) );
+    }
     if ( at > 0 ) items.push( Batches.menuItem( "bi-chevron-up" , I18n.get( "batches.move_up" ) , () => this.reorder( f , siblings , -1 ) ) );
     if ( at < siblings.length - 1 ) items.push( Batches.menuItem( "bi-chevron-down" , I18n.get( "batches.move_down" ) , () => this.reorder( f , siblings , 1 ) ) );
     items.push( Dom.el( "li" , { children: [ Dom.el( "hr" , { class: "dropdown-divider" } ) ] } ) );
@@ -320,7 +359,7 @@ const BatchFolders = {
         title: I18n.get( "batches.folder_menu" ) , "aria-label": I18n.get( "batches.folder_menu" ) + ": " + f.name } ,
       children: [ Dom.el( "i" , { class: "bi bi-three-dots" } ) ],
     } ) , items , true );
-    group.classList.add( "ms-auto" , "batches-folder-menu" );
+    group.classList.add( "batches-folder-menu" );
     return group;
   },
 
@@ -406,6 +445,8 @@ const BatchFolders = {
   async moveBatches( ids , to ) {
     try {
       const out = await Api.post( "/api/ais/batches/move" , { ids: ids , folder_id: to } );
+      // Filed: what was ticked is done with.
+      Batches.selected.clear();
       const name = to == null ? I18n.get( "batches.folders_top" ) : ( this.byId.get( to ) || {} ).name;
       Dom.toast( I18n.get( "batches.moved_done" ).replace( "{n}" , out.moved ).replace( "{name}" , name || "" ) );
     } catch ( error ) {
