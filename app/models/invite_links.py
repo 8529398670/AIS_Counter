@@ -25,10 +25,11 @@ from datetime import datetime, timedelta
 
 from app.core import encryption
 from app.core.db import BUCKET_INVITE_LINKS, BUCKET_SESSIONS, BUCKET_USERS, Record, Store, Transaction
-from app.models import from_iso, to_iso, utc_now
+from app.models import RestoreGoneError, deleted_long_ago, from_iso, mark_deleted, to_iso, unmark_deleted, utc_now
 from app.models.pins import name_closeness
 from app.models.sessions import new_session, split_credential
-from app.models.users import ROLE_USER, User, create_user_tx, get_user
+from app.models.sign_in import SignIn, SignInRules, start_sign_in_tx
+from app.models.users import ROLE_USER, RenameConflictError, User, create_user_tx, get_user
 
 INVITE_LINK_MAX_USES = 1000
 INVITE_LINK_MAX_DAYS = 365
@@ -62,6 +63,11 @@ class InviteNotAdminError(Exception):
         super().__init__("an invite link must be made by an enabled admin")
 
 
+class InvitePlacesError(ValueError):
+    def __init__(self) -> None:
+        super().__init__("places cannot be fewer than the people who have already joined")
+
+
 @dataclass
 class InviteLink:
     id: str
@@ -73,6 +79,9 @@ class InviteLink:
     expires_at: datetime
     accounts: list[int] = field(default_factory=list)
     revoked_at: datetime | None = None
+    # Set by delete_invite_link; restorable for RESTORE_WINDOW, like a key.
+    deleted_at: datetime | None = None
+    deleted_by: int | None = None
 
     @property
     def remaining(self) -> int:
@@ -80,7 +89,7 @@ class InviteLink:
 
     @property
     def live(self) -> bool:
-        return self.revoked_at is None and utc_now() < self.expires_at
+        return self.revoked_at is None and self.deleted_at is None and utc_now() < self.expires_at
 
     def owns(self, user_id: int) -> bool:
         return user_id in self.accounts
@@ -96,6 +105,8 @@ class InviteLink:
             "created_at": to_iso(self.created_at),
             "expires_at": to_iso(self.expires_at),
             "revoked_at": to_iso(self.revoked_at),
+            "deleted_at": to_iso(self.deleted_at),
+            "deleted_by": self.deleted_by,
         }
 
     @classmethod
@@ -110,6 +121,8 @@ class InviteLink:
             created_at=from_iso(record["created_at"]),
             expires_at=from_iso(record["expires_at"]),
             revoked_at=from_iso(record.get("revoked_at")),
+            deleted_at=from_iso(record.get("deleted_at")),
+            deleted_by=record.get("deleted_by"),
         )
 
 
@@ -121,6 +134,21 @@ def valid_invite_link(label: object, max_uses: object, days: object) -> bool:
         and 1 <= max_uses <= INVITE_LINK_MAX_USES
         and isinstance(days, int) and not isinstance(days, bool)
         and 1 <= days <= INVITE_LINK_MAX_DAYS
+    )
+
+
+def valid_invite_label(label: object) -> bool:
+    """Bounds a link's label on its own, for renaming one."""
+    return isinstance(label, str) and 1 <= len(label.strip()) <= 80
+
+
+def valid_invite_limits(max_uses: object, days: object) -> bool:
+    """Bounds a change of places and, when days is not None, of how long the
+    link works for. Same limits as making one."""
+    return (
+        isinstance(max_uses, int) and not isinstance(max_uses, bool)
+        and 1 <= max_uses <= INVITE_LINK_MAX_USES
+        and (days is None or (isinstance(days, int) and not isinstance(days, bool) and 1 <= days <= INVITE_LINK_MAX_DAYS))
     )
 
 
@@ -218,20 +246,19 @@ def join_invite_link(store: Store, credential: str, display_name: str, session_t
     return session_credential, user
 
 
-def claim_invite_account(store: Store, credential: str, user_id: int, session_ttl_seconds: int) -> tuple[str, User]:
+def claim_invite_account(store: Store, credential: str, user_id: int, rules: SignInRules) -> tuple[SignIn, User]:
     """Sign in as an account this link created -- the same person on another
     device. The caller checks the PIN first (bcrypt stays outside the write
-    lock); everything else is re-checked here, in the transaction that stores
-    the session."""
+    lock); everything else is re-checked here, in the transaction that starts
+    the sign-in."""
     with store.transaction() as tx:
         link = _load_invite_link_tx(tx, credential)
         record = tx.get(BUCKET_USERS, user_id) if link.owns(user_id) else None
         user = None if record is None else User.from_record(record)
         if user is None or user.disabled or user.is_admin:
             raise NotInviteAccountError()
-        session_id, session_credential, session = new_session(user.id, session_ttl_seconds)
-        tx.put(BUCKET_SESSIONS, session_id, session.to_record())
-    return session_credential, user
+        signed = start_sign_in_tx(tx, user, rules)
+    return signed, user
 
 
 def invite_account(store: Store, link: InviteLink, user_id: object) -> User:
@@ -262,8 +289,9 @@ def invite_matches(store: Store, link: InviteLink, typed: str) -> list[User]:
 
 
 def list_invite_links(store: Store) -> list[InviteLink]:
-    """Every link, newest first."""
+    """Every link, newest first, leaving out deleted ones."""
     links = [InviteLink.from_record(record) for _, record in store.all(BUCKET_INVITE_LINKS)]
+    links = [link for link in links if link.deleted_at is None]
     links.sort(key=lambda link: link.created_at, reverse=True)
     return links
 
@@ -286,23 +314,114 @@ def revoke_invite_link(store: Store, link_id: str) -> bool:
     return store.update_value(BUCKET_INVITE_LINKS, link_id, mutate) is not None
 
 
-def delete_invite_link(store: Store, link_id: str) -> bool:
-    """Remove a link for good. The accounts it made stay; they just can no
-    longer sign in on a new device through it."""
-    if store.get(BUCKET_INVITE_LINKS, link_id) is None:
-        return False
-    store.delete(BUCKET_INVITE_LINKS, link_id)
-    return True
+def rename_invite_link(store: Store, link_id: str, label: str, expect: str | None = None) -> bool:
+    """Change a link's label, on a dead link too. People see it on the join
+    page. False if there is no such link or it is deleted.
+
+    expect, when given, is the label the caller believes is stored, as in
+    users.rename_user: RenameConflictError if it is not."""
+    found = False
+
+    def mutate(record: Record) -> None:
+        nonlocal found
+        if record.get("deleted_at") is not None:
+            return
+        found = True
+        if expect is not None and record["label"] != expect.strip():
+            raise RenameConflictError(record["label"])
+        record["label"] = label.strip()
+
+    return store.update_value(BUCKET_INVITE_LINKS, link_id, mutate) is not None and found
+
+
+def set_invite_link_limits(store: Store, link_id: str, max_uses: int, ttl: timedelta | None) -> InviteLink | None:
+    """Change how many places a link has and, when ttl is given, give it a new
+    expiry counted from now. Places cannot drop below the people already in
+    (InvitePlacesError). None if there is no such link or it is deleted.
+
+    An expired link can be extended, which an API key cannot. A link owns the
+    accounts that joined through it, and it is how they sign back in on a new
+    device, so a replacement would lock them out."""
+    found = False
+
+    def mutate(record: Record) -> None:
+        nonlocal found
+        if record.get("deleted_at") is not None:
+            return
+        found = True
+        if max_uses < len(record.get("accounts") or []):
+            raise InvitePlacesError()
+        record["max_uses"] = max_uses
+        if ttl is not None:
+            record["expires_at"] = to_iso(utc_now() + ttl)
+
+    record = store.update_value(BUCKET_INVITE_LINKS, link_id, mutate)
+    return InviteLink.from_record(record) if record is not None and found else None
+
+
+def switch_on_invite_link(store: Store, link_id: str) -> InviteLink | None:
+    """Undo revoke_invite_link, for the same reason an expired link can be
+    extended: the accounts it made have no other way back in on a new device.
+    Anyone still holding the link can use it again, so the caller asks first.
+    It does nothing for a link that has expired or whose maker has lost their
+    rights. None if there is no such link or it is deleted."""
+    found = False
+
+    def mutate(record: Record) -> None:
+        nonlocal found
+        if record.get("deleted_at") is not None:
+            return
+        found = True
+        record["revoked_at"] = None
+
+    record = store.update_value(BUCKET_INVITE_LINKS, link_id, mutate)
+    return InviteLink.from_record(record) if record is not None and found else None
+
+
+def delete_invite_link(store: Store, link_id: str, actor_id: int | None) -> bool:
+    """Take a link off the list and stop it working; False if there is no
+    such link or it is already deleted. The accounts it made stay; they just
+    can no longer sign in on a new device through it.
+
+    Like delete_api_key, it only marks the row, so restore_invite_link can
+    bring it back for RESTORE_WINDOW. Switching one back on is
+    switch_on_invite_link, and it asks first."""
+    found = False
+
+    def mutate(record: Record) -> None:
+        nonlocal found
+        found = record.get("deleted_at") is None
+        mark_deleted(record, actor_id)
+
+    return store.update_value(BUCKET_INVITE_LINKS, link_id, mutate) is not None and found
+
+
+def restore_invite_link(store: Store, link_id: str, actor_id: int, actor_is_admin: bool) -> InviteLink:
+    """Undo delete_invite_link. Raises a RestoreError when the window has
+    passed or the actor may not. Only admins reach this today, so in practice
+    any admin may restore any link."""
+
+    def mutate(record: Record) -> None:
+        unmark_deleted(record, actor_id, actor_is_admin)
+
+    record = store.update_value(BUCKET_INVITE_LINKS, link_id, mutate)
+    if record is None:
+        raise RestoreGoneError()
+    return InviteLink.from_record(record)
 
 
 def purge_dead_invite_links(store: Store) -> int:
-    """Drop links revoked or expired longer than INVITE_LINK_RETENTION ago.
-    Dead links are already refused by load_invite_link, so this is only
+    """Drop links revoked or expired longer than INVITE_LINK_RETENTION ago,
+    and deleted ones past their RESTORE_WINDOW. Dead links are already refused by load_invite_link, so this is only
     housekeeping."""
     cutoff = utc_now() - INVITE_LINK_RETENTION
 
     def dead(_key: object, record: Record) -> bool:
         revoked_at = from_iso(record.get("revoked_at"))
-        return (revoked_at is not None and revoked_at < cutoff) or from_iso(record["expires_at"]) < cutoff
+        return (
+            (revoked_at is not None and revoked_at < cutoff)
+            or from_iso(record["expires_at"]) < cutoff
+            or deleted_long_ago(record)
+        )
 
     return store.delete_where(BUCKET_INVITE_LINKS, dead)

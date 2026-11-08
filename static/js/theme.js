@@ -11,8 +11,29 @@
 //
 // This file is loaded in <head>, before the stylesheet's first paint, so a
 // saved dark theme never flashes light on the way in.
+//
+// Brand colours live in ThemePalettes, named, whether a preset uses them or not,
+// so the rest are there for whoever needs them next.
+const ThemePalettes = {
+  // Wright State University. Primary: green and gold. The rest are its accents.
+  wsu: {
+    green: "#046a38",
+    gold: "#cba052",
+    dark_green: "#00482b",
+    deep_gold: "#ae8643",
+    yellow: "#f8e08e",
+    leaf: "#719949",
+    beige: "#dcd59a",
+    black: "#101820",
+    faded_gold: "#e7e3c6",
+    off_white: "#f2f1f0",
+  },
+};
+
 const Theme = {
   storageKey: "theme",
+  // What redraws when the theme changes: the Appearance picker.
+  onChange: [],
 
   // Each preset sets the mode plus, optionally, its own colours. Field ->
   // custom property in style.css, which hands them on to Bootstrap: accent ->
@@ -27,11 +48,11 @@ const Theme = {
     { key: "grape" , mode: "light" , accent: "#7048c8" , background: "#f5f2fc" , surface: "#ffffff" },
     { key: "pink" , mode: "light" , accent: "#c2255c" , background: "#fdf0f5" , surface: "#ffffff" },
     // Wright State University: Green on Off White, and Gold on Black with Dark Green panels.
-    { key: "wsu" , mode: "light" , accent: "#046a38" , background: "#f2f1f0" , surface: "#ffffff" },
+    { key: "wsu" , mode: "light" , accent: ThemePalettes.wsu.green , background: ThemePalettes.wsu.off_white , surface: "#ffffff" },
     { key: "midnight" , mode: "dark" , accent: "#8c7cff" , background: "#0e1020" , surface: "#171a30" },
     { key: "slate" , mode: "dark" , accent: "#4fb3a9" , background: "#15191e" , surface: "#1d232a" },
     { key: "dark_pink" , mode: "dark" , accent: "#f06595" , background: "#1f0d16" , surface: "#2a1220" },
-    { key: "wsu_dark" , mode: "dark" , accent: "#cba052" , background: "#101820" , surface: "#00482b" },
+    { key: "wsu_dark" , mode: "dark" , accent: ThemePalettes.wsu.gold , background: ThemePalettes.wsu.black , surface: ThemePalettes.wsu.dark_green },
   ],
 
   vars: { accent: "--app-accent" , background: "--app-bg" , surface: "--app-surface" },
@@ -80,6 +101,23 @@ const Theme = {
     else root.style.removeProperty( "--app-border" );
   },
 
+  // Picking is undoable, and quick picks merge into one step.
+  pick( key ) {
+    const previous = this.current;
+    if ( previous === key ) return;
+    const choose = ( chosen ) => {
+      this.set( chosen );
+      this.onChange.forEach( ( listener ) => listener() );
+    };
+    Undo.run( {
+      label: I18n.get( "undo.theme" ),
+      merge: "theme",
+      screen: null,
+      do: () => choose( key ),
+      undo: () => choose( previous ),
+    } );
+  },
+
   // The picker on the Appearance card: one button per preset, drawn in its
   // own colours. summary, if given, is kept showing the current theme's name.
   render( root , summary ) {
@@ -99,13 +137,11 @@ const Theme = {
         class: "btn btn-outline-secondary theme-choice",
         attrs: { type: "button" , "data-theme-key": preset.key },
         children: [ swatch , Dom.el( "span" , { text: I18n.get( "theme.preset_" + preset.key ) } ) ],
-        on: { click: () => {
-          this.set( preset.key );
-          update();
-        } },
+        on: { click: () => this.pick( preset.key ) },
       } );
       root.appendChild( button );
     } );
+    this.onChange.push( update );
     update();
   },
 

@@ -1,9 +1,9 @@
 """User accounts, and the owner.
 
-There is no password field, and adding one would undo the entire design:
-identity is proven only by redeeming a login link, presenting a session
-cookie, or presenting an API key. See references/architecture.md before
-changing that.
+Links are the way in. A password is optional and off by default (see
+app/models/passwords.py): an account gets one only by signing in with a link
+first, so there is no signup, and the owner decides whether passwords work at
+all. See references/architecture.md.
 
 The owner is the one admin who outranks the others. It exists for a single
 decision the admin role cannot settle by itself: who may permanently delete
@@ -57,6 +57,21 @@ class User:
     # invite link. It is not a password: nothing else checks it. See
     # app/models/pins.py.
     pin_hash: str = ""
+    # What password sign-in needs: a unique name to look the account up by,
+    # since display names are not unique, and a bcrypt hash of what the
+    # browser derived from the password. See app/models/passwords.py.
+    username: str = ""
+    password_hash: str = ""
+    # The owner's per-account block. It stops the password working and keeps
+    # the hash, so unblocking restores it.
+    password_blocked: bool = False
+    # TOTP secrets are encrypted here as well as with the record, because
+    # server.encrypt_at_rest can be off and a secret cannot be hashed. See
+    # app/models/two_factor.py.
+    totp_secret: str = ""
+    totp_pending: str = ""
+    totp_last_step: int = 0
+    recovery_hashes: list[str] = field(default_factory=list)
     # Keyboard shortcuts this person rebound on the Keyboard shortcuts screen:
     # action id -> its keys, only where they differ from the defaults
     # (static/js/shortcuts.js owns the actions and their defaults).
@@ -82,6 +97,13 @@ class User:
             "created_at": to_iso(self.created_at),
             "disabled_at": to_iso(self.disabled_at),
             "pin_hash": self.pin_hash,
+            "username": self.username,
+            "password_hash": self.password_hash,
+            "password_blocked": self.password_blocked,
+            "totp_secret": self.totp_secret,
+            "totp_pending": self.totp_pending,
+            "totp_last_step": self.totp_last_step,
+            "recovery_hashes": self.recovery_hashes,
             "shortcuts": self.shortcuts,
             "matlab_path": self.matlab_path,
         }
@@ -95,6 +117,13 @@ class User:
             created_at=from_iso(record["created_at"]),
             disabled_at=from_iso(record.get("disabled_at")),
             pin_hash=record.get("pin_hash", ""),
+            username=record.get("username", ""),
+            password_hash=record.get("password_hash", ""),
+            password_blocked=record.get("password_blocked", False),
+            totp_secret=record.get("totp_secret", ""),
+            totp_pending=record.get("totp_pending", ""),
+            totp_last_step=record.get("totp_last_step", 0),
+            recovery_hashes=record.get("recovery_hashes", []),
             shortcuts=record.get("shortcuts") or {},
             matlab_path=record.get("matlab_path", ""),
         )
@@ -151,7 +180,16 @@ def list_users(store: Store) -> list[User]:
     return [User.from_record(record) for _, record in store.all(BUCKET_USERS)]
 
 
-def rename_user(store: Store, user_id: int, display_name: str) -> bool:
+class RenameConflictError(Exception):
+    """The name was not what the caller expected: someone changed it since.
+    current is the name it has now."""
+
+    def __init__(self, current: str) -> None:
+        super().__init__("the name was changed somewhere else in the meantime")
+        self.current = current
+
+
+def rename_user(store: Store, user_id: int, display_name: str, expect: str | None = None) -> bool:
     """Goes through update_value rather than get_user followed by a put. The
     read and the write land in one transaction, which is what stops two
     concurrent admin requests from each reading the old row and the slower one
@@ -160,9 +198,16 @@ def rename_user(store: Store, user_id: int, display_name: str) -> bool:
     Disabling an account is not here: it has to take the account's sessions
     and login links with it in the same transaction, so it lives in
     app/models/credentials.py beside the other operations that span
-    buckets."""
+    buckets.
+
+    expect, when given, is the name the caller believes is stored, checked
+    in the same transaction: RenameConflictError if it is not. It is what
+    makes an undo of a rename safe -- putting the old name back must not
+    overwrite one somebody chose in another tab since."""
 
     def mutate(record: Record) -> None:
+        if expect is not None and record["display_name"] != expect.strip():
+            raise RenameConflictError(record["display_name"])
         record["display_name"] = display_name.strip()
 
     return store.update_value(BUCKET_USERS, user_id, mutate) is not None

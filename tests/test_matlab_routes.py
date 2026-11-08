@@ -3,6 +3,7 @@ whole trip from a browser to a helper. MATLAB itself is never started."""
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import io
 import json
 import zipfile
@@ -16,6 +17,7 @@ from app.core import db, encryption
 from app.core.db import BUCKET_SESSIONS
 from app.core.static_files import StaticServer
 from app.main import build_app
+from tests.live_config import real_holder
 from app.models import api_keys, sessions, users
 from app.routes import ais_matlab
 
@@ -28,17 +30,23 @@ NEXT = "/api/ais/matlab/helper/next"
 class Harness:
     def __init__(self, tmp_path, matlab_helper=True, api_keys_enabled=True):
         self.store = db.open_store(tmp_path / "app.db", KEY, False)
-        self.cfg = SimpleNamespace(
-            storage_dir=tmp_path / "storage", api_keys_enabled=api_keys_enabled, mcp_enabled=False,
+        self.holder = real_holder(
+            tmp_path, storage_dir=tmp_path / "storage", api_keys_enabled=api_keys_enabled, mcp_enabled=False,
             matlab_helper=matlab_helper, matlab="",
-            local_folders_enabled=False, rate_limit_max=1000, rate_limit_window_seconds=60, trust_proxy=False,
-            trusted_proxies=(), proxy_header="", body_limit_bytes=1048576, cookie_name="s", secret_key=KEY,
-            secure_cookies=False, api_key_ttl_seconds=3600)
+            local_folders_enabled=False, rate_limit_max=1000, rate_limit_signin_max=1000, rate_limit_window_seconds=60,
+            trust_proxy=False, trusted_proxies=(), proxy_header="", body_limit_bytes=1048576, cookie_name="s",
+            secret_key=KEY, encrypt_at_rest=False, secure_cookies=False, api_key_ttl_seconds=3600)
+        self.cfg = self.holder.get()
         static = tmp_path / "static"
         static.mkdir()
-        self.app = build_app(self.cfg, self.store, {}, StaticServer(static), "test")
+        self.app = build_app(self.holder, self.store, {}, StaticServer(static), "test")
         self.library = self.app.state.ais
         self.users = {}
+
+    def set(self, **changes):
+        """Change the running config, as an edit to config.yaml would."""
+        self.holder._current = dataclasses.replace(self.holder.get(), **changes)
+        self.cfg = self.holder.get()
 
     def user(self, name="Ada", path="", role=users.ROLE_USER):
         user = users.create_user(self.store, name, role)
@@ -248,7 +256,7 @@ def test_the_saved_path_never_reaches_the_servers_launcher(h, monkeypatch):
 @pytest.fixture
 def host(h, monkeypatch):
     """A server that can open its own MATLAB. Nothing here starts it."""
-    h.cfg.local_folders_enabled = True
+    h.set(local_folders_enabled=True)
     h.launched = []
     monkeypatch.setattr(matlab, "find_matlab", lambda configured: "/x/matlab")
     monkeypatch.setattr(matlab, "stage", lambda *a: Path("/run/stem"))
@@ -284,7 +292,7 @@ def test_anyone_else_is_not_offered_it_and_cannot_start_it(host, away):
 
 
 def test_the_configured_proxy_header_counts_too(host):
-    host.cfg.proxy_header = "X-Visitor"
+    host.set(proxy_header="X-Visitor")
     admin = host.user(role=users.ROLE_ADMIN)
     answer = host.get("GET", "/api/ais/local/status", session=admin, extra=[(b"x-visitor", b"203.0.113.5")])
     assert json.loads(answer.data)["matlab"] is False

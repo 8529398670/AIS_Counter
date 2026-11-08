@@ -5,6 +5,7 @@ import asyncio
 from types import SimpleNamespace
 
 from app.core.middleware import RateLimit
+from tests.live_config import fake_holder
 
 
 async def _ok(scope, receive, send):
@@ -15,7 +16,8 @@ async def _ok(scope, receive, send):
 def _limiter(trust: bool = False) -> RateLimit:
     cfg = SimpleNamespace(rate_limit_max=2, rate_limit_window_seconds=60, trust_proxy=trust,
                           trusted_proxies=["127.0.0.1"], proxy_header="CF-Connecting-IP")
-    return RateLimit(_ok, cfg)
+    cfg.rate_limit_signin_max = 2
+    return RateLimit(_ok, fake_holder(cfg))
 
 
 def _status(limiter: RateLimit, path: str, method: str = "GET", visitor: str | None = None) -> int:
@@ -73,7 +75,7 @@ def test_api_answers_are_not_cached_unless_the_route_says_so():
             sent.append(message)
 
         scope = {"type": "http", "method": "GET", "path": path, "headers": []}
-        asyncio.run(SecurityHeaders(app, SimpleNamespace(secure_cookies=False))(scope, receive, send))
+        asyncio.run(SecurityHeaders(app, fake_holder(SimpleNamespace(secure_cookies=False)))(scope, receive, send))
         headers = dict(next(m["headers"] for m in sent if m["type"] == "http.response.start"))
         value = headers.get(b"cache-control")
         return value.decode() if value else None

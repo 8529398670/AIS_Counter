@@ -15,6 +15,7 @@ import pytest
 import tifffile
 from starlette.requests import Request
 
+from tests.live_config import fake_holder
 from app.analysis import local
 from app.analysis.images import ImageError, thumbnail_png
 from app.core import config
@@ -114,7 +115,7 @@ def _request(method: str, query: bytes = b"", body: dict | None = None) -> Reque
     async def receive():
         return {"type": "http.request", "body": payload, "more_body": False}
 
-    app = SimpleNamespace(state=SimpleNamespace(config=SimpleNamespace(local_folders_enabled=False)))
+    app = SimpleNamespace(state=SimpleNamespace(settings=fake_holder(SimpleNamespace(local_folders_enabled=False))))
     scope = {"type": "http", "method": method, "path": "/", "query_string": query, "headers": [], "app": app}
     return Request(scope, receive)
 

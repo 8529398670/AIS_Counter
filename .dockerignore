@@ -1,0 +1,41 @@
+# What the build context leaves out. The context is the project root
+# (docker/lib.sh runs `docker build -f docker/Dockerfile .`). It lives at the
+# root, not beside the Dockerfile as Dockerfile.dockerignore, because only
+# BuildKit reads that name: the legacy builder still in use on some hosts reads
+# only this one, and would otherwise send data/ and config.yaml into the build.
+.git
+.gitignore
+.run/
+data/
+*.db
+*.db-wal
+*.db-shm
+# The secret key, and this deployment's settings: never in an image layer,
+# which is forever. Both are mounted at run time (docker/run.sh).
+config/config.yaml
+config/secret.key
+**/secret.key
+**/secret.key.*
+config/config.yaml.*
+config/.config.yaml.*
+*.md
+docker/
+scripts/
+misc/
+app/core/layout_pinned.py
+app/build_info.py
+**/__pycache__
+**/*.pyc
+.venv/
+venv/
+# ...except the report the About screen shows (app/routes/meta.py).
+!docs/ais_auto_report.md
+# This repo's research material: MATLAB original and multi-GB sample images.
+example-data*/
+original-code/
+# ...except the original itself: MATLAB replays are built from it (app/analysis/matlab.py).
+!original-code/ais_auto.m
+# Built inside the image, for the image.
+helper/dist/
+notes.txt
+gitPushUpdate.sh

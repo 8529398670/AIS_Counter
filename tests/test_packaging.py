@@ -7,7 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_the_image_gets_the_original_ais_auto():
-    ignore = (ROOT / "docker" / "Dockerfile.dockerignore").read_text().splitlines()
+    ignore = (ROOT / ".dockerignore").read_text().splitlines()
     # The exception only works after the rule it excepts.
     assert ignore.index("!original-code/ais_auto.m") > ignore.index("original-code/")
     assert "COPY original-code/ais_auto.m ./original-code/" in (ROOT / "docker" / "Dockerfile").read_text()
