@@ -677,6 +677,19 @@ fresh:
   new_version: "A new version is available."
   reload: "Reload"
 
+# Edits on their way to the server (static/js/outbox.js). They wait on this
+# computer while it cannot be reached and go once it can. {n} is how many;
+# {what} names the edit, from row / line / done.
+outbox:
+  pending: "{n} edits saving…"
+  offline: "Offline: {n} edits waiting to save"
+  conflict: "Not saved: someone else changed {what} meanwhile. It now shows their version."
+  dropped: "Not saved: {what}"
+  gone: "it was never saved"
+  row: "AIS {n} on {image}"
+  line: "line {n} on {image}"
+  done: "the done mark on {image}"
+
 # Ctrl+Z / Ctrl+Y (static/js/undo.js). The toast reads "<undone> <label>",
 # e.g. "Undone: theme change", with a Redo button. Actions that announce
 # themselves ("Name changed · Undo") use the label alone, capitalised, so a

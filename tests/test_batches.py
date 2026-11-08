@@ -1125,3 +1125,43 @@ def test_a_rows_z_fields_survive_being_sent_back():
 def test_a_bad_z_field_is_refused(change):
     with pytest.raises(ais.BatchError):
         ais.clean_row({"pixels": [[1, 2], [3, 4]]} | change)
+
+
+def test_the_same_client_id_twice_is_one_row(store):
+    batch = ais.create_batch(store, "f", "upload", files(("f/a" + P, "a")), 1)
+    first = ais.add_result(store, batch["id"], "a", row(), 1, client_id="row-0001-aaaa")
+    again = ais.add_result(store, batch["id"], "a", row(9.0), 1, client_id="row-0001-aaaa")
+    other = ais.add_result(store, batch["id"], "a", row(), 1, client_id="row-0002-bbbb")
+    plain = ais.add_result(store, batch["id"], "a", row(), 1)
+    assert again == first and again["length_um"] == 1.5
+    assert [r["n"] for r in (first, other, plain)] == [1, 2, 3] and "client_id" not in plain
+    line = ais.add_measurement(store, batch["id"], "a", LINE, 1, client_id="line-0001-cc")
+    assert ais.add_measurement(store, batch["id"], "a", LINE, 1, client_id="line-0001-cc") == line
+    assert len(ais.list_measurements(store, batch["id"])) == 1
+    with pytest.raises(ais.BatchError):
+        ais.add_result(store, batch["id"], "a", row(), 1, client_id="no spaces!")
+
+
+def test_each_edit_raises_rev_and_a_stale_expect_is_refused(store):
+    batch = ais.create_batch(store, "f", "upload", files(("f/a" + P, "a")), 1)
+    first = ais.add_result(store, batch["id"], "a", row(), 1, client_id="row-0001-aaaa")
+    assert first.get("rev", 0) == 0
+    edited = ais.update_result(store, first["id"], row(2.0), 1, expect=0)
+    assert edited["rev"] == 1 and edited["client_id"] == "row-0001-aaaa"
+    soma = {k: 1.0 for k in ais.SOMA_NUMBERS}
+    assert ais.set_soma(store, first["id"], soma, 1, expect=1)["rev"] == 2
+    with pytest.raises(ais.RevConflict) as stale:
+        ais.update_result(store, first["id"], row(3.0), 1, expect=1)
+    assert stale.value.current["length_um"] == 2.0
+    with pytest.raises(ais.RevConflict):
+        ais.delete_result(store, first["id"], expect=0)
+    assert ais.update_result(store, first["id"], row(4.0), 1)["rev"] == 3
+    assert ais.delete_result(store, first["id"], expect=3) == []
+    line = ais.add_measurement(store, batch["id"], "a", LINE, 1)
+    assert ais.update_measurement(store, line["id"], LINE, 1, expect=0)["rev"] == 1
+    with pytest.raises(ais.RevConflict):
+        ais.update_measurement(store, line["id"], LINE, 1, expect=0)
+    with pytest.raises(ais.RevConflict):
+        ais.delete_measurement(store, line["id"], expect=0)
+    ais.delete_measurement(store, line["id"], expect=1)
+    assert ais.list_measurements(store, batch["id"]) == []

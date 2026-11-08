@@ -1401,8 +1401,50 @@ def _clean_z(row: dict[str, Any], pixels: int) -> dict[str, Any]:
     return out
 
 
-def add_result(store: Store, batch_id: int, image_key: str, row: Any, user_id: int) -> Record:
+class RevConflict(Exception):
+    """An edit based on a revision someone else has since moved past. current
+    is the record as it is now, for the caller to show."""
+
+    def __init__(self, current: Record) -> None:
+        super().__init__("someone else changed this since you last saw it")
+        self.current = current
+
+
+_CLIENT_ID = re.compile(r"[A-Za-z0-9-]{8,64}")
+
+
+def clean_client_id(value: Any) -> str | None:
+    """The browser's own name for a row it created (a UUID), so a create sent
+    again after a dropped connection finds the first one instead of adding a
+    second. None when not given."""
+    if value is None:
+        return None
+    if not isinstance(value, str) or not _CLIENT_ID.fullmatch(value):
+        raise BatchError("client_id must be a short id")
+    return value
+
+
+def _check_rev(record: Record, expect: int | None) -> None:
+    """expect is the rev the caller last saw; None skips the check."""
+    if expect is not None and record.get("rev", 0) != expect:
+        raise RevConflict(record)
+
+
+def _kept_sync(record: Any) -> dict[str, Any]:
+    """A backed-up row's client_id and rev, when it has them, so it comes back
+    as it was."""
+    out: dict[str, Any] = {}
+    if record.get("client_id") is not None:
+        out["client_id"] = clean_client_id(record["client_id"])
+    if record.get("rev") is not None:
+        out["rev"] = _whole(record["rev"], "rev")
+    return out
+
+
+def add_result(store: Store, batch_id: int, image_key: str, row: Any, user_id: int,
+               client_id: Any = None) -> Record:
     clean = clean_row(row)
+    client_id = clean_client_id(client_id)
     with store.transaction() as tx:
         batch = tx.get(BUCKET_AIS_BATCHES, batch_id)
         if batch is None:
@@ -1410,9 +1452,14 @@ def add_result(store: Store, batch_id: int, image_key: str, row: Any, user_id: i
         image = next((im for im in batch["images"] if im["key"] == image_key), None)
         if image is None:
             raise BatchError("no such image in this batch")
-        same = [r["n"] for _, r in tx.all(BUCKET_AIS_RESULTS) if r["batch_id"] == batch_id and r["image"] == image_key]
+        rows = [r for _, r in tx.all(BUCKET_AIS_RESULTS) if r["batch_id"] == batch_id and r["image"] == image_key]
+        if client_id is not None:
+            sent = next((r for r in rows if r.get("client_id") == client_id), None)
+            if sent is not None:
+                return sent
+        same = [r["n"] for r in rows]
         result_id = tx.next_sequence(BUCKET_AIS_RESULTS)
-        record = clean | {
+        record = clean | ({"client_id": client_id} if client_id else {}) | {
             "id": result_id,
             "batch_id": batch_id,
             "batch_name": batch["name"],
@@ -1435,22 +1482,26 @@ def get_result(store: Store, result_id: int) -> Record | None:
     return store.get(BUCKET_AIS_RESULTS, result_id)
 
 
-def update_result(store: Store, result_id: int, row: Any, user_id: int) -> Record | None:
+def update_result(store: Store, result_id: int, row: Any, user_id: int, expect: int | None = None) -> Record | None:
     """Replace an accepted AIS's measures and trace (an edit), keeping which
     image it is on, its number, origin and who accepted it. None when it is
-    gone."""
+    gone; RevConflict when expect is not its rev."""
     clean = clean_row(row)
     with store.transaction() as tx:
         record = tx.get(BUCKET_AIS_RESULTS, result_id)
         if record is None:
             return None
+        _check_rev(record, expect)
         kept = {k: record[k] for k in ("id", "batch_id", "batch_name", "image", "cell", "n", "created_by", "accepted_at")}
-        record = clean | kept | {"origin": record.get("origin", ""), "edited_at": to_iso(utc_now()), "edited_by": user_id}
+        if "client_id" in record:
+            kept["client_id"] = record["client_id"]
+        record = clean | kept | {"origin": record.get("origin", ""), "edited_at": to_iso(utc_now()), "edited_by": user_id,
+                                 "rev": record.get("rev", 0) + 1}
         tx.put(BUCKET_AIS_RESULTS, result_id, record)
     return record
 
 
-def set_soma(store: Store, result_id: int, soma: Any, user_id: int) -> Record | None:
+def set_soma(store: Store, result_id: int, soma: Any, user_id: int, expect: int | None = None) -> Record | None:
     """Set an accepted AIS's distance to its soma ({soma_um, ...} with every
     SOMA_NUMBERS field a number), or clear it (None), leaving its trace alone.
     None when it is gone. An edit (update_result) drops it: the start may move."""
@@ -1469,13 +1520,15 @@ def set_soma(store: Store, result_id: int, soma: Any, user_id: int) -> Record | 
         record = tx.get(BUCKET_AIS_RESULTS, result_id)
         if record is None:
             return None
+        _check_rev(record, expect)
         record = record | values | {"soma_at": to_iso(utc_now()) if soma is not None else None,
-                                    "soma_by": user_id if soma is not None else None}
+                                    "soma_by": user_id if soma is not None else None,
+                                    "rev": record.get("rev", 0) + 1}
         tx.put(BUCKET_AIS_RESULTS, result_id, record)
     return record
 
 
-def delete_result(store: Store, result_id: int) -> list[dict[str, int]]:
+def delete_result(store: Store, result_id: int, expect: int | None = None) -> list[dict[str, int]]:
     """Delete one, and renumber the rest of its image 1..k in their order.
     Returns the new numbers, [{id, n}], of the rows that changed."""
     changed = []
@@ -1483,6 +1536,7 @@ def delete_result(store: Store, result_id: int) -> list[dict[str, int]]:
         record = tx.get(BUCKET_AIS_RESULTS, result_id)
         if record is None:
             return []
+        _check_rev(record, expect)
         tx.delete(BUCKET_AIS_RESULTS, result_id)
         rest = sorted((r for _, r in tx.all(BUCKET_AIS_RESULTS)
                        if r["batch_id"] == record["batch_id"] and r["image"] == record["image"]),
@@ -1541,19 +1595,27 @@ def set_measure_types(store: Store, types: Any) -> list[str]:
     return out
 
 
-def add_measurement(store: Store, batch_id: int, image_key: str, line: Any, user_id: int) -> Record:
+def add_measurement(store: Store, batch_id: int, image_key: str, line: Any, user_id: int,
+                    client_id: Any = None) -> Record:
     """A recorded line on an image, numbered after the image's others. It has
-    no bearing on the image's AIS or whether the image counts as done."""
+    no bearing on the image's AIS or whether the image counts as done. The
+    same client_id again returns the line already made."""
     clean = clean_measurement(line)
+    client_id = clean_client_id(client_id)
     with store.transaction() as tx:
         batch = tx.get(BUCKET_AIS_BATCHES, batch_id)
         if batch is None:
             raise BatchError("no such batch")
         if not any(im["key"] == image_key for im in batch["images"]):
             raise BatchError("no such image in this batch")
-        same = [m["n"] for _, m in tx.all(BUCKET_AIS_MEASUREMENTS) if m["batch_id"] == batch_id and m["image"] == image_key]
+        lines = [m for _, m in tx.all(BUCKET_AIS_MEASUREMENTS) if m["batch_id"] == batch_id and m["image"] == image_key]
+        if client_id is not None:
+            sent = next((m for m in lines if m.get("client_id") == client_id), None)
+            if sent is not None:
+                return sent
+        same = [m["n"] for m in lines]
         line_id = tx.next_sequence(BUCKET_AIS_MEASUREMENTS)
-        record = clean | {
+        record = clean | ({"client_id": client_id} if client_id else {}) | {
             "id": line_id,
             "batch_id": batch_id,
             "batch_name": batch["name"],
@@ -1575,7 +1637,7 @@ def get_measurement(store: Store, line_id: int) -> Record | None:
     return store.get(BUCKET_AIS_MEASUREMENTS, line_id)
 
 
-def update_measurement(store: Store, line_id: int, line: Any, user_id: int) -> Record | None:
+def update_measurement(store: Store, line_id: int, line: Any, user_id: int, expect: int | None = None) -> Record | None:
     """New ends, length or label for a recorded line, keeping which image it
     is on, its number and who recorded it. None when it is gone."""
     clean = clean_measurement(line)
@@ -1583,12 +1645,13 @@ def update_measurement(store: Store, line_id: int, line: Any, user_id: int) -> R
         record = tx.get(BUCKET_AIS_MEASUREMENTS, line_id)
         if record is None:
             return None
-        record = record | clean | {"edited_at": to_iso(utc_now()), "edited_by": user_id}
+        _check_rev(record, expect)
+        record = record | clean | {"edited_at": to_iso(utc_now()), "edited_by": user_id, "rev": record.get("rev", 0) + 1}
         tx.put(BUCKET_AIS_MEASUREMENTS, line_id, record)
     return record
 
 
-def delete_measurement(store: Store, line_id: int) -> list[dict[str, int]]:
+def delete_measurement(store: Store, line_id: int, expect: int | None = None) -> list[dict[str, int]]:
     """Delete one, and renumber the rest of its image 1..k in their order.
     Returns the new numbers, [{id, n}], of the lines that changed."""
     changed = []
@@ -1596,6 +1659,7 @@ def delete_measurement(store: Store, line_id: int) -> list[dict[str, int]]:
         record = tx.get(BUCKET_AIS_MEASUREMENTS, line_id)
         if record is None:
             return []
+        _check_rev(record, expect)
         tx.delete(BUCKET_AIS_MEASUREMENTS, line_id)
         rest = sorted((m for _, m in tx.all(BUCKET_AIS_MEASUREMENTS)
                        if m["batch_id"] == record["batch_id"] and m["image"] == record["image"]),
@@ -1833,6 +1897,7 @@ def import_batch(store: Store, data: Any, local_users: dict[int, str], user_id: 
         for at, by in (("edited_at", "edited_by"), ("soma_at", "soma_by")):
             if row.get(at) is not None:
                 record |= {at: _date(row[at], at), by: person(row.get(by))}
+        record |= _kept_sync(row)
         clean_rows.append(record)
 
     # Backups from before measurements were recorded have none.
@@ -1854,6 +1919,7 @@ def import_batch(store: Store, data: Any, local_users: dict[int, str], user_id: 
                                             "created_at": _date(line.get("created_at"), "created_at")}
         if line.get("edited_at") is not None:
             record |= {"edited_at": _date(line["edited_at"], "edited_at"), "edited_by": person(line.get("edited_by"))}
+        record |= _kept_sync(line)
         clean_lines.append(record)
 
     name = clean_name(batch.get("name"))

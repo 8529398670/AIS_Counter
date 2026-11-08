@@ -282,6 +282,8 @@
                 <canvas id="ais-canvas"></canvas>
                 <canvas id="ais-loupe" class="ais-loupe" hidden></canvas>
                 <p id="ais-empty" class="ais-empty" data-i18n="ais.empty"></p>
+                <!-- Edits not yet on the server (outbox.js): how many, and whether it can be reached. -->
+                <span id="ais-outbox" class="ais-outbox badge" role="status" hidden></span>
                 <p id="ais-status" class="ais-status small" hidden><span id="ais-status-text"></span><button id="ais-status-close" class="btn-close btn-close-white" type="button" data-i18n-attr="title:ais.note_close,aria-label:ais.note_close" hidden></button></p>
                 <!-- Pan and zoom: drag (or middle-drag) pans, the wheel zooms; lock freezes the view across images. Undo / redo take back accepted, edited and deleted AIS. -->
                 <div class="ais-viewtools btn-group-vertical btn-group-sm" role="group">
@@ -1993,6 +1995,7 @@
   <script src="/js/settings.js"></script>
   <script src="/js/about.js"></script>
   <script src="/js/matlab_account.js"></script>
+  <script src="/js/outbox.js"></script>
   <script src="/js/ais.js"></script>
   <script src="/js/ais_images.js"></script>
   <script src="/js/ais_assign.js"></script>

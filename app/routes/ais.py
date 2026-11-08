@@ -27,7 +27,7 @@ from app.core.middleware import from_this_computer
 from app.core.security import actor_from, check_csrf
 from app.models import ais as batches
 from app.models import users
-from app.routes.helpers import bad_request, error, forbidden, get_config, get_store, not_found, parse_id, read_json, run
+from app.routes.helpers import bad_request, conflict, error, forbidden, get_config, get_store, not_found, parse_id, read_json, run
 
 UPLOAD_LIMIT_BYTES = 64 * 1024 * 1024
 MAX_IMPORT_SHAS = 200_000
@@ -48,6 +48,21 @@ async def _body(request: Request) -> tuple[dict[str, Any] | None, Response | Non
     if not check_csrf(request, body.get("csrf_token")):
         return None, forbidden("invalid csrf token")
     return body, None
+
+
+def _expect(body: dict[str, Any]) -> tuple[int | None, Response | None]:
+    """The rev the caller last saw (optional): a stale one is a 409, so an
+    edit queued while offline cannot overwrite someone else's since."""
+    expect = body.get("expect")
+    if expect is None:
+        return None, None
+    if not isinstance(expect, int) or isinstance(expect, bool) or expect < 0:
+        return None, bad_request("expect must be a whole number")
+    return expect, None
+
+
+def _stale(exc: batches.RevConflict) -> Response:
+    return conflict(str(exc), current=exc.current)
 
 
 async def upload(request: Request) -> Response:
@@ -961,7 +976,7 @@ async def result_add(request: Request) -> Response:
         return bad_request("batch_id and image are required")
     try:
         row = await run(batches.add_result, get_store(request), batch_id, body["image"], body.get("row"),
-                        _user_id(request))
+                        _user_id(request), body.get("client_id"))
     except batches.BatchError as exc:
         return bad_request(str(exc))
     return JSONResponse(row)
@@ -978,7 +993,13 @@ async def result_delete(request: Request) -> Response:
         return not_found("no such result")
     if not await _may_change(request, row):
         return forbidden("only whoever accepted it, the image's assignee, or an admin, can delete it")
-    renumbered = await run(batches.delete_result, store, result_id)
+    expect, bad = _expect(body)
+    if bad:
+        return bad
+    try:
+        renumbered = await run(batches.delete_result, store, result_id, expect)
+    except batches.RevConflict as exc:
+        return _stale(exc)
     return JSONResponse({"ok": True, "renumbered": renumbered})
 
 
@@ -995,8 +1016,13 @@ async def result_update(request: Request) -> Response:
         return not_found("no such result")
     if not await _may_change(request, row):
         return forbidden("only whoever accepted it, the image's assignee, or an admin, can change it")
+    expect, bad = _expect(body)
+    if bad:
+        return bad
     try:
-        updated = await run(batches.update_result, store, result_id, body.get("row"), _user_id(request))
+        updated = await run(batches.update_result, store, result_id, body.get("row"), _user_id(request), expect)
+    except batches.RevConflict as exc:
+        return _stale(exc)
     except batches.BatchError as exc:
         return bad_request(str(exc))
     if updated is None:
@@ -1017,8 +1043,13 @@ async def result_soma(request: Request) -> Response:
         return not_found("no such result")
     if not await _may_change(request, row):
         return forbidden("only whoever accepted it, the image's assignee, or an admin, can change it")
+    expect, bad = _expect(body)
+    if bad:
+        return bad
     try:
-        updated = await run(batches.set_soma, store, result_id, body.get("soma"), _user_id(request))
+        updated = await run(batches.set_soma, store, result_id, body.get("soma"), _user_id(request), expect)
+    except batches.RevConflict as exc:
+        return _stale(exc)
     except batches.BatchError as exc:
         return bad_request(str(exc))
     if updated is None:
@@ -1077,7 +1108,7 @@ async def measurement_add(request: Request) -> Response:
         return bad_request("batch_id and image are required")
     try:
         line = await run(batches.add_measurement, get_store(request), batch_id, body["image"], body.get("measurement"),
-                         _user_id(request))
+                         _user_id(request), body.get("client_id"))
     except batches.BatchError as exc:
         return bad_request(str(exc))
     return JSONResponse(line)
@@ -1095,8 +1126,13 @@ async def measurement_update(request: Request) -> Response:
         return not_found("no such measurement")
     if not await _may_change(request, line):
         return forbidden("only whoever recorded it, the image's assignee, or an admin, can change it")
+    expect, bad = _expect(body)
+    if bad:
+        return bad
     try:
-        updated = await run(batches.update_measurement, store, line_id, body.get("measurement"), _user_id(request))
+        updated = await run(batches.update_measurement, store, line_id, body.get("measurement"), _user_id(request), expect)
+    except batches.RevConflict as exc:
+        return _stale(exc)
     except batches.BatchError as exc:
         return bad_request(str(exc))
     if updated is None:
@@ -1115,7 +1151,13 @@ async def measurement_delete(request: Request) -> Response:
         return not_found("no such measurement")
     if not await _may_change(request, line):
         return forbidden("only whoever recorded it, the image's assignee, or an admin, can delete it")
-    renumbered = await run(batches.delete_measurement, store, line_id)
+    expect, bad = _expect(body)
+    if bad:
+        return bad
+    try:
+        renumbered = await run(batches.delete_measurement, store, line_id, expect)
+    except batches.RevConflict as exc:
+        return _stale(exc)
     return JSONResponse({"ok": True, "renumbered": renumbered})
 
 

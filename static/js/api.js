@@ -20,7 +20,10 @@ const Api = {
       // Never reached the server, so only the browser can log it. Its own
       // words for this ("Failed to fetch") mean nothing to anyone reading them.
       Track.failed( path , 0 );
-      throw new Error( I18n.get( "errors.network" ) || networkError.message );
+      const error = new Error( I18n.get( "errors.network" ) || networkError.message );
+      // For callers that wait and try again (outbox.js), not the words.
+      error.network = true;
+      throw error;
     }
 
     let payload = {};
@@ -40,6 +43,8 @@ const Api = {
       // The whole body, for callers that need more than the code (the
       // Settings screen's problems list, a 409's current version).
       error.payload = payload;
+      // 429 and 503 say how long to wait, in seconds.
+      error.retryAfter = response.headers.get( "Retry-After" );
       throw error;
     }
     return payload;

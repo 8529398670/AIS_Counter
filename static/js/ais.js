@@ -622,13 +622,7 @@ const Ais = {
     const entry = this.images[ this.index ];
     if ( !entry || !this.batch ) return;
     const marking = !this.isMarkedDone( entry );
-    try {
-      const out = await Api.post( "/api/ais/batches/" + this.batch.id + "/done" , { image: entry.key , done: marking } );
-      this.batch.skipped = out.skipped;
-    } catch ( error ) {
-      App.showError( error.message );
-      return;
-    }
+    this.setDone( entry , marking );
     this.renderPicker();
     if ( marking ) this.nextIncomplete();
   },
@@ -1860,7 +1854,8 @@ const Ais = {
     return Object.assign( row , r.z || {} );
   },
 
-  // Store a row for entry; throws what the server said. The caller redraws.
+  // Store a row for entry. Shown at once; the outbox (outbox.js) gets it to
+  // the server, now or once it can be reached. The caller redraws.
   async saveRow( entry , row ) {
     const saved = await this.postAdd( this.batch.id , entry.key , row );
     this.remember( { kind: "add" , ref: this.refFor( saved ) } );
@@ -1868,17 +1863,90 @@ const Ais = {
   },
 
   async postAdd( batchId , image , row ) {
-    const saved = await Api.post( "/api/ais/results" , { batch_id: batchId , image: image , row: row } );
-    this.batchRows.push( saved );
-    if ( this.allRows ) this.allRows.push( saved );
-    return saved;
+    const key = Outbox.newId();
+    const entry = this.images.find( ( e ) => e.key === image );
+    const same = this.batchRows.filter( ( r ) => r.batch_id === batchId && r.image === image ).map( ( r ) => r.n );
+    const local = Object.assign( {} , row , {
+      id: null , rev: 0 , client_id: key , batch_id: batchId , image: image ,
+      batch_name: this.batch && this.batch.id === batchId ? this.batch.name : row.batch_name ,
+      cell: entry && entry.cell != null ? entry.cell : row.cell ,
+      n: Math.max( 0 , ...same ) + 1 , created_by: this.me ? this.me.id : null , accepted_at: new Date().toISOString() ,
+    } );
+    // As the server keeps an add: no edit, and no soma (measured again).
+    [ "edited_at" , "edited_by" , "soma_um" , "soma_px" , "soma_ais_x" , "soma_ais_y" , "soma_x" , "soma_y" , "soma_at" , "soma_by" ]
+      .forEach( ( k ) => delete local[ k ] );
+    this.batchRows.push( local );
+    if ( this.allRows ) this.allRows.push( local );
+    Outbox.add( { kind: "create" , bucket: "results" , key: key , path: "/api/ais/results" , label: this.rowLabel( local ) ,
+      body: { batch_id: batchId , image: image , row: row , client_id: key } } );
+    return local;
   },
 
   // Mark entry done (shared progress), unless it is already.
   async markDone( entry ) {
     if ( this.isMarkedDone( entry ) ) return;
-    const out = await Api.post( "/api/ais/batches/" + this.batch.id + "/done" , { image: entry.key , done: true } );
-    this.batch.skipped = out.skipped;
+    this.setDone( entry , true );
+  },
+
+  // Done or not, here at once and on the server when it can be reached.
+  setDone( entry , done ) {
+    const skipped = this.batch.skipped.filter( ( key ) => key !== entry.key );
+    if ( done ) skipped.push( entry.key );
+    this.batch.skipped = skipped;
+    Outbox.add( { kind: "done" , bucket: "done" , key: this.batch.id + ":" + entry.key , batchId: this.batch.id ,
+      path: "/api/ais/batches/" + this.batch.id + "/done" , body: { image: entry.key , done: done } ,
+      label: ( I18n.get( "outbox.done" ) || "done mark on {image}" ).replace( "{image}" , entry.key ) } );
+  },
+
+  // A row's own name in the outbox: the client_id it was accepted with, or
+  // its server id for one from before rows had one.
+  rowKey( row ) {
+    return row.client_id || "r" + row.id;
+  },
+
+  rowLabel( row ) {
+    return ( I18n.get( "outbox.row" ) || "AIS {n} on {image}" ).replace( "{n}" , row.n ).replace( "{image}" , row.image );
+  },
+
+  // What the outbox says back about rows and done marks (outbox.js).
+  outboxHandlers() {
+    const owned = [ "id" , "n" , "rev" , "created_by" , "accepted_at" , "edited_at" , "edited_by" , "soma_at" , "soma_by" ,
+      "batch_name" , "cell" ];
+    const redraw = () => { this.renderTable(); this.renderPicker(); this.draw(); };
+    return {
+      results: {
+        reply: ( item , out ) => {
+          if ( !out ) return;
+          if ( item.kind === "delete" ) {
+            const n = new Map( ( out.renumbered || [] ).map( ( r ) => [ r.id , r.n ] ) );
+            [ this.batchRows , this.allRows ].forEach( ( list ) => list && list.forEach( ( r ) => { if ( n.has( r.id ) ) r.n = n.get( r.id ); } ) );
+          } else {
+            [ this.batchRows , this.allRows ].forEach( ( list ) => list && list.forEach( ( r ) => {
+              if ( this.rowKey( r ) === item.key || ( r.client_id && r.client_id === item.key ) ) {
+                owned.forEach( ( k ) => { if ( k in out ) r[ k ] = out[ k ]; } );
+              }
+            } ) );
+          }
+          redraw();
+        },
+        resync: async () => {
+          if ( !this.batch ) return;
+          await this.loadBatchRows();
+          if ( this.allRows ) { this.allRows = null; this.loadTable(); }
+          redraw();
+        },
+      },
+      done: {
+        reply: ( item , out ) => {
+          if ( !out || !this.batch || this.batch.id !== item.batchId ) return;
+          // A later mark still to go would be undone by this answer's list.
+          if ( Outbox.items.some( ( other ) => other !== item && other.kind === "done" && other.batchId === item.batchId ) ) return;
+          this.batch.skipped = out.skipped;
+          this.renderPicker();
+        },
+        resync: () => {},
+      },
+    };
   },
 
   reject() {
@@ -1981,30 +2049,55 @@ const Ais = {
     }
     const old = target.item;
     const ref = this.refFor( old );
-    const saved = await this.postUpdate( old.id , this.rowFor( entry , r , old.origin || "" ) );
+    const saved = await this.postUpdate( old , this.rowFor( entry , r , old.origin || "" ) );
     this.remember( { kind: "edit" , ref: ref , before: old , after: saved } );
   },
 
-  async postUpdate( id , row ) {
-    const saved = await Api.post( "/api/ais/results/" + id + "/update" , { row: row } );
-    const swap = ( list ) => list && list.forEach( ( old , i ) => { if ( old.id === saved.id ) list[ i ] = saved; } );
-    swap( this.batchRows );
-    swap( this.allRows );
-    const ref = this.refs.get( saved.id );
-    if ( ref ) ref.row = saved;
-    return saved;
+  // The row as this page has it now, by its key (an older copy may be held).
+  currentRow( row ) {
+    const key = this.rowKey( row );
+    return this.batchRows.find( ( r ) => this.rowKey( r ) === key ) ||
+      ( this.allRows && this.allRows.find( ( r ) => this.rowKey( r ) === key ) ) || row;
   },
 
-  // The Measure tool's AIS -> soma distance (null clears it): the row as the
-  // server now has it, in place of the old one.
-  async postSoma( id , soma ) {
-    const saved = await Api.post( "/api/ais/results/" + id + "/soma" , { soma: soma } );
-    const swap = ( list ) => list && list.forEach( ( old , i ) => { if ( old.id === saved.id ) list[ i ] = saved; } );
+  // old's place in the lists (and its ref) taken by local.
+  swapRow( old , local ) {
+    const key = this.rowKey( old );
+    const swap = ( list ) => list && list.forEach( ( r , i ) => { if ( this.rowKey( r ) === key ) list[ i ] = local; } );
     swap( this.batchRows );
     swap( this.allRows );
-    const ref = this.refs.get( saved.id );
-    if ( ref ) ref.row = saved;
-    return saved;
+    const ref = this.refs.get( key );
+    if ( ref ) ref.row = local;
+  },
+
+  // An edit (or an undo of one): the trace replaced, keeping the row's
+  // number, origin and who accepted it, as the server does.
+  async postUpdate( old , row ) {
+    const current = this.currentRow( old );
+    const local = Object.assign( {} , row );
+    [ "id" , "client_id" , "rev" , "batch_id" , "batch_name" , "image" , "cell" , "n" , "created_by" , "accepted_at" ]
+      .forEach( ( k ) => { if ( k in current ) local[ k ] = current[ k ]; } );
+    // An edit drops the soma distance on the server (the start may move).
+    [ "soma_um" , "soma_px" , "soma_ais_x" , "soma_ais_y" , "soma_x" , "soma_y" , "soma_at" , "soma_by" ].forEach( ( k ) => delete local[ k ] );
+    Object.assign( local , { origin: current.origin || "" , edited_at: new Date().toISOString() , edited_by: this.me ? this.me.id : null } );
+    this.swapRow( current , local );
+    Outbox.add( { kind: "update" , bucket: "results" , key: this.rowKey( current ) , path: "/api/ais/results/{id}/update" ,
+      label: this.rowLabel( current ) , body: { row: row } } , { id: current.id , rev: current.rev } );
+    return local;
+  },
+
+  // The Measure tool's AIS -> soma distance (null clears it): the row with
+  // it, in place of the old one.
+  async postSoma( row , soma ) {
+    const current = this.currentRow( row );
+    const local = Object.assign( {} , current );
+    [ "soma_um" , "soma_px" , "soma_ais_x" , "soma_ais_y" , "soma_x" , "soma_y" ].forEach( ( k ) => { local[ k ] = soma ? soma[ k ] : null; } );
+    local.soma_at = soma ? new Date().toISOString() : null;
+    local.soma_by = soma && this.me ? this.me.id : null;
+    this.swapRow( current , local );
+    Outbox.add( { kind: "update" , bucket: "results" , key: this.rowKey( current ) , path: "/api/ais/results/{id}/soma" ,
+      label: this.rowLabel( current ) , body: { soma: soma } } , { id: current.id , rev: current.rev } );
+    return local;
   },
 
   deleteTrace( target ) {
@@ -2025,8 +2118,12 @@ const Ais = {
       this.measurements = [];
       return;
     }
+    // Edits still queued from before (a reload, a sign-in) go first, so what
+    // comes back has them in it; still queued after a few seconds (the
+    // server is away), its new rows are laid over what does come back.
+    await Outbox.settled( 3000 );
     try {
-      this.batchRows = ( await Api.request( "/api/ais/results?batch=" + this.batch.id ) ).results;
+      this.batchRows = this.withQueued( ( await Api.request( "/api/ais/results?batch=" + this.batch.id ) ).results );
     } catch ( error ) {
       this.batchRows = [];
       App.showError( error.message );
@@ -2035,12 +2132,38 @@ const Ais = {
     this.renderTable();
   },
 
+  // Rows the outbox has yet to deliver for the open batch: added ones shown,
+  // deleted ones not.
+  withQueued( rows ) {
+    const queued = Outbox.items.filter( ( item ) => item.bucket === "results" );
+    if ( !queued.length ) return rows;
+    const gone = new Set( queued.filter( ( item ) => item.kind === "delete" ).map( ( item ) => item.key ) );
+    const out = rows.filter( ( r ) => !gone.has( this.rowKey( r ) ) );
+    queued.filter( ( item ) => item.kind === "create" && item.body.batch_id === this.batch.id && !gone.has( item.key ) &&
+      !out.some( ( r ) => r.client_id === item.key ) ).forEach( ( item ) => {
+      const same = out.filter( ( r ) => r.image === item.body.image ).map( ( r ) => r.n );
+      out.push( Object.assign( {} , item.body.row , { id: null , rev: 0 , client_id: item.key , batch_id: item.body.batch_id ,
+        image: item.body.image , n: Math.max( 0 , ...same ) + 1 } ) );
+    } );
+    return out;
+  },
+
   // The batch's recorded lines (the Measure tool's Record switch), each with
   // its ends as a and b, the way the tool works on them.
   async loadMeasurements() {
     try {
       const found = await Api.request( "/api/ais/measurements?batch=" + this.batch.id );
-      this.measurements = found.measurements.map( ( line ) => this.lineEnds( line ) );
+      const queued = Outbox.items.filter( ( item ) => item.bucket === "measurements" );
+      const gone = new Set( queued.filter( ( item ) => item.kind === "delete" ).map( ( item ) => item.key ) );
+      const lines = found.measurements.filter( ( line ) => !gone.has( AisMeasure.lineKey( line ) ) );
+      // Lines the outbox has yet to deliver (the server is away), shown too.
+      queued.filter( ( item ) => item.kind === "create" && item.body.batch_id === this.batch.id && !gone.has( item.key ) &&
+        !lines.some( ( line ) => line.client_id === item.key ) ).forEach( ( item ) => {
+        const same = lines.filter( ( line ) => line.image === item.body.image ).map( ( line ) => line.n );
+        lines.push( Object.assign( {} , item.body.measurement , { id: null , rev: 0 , client_id: item.key ,
+          batch_id: item.body.batch_id , image: item.body.image , n: Math.max( 0 , ...same ) + 1 } ) );
+      } );
+      this.measurements = lines.map( ( line ) => this.lineEnds( line ) );
     } catch ( error ) {
       this.measurements = [];
       App.showError( error.message );
@@ -2150,23 +2273,26 @@ const Ais = {
   // Delete a saved row; the server renumbers the rest of its image 1..k.
   async deleteRow( row ) {
     const ref = this.refFor( row );
-    try {
-      await this.postDelete( row );
-    } catch ( error ) {
-      App.showError( error.message );
-      return;
-    }
+    await this.postDelete( row );
     this.remember( { kind: "delete" , ref: ref } );
   },
 
-  // Delete on the server, then here; throws what the server said.
+  // Gone here at once, the rest of its image renumbered 1..k as the server
+  // will; the outbox deletes it there.
   async postDelete( row ) {
-    const out = await Api.post( "/api/ais/results/" + row.id + "/delete" , {} );
-    if ( this.editing && this.editing.item === row ) this.reject();
-    const renumbered = new Map( ( out.renumbered || [] ).map( ( r ) => [ r.id , r.n ] ) );
-    const keep = ( list ) => list.filter( ( r ) => r.id !== row.id ).map( ( r ) => renumbered.has( r.id ) ? Object.assign( r , { n: renumbered.get( r.id ) } ) : r );
+    const current = this.currentRow( row );
+    const key = this.rowKey( current );
+    if ( this.editing && this.editing.item && this.rowKey( this.editing.item ) === key ) this.reject();
+    const keep = ( list ) => {
+      const rest = list.filter( ( r ) => this.rowKey( r ) !== key );
+      rest.filter( ( r ) => r.batch_id === current.batch_id && r.image === current.image )
+        .sort( ( p , q ) => p.n - q.n ).forEach( ( r , i ) => { r.n = i + 1; } );
+      return rest;
+    };
     this.batchRows = keep( this.batchRows );
     if ( this.allRows ) this.allRows = keep( this.allRows );
+    Outbox.add( { kind: "delete" , bucket: "results" , key: key , path: "/api/ais/results/{id}/delete" ,
+      label: this.rowLabel( current ) , body: {} } , { id: current.id , rev: current.rev } );
     AisAuto.rowDeleted();
     this.renderTable();
     this.renderPicker();
@@ -2176,10 +2302,11 @@ const Ais = {
   // --- undo / redo (of the saved rows) ------------------------------------------
 
   refFor( row ) {
-    let ref = this.refs.get( row.id );
+    const key = this.rowKey( row );
+    let ref = this.refs.get( key );
     if ( !ref ) {
       ref = { row: row };
-      this.refs.set( row.id , ref );
+      this.refs.set( key , ref );
     }
     return ref;
   },
@@ -2218,14 +2345,14 @@ const Ais = {
     this.renderHistory();
     try {
       if ( step.kind === "edit" ) {
-        await this.postUpdate( ref.row.id , backwards ? step.before : step.after );
+        await this.postUpdate( ref.row , backwards ? step.before : step.after );
       } else if ( remove ) {
         await this.postDelete( ref.row );
       } else {
         const saved = await this.postAdd( ref.row.batch_id , ref.row.image , ref.row );
-        this.refs.delete( ref.row.id );
+        this.refs.delete( this.rowKey( ref.row ) );
         ref.row = saved;
-        this.refs.set( saved.id , ref );
+        this.refs.set( this.rowKey( saved ) , ref );
       }
       to.push( step );
     } catch ( error ) {

@@ -62,7 +62,6 @@ const AisMeasure = {
   aisEnd: "preset",   // the AIS mode Manual came from
   want: null,         // the row to pick once the next image is shown: "first" | "last" | an id
   saving: false,
-  writes: Promise.resolve(),   // recorded lines' saves, one at a time and in order
   nudged: null,       // the recorded line an arrow key moved, its save waiting
   nudgeTimer: null,
   listKey: null,      // what the panel's list of recorded lines shows now
@@ -408,7 +407,7 @@ const AisMeasure = {
     this.saving = true;
     this.render();
     try {
-      this.row = await Ais.postSoma( this.row.id , soma );
+      this.row = await Ais.postSoma( this.row , soma );
       return true;
     } catch ( error ) {
       Ais.status( error.message , true );
@@ -488,52 +487,66 @@ const AisMeasure = {
       length_um: line.length_um , pixconv: line.pixconv , label: line.label , type: line.type || "" };
   },
 
-  // One write after another, each reading the line as it is by then, so the
-  // server ends up with the last of them whatever the network does.
-  write( job ) {
-    this.writes = this.writes.then( job ).catch( ( error ) => this.writeFailed( error ) );
-    return this.writes;
+  // A line's own name in the outbox: the client_id it was made with, or its
+  // server id for one recorded before lines had one.
+  lineKey( line ) {
+    return line.client_id || "m" + line.id;
   },
 
-  // Never show a line that is not as saved: back to what the server has.
-  async writeFailed( error ) {
-    Ais.status( error.message , true );
+  // The outbox's answers about lines (outbox.js): the server's numbers for
+  // a line once it arrives, and the lines as saved once something is refused.
+  outboxHandler() {
+    const owned = [ "id" , "n" , "rev" , "created_by" , "created_at" , "edited_at" , "edited_by" , "batch_name" ];
+    return {
+      reply: ( item , out ) => {
+        const line = Ais.measurements.find( ( other ) => this.lineKey( other ) === item.key );
+        if ( line && out && item.kind !== "delete" ) owned.forEach( ( k ) => { if ( k in out ) line[ k ] = out[ k ]; } );
+        if ( item.kind === "delete" && out && out.renumbered ) {
+          const n = new Map( out.renumbered.map( ( r ) => [ r.id , r.n ] ) );
+          Ais.measurements.forEach( ( other ) => { if ( n.has( other.id ) ) other.n = n.get( other.id ); } );
+        }
+        this.render();
+      },
+      resync: () => this.writeFailed(),
+    };
+  },
+
+  // Refused by the server (outbox.js said why): back to what it has.
+  async writeFailed() {
     this.sel = null;
     if ( Ais.batch ) await Ais.loadMeasurements();
     Ais.draw();
     Ais.renderTable();
   },
 
-  // Shown at once; the line is on the server by the time anything else is
-  // written, so a drag straight after finds its id.
+  // Shown at once, and sent when the server can be reached; a drag straight
+  // after is queued behind it and finds its id.
   addLine( a , b ) {
     const entry = Ais.images[ Ais.index ];
     if ( !entry || !Ais.batch ) return;
     const same = Ais.measurementsOn( entry );
     const line = { a: a , b: b , image: entry.key , batch_id: Ais.batch.id , batch_name: Ais.batch.name , label: "" ,
-      type: this.options.measure_type , n: same.length ? same[ same.length - 1 ].n + 1 : 1 };
+      type: this.options.measure_type , n: same.length ? same[ same.length - 1 ].n + 1 : 1 ,
+      id: null , rev: 0 , client_id: Outbox.newId() };
     Object.assign( line , this.placed( line ) );
     Ais.measurements.push( line );
     Ais.renderTable();
-    this.write( async () => {
-      const saved = await Api.post( "/api/ais/measurements" , { batch_id: line.batch_id , image: line.image , measurement: this.fields( line ) } );
-      line.id = saved.id;
-      line.n = saved.n;
-      line.created_by = saved.created_by;
-      line.created_at = saved.created_at;
-      this.render();
-    } );
+    Outbox.add( { kind: "create" , bucket: "measurements" , key: line.client_id , path: "/api/ais/measurements" ,
+      label: this.what( line ) ,
+      body: { batch_id: line.batch_id , image: line.image , measurement: this.fields( line ) , client_id: line.client_id } } );
   },
 
   saveLine( line ) {
-    if ( !line.dirty ) return;
+    if ( !line.dirty || line.gone ) return;
     line.dirty = false;
-    this.write( async () => {
-      if ( !line.id || line.gone ) return;
-      const saved = await Api.post( "/api/ais/measurements/" + line.id + "/update" , { measurement: this.fields( line ) } );
-      line.edited_at = saved.edited_at;
-      line.edited_by = saved.edited_by;
-    } );
+    Outbox.add( { kind: "update" , bucket: "measurements" , key: this.lineKey( line ) ,
+      path: "/api/ais/measurements/{id}/update" , label: this.what( line ) , body: { measurement: this.fields( line ) } } ,
+    { id: line.id , rev: line.rev } );
+  },
+
+  // How a refusal names the line: its image and number.
+  what( line ) {
+    return ( I18n.get( "outbox.line" ) || "line {n} on {image}" ).replace( "{n}" , line.n ).replace( "{image}" , line.image );
   },
 
   // Arrow keys come fast: save once they stop.
@@ -574,9 +587,8 @@ const AisMeasure = {
     if ( entry ) Ais.measurementsOn( entry ).forEach( ( other , i ) => { other.n = i + 1; } );
     Ais.renderTable();
     Ais.draw();
-    this.write( async () => {
-      if ( line.id ) await Api.post( "/api/ais/measurements/" + line.id + "/delete" , {} );
-    } );
+    Outbox.add( { kind: "delete" , bucket: "measurements" , key: this.lineKey( line ) ,
+      path: "/api/ais/measurements/{id}/delete" , label: this.what( line ) , body: {} } , { id: line.id , rev: line.rev } );
   },
 
   // The pill on a recorded line, and how far it is in the panel's list.

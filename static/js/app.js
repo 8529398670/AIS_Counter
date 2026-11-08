@@ -185,6 +185,10 @@ const App = {
     Password.init( me );
     TwoFactor.init( me );
     Fresh.init( me );
+    // Before the AIS screens, which queue their edits in it.
+    Outbox.init( me );
+    const outboxRows = Ais.outboxHandlers();
+    Outbox.handlers = { results: outboxRows.results , done: outboxRows.done , measurements: AisMeasure.outboxHandler() };
     // Side by side: the wait is the slowest screen, not all of them added up.
     const loading = [];
     loading.push( Keys.init( me ) );
