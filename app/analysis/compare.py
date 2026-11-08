@@ -412,14 +412,36 @@ def _svg(width: int, height: int, body: list[str], title: str) -> str:
             + "".join(body) + "</svg>")
 
 
+def _text_px(text: str, size: float = 12) -> float:
+    """Rough rendered width of Helvetica text: capitals and digits run wider."""
+    return sum(0.72 if c.isupper() else 0.28 if c in " .,:;il|" else 0.56 for c in text) * size
+
+
+def _wrap(text: str, width: float) -> list[str]:
+    """Greedy word wrap of a label to lines no wider than width (a single
+    longer word keeps a line of its own)."""
+    lines: list[str] = []
+    for word in text.split():
+        if lines and _text_px(lines[-1] + " " + word) <= width:
+            lines[-1] += " " + word
+        else:
+            lines.append(word)
+    return lines or [""]
+
+
 def box_plot(measure_name: str, treatments: list[str], means: dict[int, dict[str, float]], names: dict[int, str],
              brackets: dict[tuple[str, str], float | None], cultures: int) -> str:
     """Culture means per treatment: a box (quartiles, whiskers to the
     extremes), a dot per culture and a thin line joining one culture's dots,
     with brackets over the pairs the culture means' Tukey HSD found to differ."""
     k = len(treatments)
-    slot = 90
-    left, right, top, bottom = 64, 24, 48, 84
+    # Each treatment gets a slot wide enough for its longest word; names wrap
+    # onto extra lines so neighbouring labels never overlap.
+    words = [w for t in treatments for w in t.split()]
+    slot = max(90, math.ceil(max((_text_px(w) for w in words), default=0) + 14))
+    wrapped = {t: _wrap(t, slot - 10) for t in treatments}
+    lines = max((len(v) for v in wrapped.values()), default=1)
+    left, right, top, bottom = 64, 24, 48, 84 + 15 * (lines - 1)
     order = {t: i for i, t in enumerate(treatments)}
     # Shortest spans lowest, so brackets nest instead of crossing labels.
     significant = sorted(((a, b, p) for (a, b), p in brackets.items() if p is not None and p < 0.05),
@@ -457,9 +479,10 @@ def box_plot(measure_name: str, treatments: list[str], means: dict[int, dict[str
                 if t in by:
                     body.append(f'<circle cx="{cx:.1f}" cy="{y(by[t]):.1f}" r="4" fill="{SERIES[0]}" stroke="{SURFACE}" '
                                 f'stroke-width="1.5"><title>{escape(names[b])}: {by[t]:.3f} µm</title></circle>')
-        label = escape(t)
+        label = "".join(f'<tspan x="{cx:.1f}" dy="{0 if i == 0 else 15}">{escape(line)}</tspan>'
+                        for i, line in enumerate(wrapped[t]))
         body.append(f'<text x="{cx:.1f}" y="{top + plot_h + 18}" text-anchor="middle" fill="{INK}">{label}</text>')
-        body.append(f'<text x="{cx:.1f}" y="{top + plot_h + 34}" text-anchor="middle" fill="{MUTED}" font-size="11">'
+        body.append(f'<text x="{cx:.1f}" y="{top + plot_h + 34 + 15 * (lines - 1)}" text-anchor="middle" fill="{MUTED}" font-size="11">'
                     f'n = {int(vs.size)}</text>')
     for i, (a, b, p) in enumerate(significant):
         by_ = top - 10 - BRACKET_STEP * i
