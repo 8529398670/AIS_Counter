@@ -186,12 +186,23 @@ class DockerSection:
 
 
 @dataclass
+class ResticSection:
+    repo: str
+    password_file: str
+    keep_daily: int
+    keep_weekly: int
+    keep_monthly: int
+    schedule_hour: int
+
+
+@dataclass
 class File:
     app: AppSection
     server: ServerSection
     auth: AuthSection
     logs: LogsSection
     docker: DockerSection
+    restic: ResticSection
 
 
 # Fields that may be absent from defaults.yaml: kept only so an older
@@ -204,6 +215,7 @@ SECTIONS: dict[str, type] = {
     "auth": AuthSection,
     "logs": LogsSection,
     "docker": DockerSection,
+    "restic": ResticSection,
 }
 
 
@@ -723,6 +735,16 @@ def validate(file: File) -> list[str]:
     check(bool(_CPUS.match(docker.cpus)), f"docker.cpus must be a number like 1 or 0.5, got {docker.cpus!r}")
     check(docker.pids_limit > 0, "docker.pids_limit must be positive")
     check(bool(_SIZE.match(docker.tmpfs_size)), f"docker.tmpfs_size must look like 16m, got {docker.tmpfs_size!r}")
+
+    restic = file.restic
+    check(bool(restic.repo.strip()), "restic.repo must not be empty")
+    check(bool(restic.password_file.strip()), "restic.password_file must not be empty")
+    for name in ("keep_daily", "keep_weekly", "keep_monthly"):
+        value = getattr(restic, name)
+        check(0 <= value <= 1000, f"restic.{name} must be 0-1000, got {value}")
+    check(restic.keep_daily + restic.keep_weekly + restic.keep_monthly > 0,
+          "restic.keep_daily, keep_weekly and keep_monthly cannot all be 0: forget would remove every snapshot")
+    check(0 <= restic.schedule_hour <= 23, f"restic.schedule_hour must be 0-23, got {restic.schedule_hour}")
 
     return problems
 

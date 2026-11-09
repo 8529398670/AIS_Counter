@@ -225,3 +225,68 @@ class RestoreTest(BackupTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BackupSetTest(BackupTestCase):
+    """manage backup-set, what ./backup.sh hands to restic."""
+
+    def pack(self, made: backup.SetResult) -> Path:
+        """deployment/ as the .tar.gz ./backup.sh restore makes of it."""
+        packed = self.root / "from-set.tar.gz"
+        deployment = made.path / backup.SET_DEPLOYMENT
+        with tarfile.open(packed, "w:gz") as archive:
+            for name in sorted(os.listdir(deployment)):
+                archive.add(deployment / name, arcname=name)
+        return packed
+
+    def test_holds_the_deployment_under_its_own_key(self) -> None:
+        user = users.create_user(self.store, "In the set", users.ROLE_USER)
+        secret = two_factor.start_setup(self.store, user.id, self.cfg.secret_key)
+        made = backup.create_set(self.store, self.cfg)
+        deployment = made.path / backup.SET_DEPLOYMENT
+        self.assertEqual(made.path, self.cfg.backups.dir / backup.SET_DIR_NAME)
+        self.assertEqual(sorted(os.listdir(deployment)), ["app.db", "config.yaml", "manifest.json", "secret.key", "storage"])
+        self.assertEqual((deployment / "storage" / "photos" / "a.txt").read_text(), "original")
+        self.assertTrue(made.linked)
+        self.assertEqual((deployment / "storage" / "photos" / "a.txt").stat().st_ino,
+                         (self.cfg.storage_dir / "photos" / "a.txt").stat().st_ino)
+
+        packed_key = (deployment / "secret.key").read_text().strip()
+        self.assertNotEqual(packed_key, self.cfg.secret_key)
+        self.assertNotIn(self.cfg.secret_key, (deployment / "manifest.json").read_text())
+        manifest = json.loads((deployment / "manifest.json").read_text())
+        self.assertEqual(manifest["key_fingerprint"], encryption.key_fingerprint(packed_key))
+        self.assertTrue(manifest["contains_key"])
+        for name in ("app.db", "secret.key", "manifest.json", "config.yaml"):
+            self.assertEqual((deployment / name).stat().st_mode & 0o777, 0o600, name)
+
+        # Readable with its own key, two-factor secret included; not with the server's.
+        db.check_file(deployment / "app.db", packed_key, True)
+        with self.assertRaises((db.DecodeError, encryption.CipherTextError)):
+            db.check_file(deployment / "app.db", self.cfg.secret_key, True)
+        record = db.open_store(deployment / "app.db", packed_key, True).get(db.BUCKET_USERS, user.id)
+        self.assertEqual(encryption.xchacha_decrypt_string(packed_key, record["totp_pending"]), secret)
+
+    def test_each_set_gets_a_new_key(self) -> None:
+        first = backup.create_set(self.store, self.cfg).manifest.key_fingerprint
+        second = backup.create_set(self.store, self.cfg).manifest.key_fingerprint
+        self.assertNotEqual(first, second)
+
+    def test_restores_onto_another_machines_key(self) -> None:
+        users.create_user(self.store, "Set", users.ROLE_USER)
+        made = backup.create_set(self.store, self.cfg)
+        packed = self.pack(made)
+        self.store = None  # type: ignore[assignment]
+        elsewhere = replace(self.cfg, secret_key=encryption.generate_key_hex())
+        result = backup.restore(elsewhere, str(packed))
+        self.assertTrue(result.rekeyed)
+        self.assertEqual(self.names(elsewhere), ["Set"])
+        self.assertEqual((elsewhere.storage_dir / "photos" / "a.txt").read_text(), "original")
+
+    def test_will_not_empty_a_folder_it_did_not_make(self) -> None:
+        mine = self.root / "mine"
+        mine.mkdir()
+        (mine / "keep.txt").write_text("keep")
+        with self.assertRaises(backup.BackupError):
+            backup.create_set(self.store, self.cfg, out=str(mine))
+        self.assertEqual((mine / "keep.txt").read_text(), "keep")

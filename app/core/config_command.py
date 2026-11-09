@@ -1,7 +1,7 @@
 """`python -m app config ...` -- create, check, change, or read config.yaml.
 
 These exist so that nothing else has to parse YAML. The scripts in scripts/
-and docker/ eval the output of `config shell server|docker`, which means they
+and docker/ eval the output of `config shell server|docker|restic`, which means they
 get the same defaults, the same strict decoding, the same validation and the
 same resolved paths as the server -- a typo fails the deploy before anything
 starts, instead of being ignored by a second, looser parser, and what a
@@ -38,7 +38,7 @@ Usage:
                                      change one setting in place, keeping
                                      every comment; a running server applies
                                      it within seconds. Lists: [a, b] or a,b
-  shell [--file path] [--format sh|bat] server|docker
+  shell [--file path] [--format sh|bat] server|docker|restic
                                      print one section as assignments for the
                                      scripts to read: sh (quoted, for eval) or
                                      bat (plain key=value, for for /f).
@@ -79,7 +79,7 @@ def run(arguments: list[str]) -> None:
     shell = commands.add_parser("shell", help="print one section as shell assignments")
     shell.add_argument("--file", default="", help="config file to read (default: the one in use)")
     shell.add_argument("--format", choices=["sh", "bat"], default="sh", help="sh (single-quoted, for eval) or bat (plain key=value)")
-    shell.add_argument("section", choices=["server", "docker"])
+    shell.add_argument("section", choices=["server", "docker", "restic"])
 
     args = parser.parse_args(arguments)
     {
@@ -269,6 +269,19 @@ def command_shell(args: argparse.Namespace) -> None:
             ("public_url", file.server.public_url),
             ("secure_cookies", _flag(file.server.secure_cookies)),
             ("trust_proxy", _flag(file.server.trust_proxy)),
+        ]
+    elif args.section == "restic":
+        restic = file.restic
+        lines = [
+            # As written: ./backup.sh resolves ~ and relative paths on the
+            # host, which this may not be (it can run in the image).
+            ("restic_repo", restic.repo.strip()),
+            ("restic_password_file", restic.password_file.strip()),
+            ("restic_keep_daily", str(restic.keep_daily)),
+            ("restic_keep_weekly", str(restic.keep_weekly)),
+            ("restic_keep_monthly", str(restic.keep_monthly)),
+            ("restic_schedule_hour", str(restic.schedule_hour)),
+            ("app_name", file.app.name),
         ]
     else:
         docker = file.docker

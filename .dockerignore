@@ -16,6 +16,7 @@ config/config.yaml
 config/secret.key
 **/secret.key
 **/secret.key.*
+**/restic.password
 config/config.yaml.*
 config/.config.yaml.*
 *.md

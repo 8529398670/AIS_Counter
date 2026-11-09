@@ -215,6 +215,140 @@ def _add_storage(archive: tarfile.TarFile, root: Path) -> None:
                 pass  # Deleted during the walk: simply not in this backup.
 
 
+# ---------------------------------------------------------------------------
+# backup set: the same contents as a folder, for restic (./backup.sh)
+# ---------------------------------------------------------------------------
+
+# The folder a backup set goes in unless --out says otherwise, inside the
+# backups folder so storage can be hard-linked rather than copied.
+SET_DIR_NAME = "restic-staging"
+SET_DEPLOYMENT = "deployment"
+# Marks a folder as one this module made, so making a new set may empty it.
+SET_MARKER = ".ais-backup-set"
+
+SET_README = """\
+A backup set of {app}, made {created_at} by `manage backup-set`.
+
+deployment/ holds what `manage backup` puts in a .tar.gz: manifest.json,
+app.db, config.yaml and storage/. Its app.db is encrypted under a key made for
+this set alone -- deployment/secret.key, fingerprint {fingerprint} -- not the
+server's own key, so this set cannot be used to read or sign in to the live
+server. Restoring moves the data onto the key of the server it goes into.
+
+To restore it: `./backup.sh restore <snapshot>`, or by hand pack deployment/
+as a .tar.gz with those names at the top and run docker/restore.sh with it
+(or `manage restore --from it.tar.gz --yes` with the server stopped).
+"""
+
+
+@dataclass
+class SetResult:
+    path: Path
+    manifest: Manifest
+    files: int
+    linked: bool
+
+
+def create_set(store: db.Store, cfg: config.Config, out: str = "") -> SetResult:
+    """Write a backup as a folder rather than one file, so restic can keep
+    what did not change from one day to the next:
+
+        <out>/deployment/   manifest.json, app.db, config.yaml, secret.key, storage/
+        <out>/README.txt
+
+    The database copy is re-encrypted under a key made for this set and packed
+    beside it as secret.key, with its fingerprint in the manifest. The set is
+    readable on its own -- restore finds the packed key -- yet never carries
+    the server's own key, which also seals sessions and two-factor secrets.
+    storage/ is hard links to the live files where the filesystem allows,
+    copies where it does not. A folder already at out is replaced only if this
+    function made it."""
+    created = now()
+    target = Path(out).absolute() if out else cfg.backups.dir / SET_DIR_NAME
+    _clear_set(target)
+    deployment = target / SET_DEPLOYMENT
+    deployment.mkdir(mode=0o700, parents=True)
+    (target / SET_MARKER).write_text(created.isoformat() + "\n", encoding="utf-8")
+
+    archive_key = config_secret.generate_secret()
+    manifest = Manifest(
+        format=FORMAT_VERSION,
+        app=cfg.project_name,
+        created_at=created.isoformat(),
+        encrypt_at_rest=cfg.encrypt_at_rest,
+        key_fingerprint=encryption.key_fingerprint(archive_key),
+        contains_key=True,
+        schema_version=store.schema_version(),
+    )
+    database = deployment / DATABASE_NAME
+    try:
+        store.snapshot(database)
+        db.rekey(database, cfg.secret_key, archive_key, cfg.encrypt_at_rest, sealed.rekey_record(cfg.secret_key, archive_key))
+        db.check_file(database, archive_key, cfg.encrypt_at_rest)
+    except (db.DecodeError, encryption.CipherTextError, sqlite3.Error) as error:
+        shutil.rmtree(target, ignore_errors=True)
+        raise BackupError(f"could not copy the database under a new key: {error}") from None
+    for leftover in (f"{DATABASE_NAME}-wal", f"{DATABASE_NAME}-shm"):
+        (deployment / leftover).unlink(missing_ok=True)
+
+    _write_private(deployment / KEY_NAME, (archive_key + "\n").encode("utf-8"))
+    _write_private(deployment / CONFIG_NAME, Path(cfg.config_file).read_bytes())
+    files, linked = _link_storage(Path(cfg.storage_dir), deployment / STORAGE_NAME)
+    # Last, so a set without its manifest is plainly unfinished.
+    _write_private(deployment / MANIFEST_NAME, json.dumps(asdict(manifest), indent=2).encode("utf-8"))
+    _write_private(target / "README.txt", SET_README.format(
+        app=cfg.project_name, created_at=manifest.created_at, fingerprint=manifest.key_fingerprint).encode("utf-8"))
+    return SetResult(path=target, manifest=manifest, files=files, linked=linked)
+
+
+def _clear_set(target: Path) -> None:
+    if not target.exists():
+        return
+    if not target.is_dir() or target.is_symlink():
+        raise BackupError(f"{target} exists and is not a folder")
+    if any(target.iterdir()) and not (target / SET_MARKER).is_file():
+        raise BackupError(f"{target} is not empty and was not made by backup-set -- pick another --out")
+    shutil.rmtree(target)
+
+
+def _write_private(path: Path, body: bytes) -> None:
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(descriptor, "wb") as output:
+        output.write(body)
+
+
+def _link_storage(root: Path, destination: Path) -> tuple[int, bool]:
+    """storage/ as hard links (copies across filesystems), by _add_storage's
+    rules: files and folders only, never a symlink. Returns (files, whether
+    every one was a link)."""
+    destination.mkdir(mode=0o700)
+    if not root.is_dir():
+        return 0, True
+    files, linked = 0, True
+    for folder, folders, names in os.walk(root):
+        relative = Path(folder).relative_to(root)
+        folders[:] = [name for name in folders if not (Path(folder) / name).is_symlink()]
+        for name in folders:
+            (destination / relative / name).mkdir(mode=0o700, exist_ok=True)
+        for name in names:
+            source = Path(folder) / name
+            if source.is_symlink() or not source.is_file():
+                continue
+            target = destination / relative / name
+            try:
+                os.link(source, target)
+            except FileNotFoundError:
+                continue  # Deleted during the walk: simply not in this set.
+            except OSError:
+                try:
+                    shutil.copy2(source, target)
+                except FileNotFoundError:
+                    continue
+                linked = False
+            files += 1
+    return files, linked
+
+
 
 
 # ---------------------------------------------------------------------------

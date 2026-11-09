@@ -264,3 +264,28 @@ docker:
   cpus: "1"
   pids_limit: 128
   tmpfs_size: 16m                  # the only writable path besides data_dir
+
+
+# [scripts] Read by ./backup.sh, which snapshots the database, config.yaml and
+# storage into a restic repository (https://restic.net) on the host. Each
+# snapshot's database is re-encrypted under a key made for that snapshot and
+# packed beside it, so an archive never carries -- and cannot open -- the
+# live server's secret.key. The restic password is what guards the archives.
+restic:
+  # The repository: a local folder, or anything restic takes as --repo
+  # (sftp:host:/path, s3:..., rclone:remote:path). ~ is your home folder;
+  # a relative path resolves against the project directory.
+  repo: ~/Backups/ais-counter-restic
+
+  # The repository's password, one line. `./backup.sh init` creates it, mode
+  # 0600. Lose it and every snapshot is unreadable: keep a copy apart from
+  # the repository (a password manager).
+  password_file: ./config/restic.password
+
+  # What `./backup.sh` keeps after each run (restic forget --prune).
+  keep_daily: 7
+  keep_weekly: 4
+  keep_monthly: 12
+
+  # The hour (0-23, local time) `./backup.sh schedule daily` runs at.
+  schedule_hour: 3

@@ -51,6 +51,8 @@ Usage:
   backup          [--out path] [--include-key]
                                         one file with the database, config.yaml and
                                         storage, safe while the server runs
+  backup-set      [--out folder]        the same as a folder, its database under a key
+                                        made for it alone, for restic (./backup.sh)
   restore         --from path --yes [--key-file path]
                                         put a backup back; the server must be stopped
   rotate-key      --yes                 move to a new secret key; the server must be
@@ -169,6 +171,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--out", default="", help="a file to write, or a folder to write into (default: the backups folder)")
     p.add_argument("--include-key", action="store_true", help="put secret.key in the backup: anyone with the file can then read everything")
 
+    p = commands.add_parser("backup-set", help="a backup as a folder, under its own key, for restic (./backup.sh)")
+    p.add_argument("--out", default="", help="the folder to write (default: <backups>/restic-staging); replaced if backup-set made it")
+
     p = commands.add_parser("restore", help="put a backup back; the server must be stopped")
     p.add_argument("--from", dest="source", required=True, help="the backup file")
     p.add_argument("--key-file", default="", help="the key this backup was made with, if it is not the current one")
@@ -245,6 +250,7 @@ def run(arguments: list[str]) -> None:
         "delete-key": command_delete_key,
         "create-invite": command_create_invite,
         "backup": command_backup,
+        "backup-set": command_backup_set,
     }
     try:
         handlers[args.command](store, cfg, args)
@@ -470,6 +476,18 @@ def command_backup(store: db.Store, cfg: config.Config, args: argparse.Namespace
         print("keep a copy of secret.key somewhere safe, apart from this file.")
     if not result.manifest.encrypt_at_rest:
         print("server.encrypt_at_rest is off, so the database in this backup is not encrypted.")
+
+
+def command_backup_set(store: db.Store, cfg: config.Config, args: argparse.Namespace) -> None:
+    result = backup.create_set(store, cfg, out=args.out)
+    how = "hard-linked" if result.linked else "copied (not all could be hard-linked)"
+    print(f"Backup set written: {result.path}")
+    print(f"  {result.files} storage files {how}")
+    print(f"  database under this set's own key, fingerprint {result.manifest.key_fingerprint} (packed in it)")
+    if not result.manifest.encrypt_at_rest:
+        print("server.encrypt_at_rest is off, so the database in this set is not encrypted.")
+    # The last line, for ./backup.sh.
+    print(f"staged: {result.path}")
 
 
 def command_restore(cfg: config.Config, args: argparse.Namespace) -> None:

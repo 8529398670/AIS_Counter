@@ -13,7 +13,7 @@
 # the signed-out page needs text too. Never put anything secret in it.
 
 app:
-  title: "AIS Counter"
+  title: "aisMAP"
   tagline: ""
 
 # The sidebar, one entry per signed-in screen. menu labels the header's

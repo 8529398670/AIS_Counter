@@ -49,6 +49,28 @@ On a fresh clone, `cp config/config.example.yaml config/config.yaml` and set a
 `~/.config/ais-counter/`. `server.secure_cookies` is `false` for plain-http
 localhost; set it to `true` behind https.
 
+### Backups
+
+```bash
+./backup.sh init              # restic password (config/restic.password) + repository
+./backup.sh                   # snapshot now: database, config.yaml, every image
+./backup.sh schedule daily    # launchd job at restic.schedule_hour (Linux: crontab line)
+./backup.sh list
+./backup.sh export ~/Dropbox  # the whole repository as one .tar, already encrypted
+./backup.sh restore latest    # put a snapshot back (local: stop the server first)
+```
+
+Settings are the `restic:` section of `config.yaml`. Each snapshot is
+`manage backup-set`: the same contents as `manage backup`, kept as a folder so
+restic stores only what changed (a day's snapshot is roughly the database, not
+the images again). Its database is re-encrypted under a key made for that
+snapshot and packed with it, so a snapshot never carries the live
+`secret.key` and can't be used against the running server. A restore moves
+the data onto the key of the server it goes into. The restic password protects
+the snapshots, so keep a copy of it somewhere other than this machine. The
+script works out whether the server runs in Docker (the container exists) or
+from this checkout; `--docker` / `--local` override that.
+
 ## Process
 
 The **Process** screen (the default after signing in) is our
