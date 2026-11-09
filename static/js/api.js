@@ -154,6 +154,13 @@ const Api = {
   saveShortcuts( map )         { return this.post( "/api/account/shortcuts" , { shortcuts: map } ); },
   saveMatlabPath( path )       { return this.post( "/api/account/matlab" , { path: path } ); },
   mintHelperKey()              { return this.post( "/api/ais/matlab/helper/key" ); },
+  // Your whole list of themes (null: back to the defaults) and the one you
+  // use; or only the one you use. See theme.js.
+  setThemes( themes , id )     { return this.post( "/api/account/themes" , { themes: themes , theme_id: id } ); },
+  setTheme( id )               { return this.post( "/api/account/theme" , { theme_id: id } ); },
+  // The themes everyone without their own list sees; null is the built-in ones.
+  themeDefaults()              { return this.request( "/api/admin/theme-defaults" ); },
+  setThemeDefaults( themes )   { return this.post( "/api/admin/theme-defaults" , { themes: themes } ); },
   // digest is what password.js derived; the password itself is never sent.
   // An empty digest removes the password.
   setPassword( username , digest , code ) {

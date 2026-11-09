@@ -164,7 +164,7 @@ const App = {
     Dom.get( "announcement-dismiss" ).addEventListener( "click" , () => this.onDismissAnnouncement() );
     Dom.show( Dom.get( "app-nav" ) , true );
     this.labelAccount();
-    Theme.render( Dom.get( "theme-picker" ) );
+    ThemeEditor.init( me );
     Dom.get( "display-name" ).value = me.display_name;
 
     Dom.onSubmit( Dom.get( "rename-form" ) , this.onRename.bind( this ) );
@@ -176,7 +176,7 @@ const App = {
     Qr.toggle( Dom.get( "my-link-qr-button" ) , Dom.get( "my-link-qr" ) , Dom.get( "my-link-value" ) );
 
     // Each screen owns its own file and its own init(). This is the one line
-    // that knows the API keys screen exists.
+    // that knows the API keys card and screen exist.
     // First, so text naming a key shows this person's keys.
     Shortcuts.init( me );
     Track.init( me );
@@ -356,7 +356,7 @@ const App = {
     Qr.hide( Dom.get( "login-link-qr" ) );
     Dom.show( box , true );
     // The row that asked for it may be a long way down the Users table.
-    box.scrollIntoView( { block: "nearest" } );
+    Dom.reveal( box );
   },
 
   async onCopyLink() {
@@ -594,7 +594,7 @@ const App = {
     // It stays until it is closed or replaced: it may hold a reference to quote.
     Dom.show( banner , true );
     // It sits at the top of the screen, which may be scrolled well past.
-    banner.scrollIntoView( { block: "nearest" } );
+    Dom.reveal( banner );
   },
 
   // A refusal about one field goes beside that field, and anything else to the

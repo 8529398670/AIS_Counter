@@ -29,6 +29,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Any
 
 from app.core.db import BUCKET_META, BUCKET_USERS, Record, Store, Transaction
 from app.models import from_iso, to_iso, utc_now
@@ -80,6 +81,10 @@ class User:
     # helper (app/analysis/matlab_bundle.py). Empty finds it there. It is a
     # path on *their* machine: the server must never execute it.
     matlab_path: str = ""
+    # This person's own list on the Appearance screen; None follows the app's
+    # defaults. theme_id is the one they use. See app/models/themes.py.
+    themes: list[dict[str, Any]] | None = None
+    theme_id: str = ""
 
     @property
     def disabled(self) -> bool:
@@ -106,6 +111,8 @@ class User:
             "recovery_hashes": self.recovery_hashes,
             "shortcuts": self.shortcuts,
             "matlab_path": self.matlab_path,
+            "themes": self.themes,
+            "theme_id": self.theme_id,
         }
 
     @classmethod
@@ -126,6 +133,8 @@ class User:
             recovery_hashes=record.get("recovery_hashes", []),
             shortcuts=record.get("shortcuts") or {},
             matlab_path=record.get("matlab_path", ""),
+            themes=record.get("themes"),
+            theme_id=record.get("theme_id", ""),
         )
 
 

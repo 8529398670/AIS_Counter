@@ -364,6 +364,55 @@ def test_one_batch_is_tested_on_image_means_and_several_on_culture_means(store):
     assert "Tukey" in next(p["svg"] for p in out["plots"] if p["kind"] == "box")
 
 
+# --- the plots -----------------------------------------------------------------------
+
+C4_C7 = ["TM 24Hr KCl 3Hr", "DMSO 24Hr", "TM 24Hr", "DMSO 24Hr NaCl 3Hr", "TM 24Hr NaCl 3Hr", "DMSO 24Hr KCl 3Hr"]
+
+
+def test_the_layout_groups_by_first_drug_with_the_control_first_and_short_names():
+    lay = compare.layout(C4_C7)
+    assert lay["order"] == ["DMSO 24Hr", "DMSO 24Hr NaCl 3Hr", "DMSO 24Hr KCl 3Hr", "TM 24Hr", "TM 24Hr NaCl 3Hr", "TM 24Hr KCl 3Hr"]
+    assert [lay["short"][t] for t in lay["order"]] == ["DMSO", "D+NaCl", "D+KCl", "TM", "T+NaCl", "T+KCl"]
+    assert lay["colour"]["DMSO 24Hr"] == compare.FAMILY_SHADES[0][0] and lay["colour"]["TM 24Hr"] == compare.FAMILY_SHADES[1][0]
+    planned = {frozenset(p) for p in lay["planned"]}
+    assert frozenset(("DMSO 24Hr", "DMSO 24Hr KCl 3Hr")) in planned           # add-on vs bare
+    assert frozenset(("DMSO 24Hr NaCl 3Hr", "DMSO 24Hr KCl 3Hr")) in planned  # KCl vs its osmolarity control
+    assert frozenset(("DMSO 24Hr", "TM 24Hr")) in planned                     # TM vs DMSO, same add-on
+    assert frozenset(("DMSO 24Hr KCl 3Hr", "TM 24Hr KCl 3Hr")) in planned
+    assert frozenset(("DMSO 24Hr", "TM 24Hr NaCl 3Hr")) not in planned and len(planned) == 9
+
+
+def test_the_layout_keeps_full_names_when_short_ones_would_clash():
+    assert compare.drugs("TM+KCl 3hrs+3hrs") == ["TM", "KCl"] and compare.drugs("KCl 10 mM") == ["KCl"]
+    lay = compare.layout(["TTX+KCl", "TM+KCl", "TTX", "TM"])
+    assert lay["short"]["TTX+KCl"] == "TTX+KCl" and lay["short"]["TM+KCl"] == "TM+KCl"
+    assert compare.layout(["TTX", "APV"])["planned"] == [("APV", "TTX")]
+
+
+def test_the_box_plot_marks_each_cultures_mean_and_says_ns_without_a_difference(store):
+    ids = _three_cultures(store)
+    out = compare.compare(store, ids)
+    box = next(p["svg"] for p in out["plots"] if p["kind"] == "box")
+    assert box.count(" µm</title>") == 9   # 3 cultures x 3 treatments
+    assert "by Treatment (C0–C2)" in box and "Culture" in box
+    lay = compare.layout(["DMSO", "TTX"])
+    each = {"DMSO": [10.0, 11, 12, 13], "TTX": [10.5, 11.5, 12, 12.5]}
+    means = {1: {"DMSO": 11.0, "TTX": 11.0}, 2: {"DMSO": 12.0, "TTX": 12.0}}
+    flat = compare.box_plot("AIS Length", each, means, {1: "C1", 2: "C2"}, {("DMSO", "TTX"): 0.9}, lay)
+    xml.dom.minidom.parseString(flat)
+    assert "ns (Tukey)" in flat and "<path" not in flat
+    differ = compare.box_plot("AIS Length", each, means, {1: "C1", 2: "C2"}, {("DMSO", "TTX"): 0.0004}, lay)
+    assert "ns (Tukey)" not in differ and "***" in differ
+
+
+def test_the_cdf_is_in_percent_with_a_dashed_median_line():
+    lay = compare.layout(["DMSO", "TM"])
+    svg = compare.cdf_plot("AIS Length", {"DMSO": [1.0, 2, 3], "TM": [2.0, 3, 4]}, lay)
+    xml.dom.minidom.parseString(svg)
+    assert "Cumulative Frequency (%)" in svg and 'stroke-dasharray="7 4"' in svg
+    assert svg.count("<polyline") == 2
+
+
 # --- the routes ----------------------------------------------------------------------
 
 

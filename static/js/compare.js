@@ -8,8 +8,8 @@
 //   culture each, asks which stats to compute (choose; the ANOVA blocks by
 //   default), and downloads a ZIP: comparison.xlsx (culture means, the
 //   pooled groups, every test, every value), summary.csv, and per measure a
-//   box plot of the culture means and the cumulative distributions, as SVG
-//   and PNG (run).
+//   box plot of every value with the culture means marked and the
+//   cumulative frequency, as SVG and PNG (run).
 //
 // Measures never mix: AIS length, AIS to soma (the Measure tool's AIS
 // modes), and one per Measure line type.

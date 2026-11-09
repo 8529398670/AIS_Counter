@@ -27,9 +27,10 @@ out, else image means, else individual values; image means and individual
 values are not independent cultures, so their p-values run low. After them
 come the other tests on culture means, paired (only the cultures that have
 every treatment) and unpaired, and a KS test of the individual values'
-cumulative distributions. With two batches or more it also draws a box plot
-of the culture means (brackets: their Tukey HSD) and the cumulative
-distributions as SVG text per measure.
+cumulative distributions. With two batches or more it also draws, as SVG
+text per measure, a box plot of every value per treatment with each
+culture's mean marked (brackets: the culture means' Tukey HSD on the planned
+pairs, layout()) and the cumulative frequency of every value.
 """
 from __future__ import annotations
 
@@ -375,14 +376,100 @@ def tests_for(values: list[dict[str, Any]], measure: str, names: dict[int, str],
 
 # --- the plots -------------------------------------------------------------------
 
-# Categorical series colours in a fixed order (light surface), for the
-# cumulative distributions; each also gets its own dash, so a line is told
-# apart without its colour.
-SERIES = ("#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6", "#e34948")
-DASHES = ("", "6 3", "2 3", "8 3 2 3", "1 2", "10 4", "4 2 1 2", "12 3 3 3")
-INK, MUTED, GRID, SURFACE = "#0b0b0b", "#52514e", "#e4e3df", "#ffffff"
+INK, MUTED, SURFACE = "#0b0b0b", "#52514e", "#ffffff"
+MEDIAN = "#ff7f0e"
 FONT = "font-family=\"Helvetica, Arial, sans-serif\""
-BRACKET_STEP = 26   # px between stacked significance brackets
+# Shades per family of treatments (one first drug each): the bare treatment,
+# then its add-ons in order. The control family is blue, the next red.
+FAMILY_SHADES = (("#3a8fd9", "#5dade2", "#1abc9c", "#2471a3"), ("#e74c3c", "#ec7063", "#f39c12", "#b03a2e"),
+                 ("#27ae60", "#7dcea0", "#16a085", "#1e8449"), ("#8e44ad", "#bb8fce", "#d35400", "#6c3483"))
+# Add-ons in this order within a family: NaCl is KCl's osmolarity control.
+ADDON_ORDER = ("nacl", "kcl")
+TIME_RE = re.compile(r"^\d+(\.\d+)?\s*(h|hr|hrs|hour|hours|min|mins|d|days?)$", re.IGNORECASE)
+UNIT_WORDS = {"mm", "um", "µm", "nm", "mg", "ml", "%", "hr", "hrs", "h", "min", "hours"}
+
+
+def drugs(treatment: str) -> list[str]:
+    """The drugs in a treatment's name, in the order added: times, doses and
+    units dropped ("DMSO 24Hr KCl 3Hr" and "DMSO+KCl 24hrs+3hrs" -> DMSO, KCl)."""
+    tokens = [t for t in re.split(r"[\s+]+", treatment) if t]
+    return [t for t in tokens if not TIME_RE.match(t) and not t[0].isdigit() and t.casefold() not in UNIT_WORDS]
+
+
+def layout(treatments: list[str]) -> dict[str, Any]:
+    """How the plots show the treatments: {order, short, colour, planned}.
+    Treatments are grouped into families by their first drug (the first drug
+    stays on when a second is added), the control's family first; in a
+    family the bare treatment first, then NaCl, KCl, then the rest by name.
+    short: the first drug alone, or its initial + the add-ons ("D+NaCl"),
+    the full names when that would be ambiguous. colour: a shade of the
+    family's colour. planned: the pairs worth a bracket -- in a family, bare
+    vs each add-on and NaCl vs each other add-on; across families, the
+    control's family vs each other at the same add-ons; every pair when
+    that leaves none."""
+    parsed = {t: drugs(t) or [t] for t in treatments}
+    first = {t: d[0].casefold() for t, d in parsed.items()}
+    addon = {t: tuple(x.casefold() for x in d[1:]) for t, d in parsed.items()}
+    control = first[_control(treatments)] if treatments else ""
+    families = sorted(set(first.values()), key=lambda f: (f != control, f))
+
+    def addon_key(t: str) -> tuple:
+        a = addon[t]
+        return (len(a) > 0, ADDON_ORDER.index(a[0]) if a and a[0] in ADDON_ORDER else len(ADDON_ORDER), a, t.casefold())
+
+    order: list[str] = []
+    colour: dict[str, str] = {}
+    for f, family in enumerate(families):
+        members = sorted((t for t in treatments if first[t] == family), key=addon_key)
+        shades = FAMILY_SHADES[f % len(FAMILY_SHADES)]
+        for i, t in enumerate(members):
+            colour[t] = shades[i % len(shades)]
+        order += members
+    lead = {t: parsed[t][0] for t in treatments}
+    initials = {f: next(lead[t] for t in treatments if first[t] == f)[0].upper() for f in families}
+    unique_initials = len(set(initials.values())) == len(initials)
+    short = {t: "+".join([initials[first[t]] if unique_initials else lead[t]] + parsed[t][1:]) if addon[t] else lead[t]
+             for t in treatments}
+    if len(set(short.values())) != len(short):
+        short = {t: t for t in treatments}
+    planned: list[tuple[str, str]] = []
+    for family in families:
+        members = [t for t in order if first[t] == family]
+        bare = next((t for t in members if not addon[t]), None)
+        nacl = next((t for t in members if addon[t] == ("nacl",)), None)
+        for t in members:
+            if bare and t != bare:
+                planned.append((bare, t))
+            if nacl and addon[t] and t != nacl:
+                planned.append((nacl, t))
+    for t in order:
+        if first[t] != control:
+            continue
+        for u in order:
+            if first[u] != control and addon[u] == addon[t]:
+                planned.append((t, u))
+    if not planned:
+        planned = list(itertools.combinations(order, 2))
+    return {"order": order, "short": short, "colour": colour, "planned": list(dict.fromkeys(planned))}
+
+
+def title_case(text: str) -> str:
+    """"AIS length" -> "AIS Length": each word capitalised but short joining
+    words, and words already holding a capital left alone."""
+    small = {"to", "of", "and", "or", "vs", "in", "on", "per"}
+    words = text.split(" ")
+    return " ".join(w if (i and w in small) or any(c.isupper() for c in w) else w[:1].upper() + w[1:]
+                    for i, w in enumerate(words))
+
+
+def _natural(name: str) -> list:
+    return [int(p) if p.isdigit() else p.casefold() for p in re.split(r"(\d+)", name)]
+
+
+def culture_span(names: list[str]) -> str:
+    """"C4–C7" for more than two cultures, else their names joined."""
+    ordered = sorted(names, key=_natural)
+    return f"{ordered[0]}–{ordered[-1]}" if len(ordered) > 2 else ", ".join(ordered)
 
 
 def _ticks(lo: float, hi: float, count: int = 5) -> list[float]:
@@ -393,7 +480,7 @@ def _ticks(lo: float, hi: float, count: int = 5) -> list[float]:
     step = 10 ** math.floor(math.log10(raw))
     step *= next(m for m in (1, 2, 2.5, 5, 10) if m * step >= raw)
     start = math.floor(lo / step) * step
-    return [round(start + i * step, 10) for i in range(int(math.ceil((hi - start) / step)) + 1)]
+    return [round(start + i * step, 10) for i in range(int(math.ceil((hi - start) / step - 1e-9)) + 1)]
 
 
 def _fmt(v: float) -> str:
@@ -417,121 +504,216 @@ def _text_px(text: str, size: float = 12) -> float:
     return sum(0.72 if c.isupper() else 0.28 if c in " .,:;il|" else 0.56 for c in text) * size
 
 
-def _wrap(text: str, width: float) -> list[str]:
+def _wrap(text: str, width: float, size: float = 12) -> list[str]:
     """Greedy word wrap of a label to lines no wider than width (a single
     longer word keeps a line of its own)."""
     lines: list[str] = []
     for word in text.split():
-        if lines and _text_px(lines[-1] + " " + word) <= width:
+        if lines and _text_px(lines[-1] + " " + word, size) <= width:
             lines[-1] += " " + word
         else:
             lines.append(word)
     return lines or [""]
 
 
-def box_plot(measure_name: str, treatments: list[str], means: dict[int, dict[str, float]], names: dict[int, str],
-             brackets: dict[tuple[str, str], float | None], cultures: int) -> str:
-    """Culture means per treatment: a box (quartiles, whiskers to the
-    extremes), a dot per culture and a thin line joining one culture's dots,
-    with brackets over the pairs the culture means' Tukey HSD found to differ."""
-    k = len(treatments)
-    # Each treatment gets a slot wide enough for its longest word; names wrap
-    # onto extra lines so neighbouring labels never overlap.
-    words = [w for t in treatments for w in t.split()]
-    slot = max(90, math.ceil(max((_text_px(w) for w in words), default=0) + 14))
-    wrapped = {t: _wrap(t, slot - 10) for t in treatments}
+MARKERS = ("circle", "square", "triangle", "diamond", "triangle-down", "pentagon", "hexagon", "star")
+
+
+def marker(shape: str, cx: float, cy: float, r: float, fill: str = INK, stroke: str = SURFACE,
+           tip: str = "") -> str:
+    """A matplotlib-like marker centred on (cx, cy), about 2r across."""
+    def poly(points: list[tuple[float, float]]) -> str:
+        return " ".join(f"{cx + px * r:.1f},{cy + py * r:.1f}" for px, py in points)
+
+    def regular(n: int, turn: float = -90) -> list[tuple[float, float]]:
+        return [(math.cos(math.radians(turn + 360 * i / n)), math.sin(math.radians(turn + 360 * i / n))) for i in range(n)]
+
+    paint = f'fill="{fill}" stroke="{stroke}" stroke-width="1"'
+    title = f"<title>{escape(tip)}</title>" if tip else ""
+    if shape == "circle":
+        return f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="{r:.1f}" {paint}>{title}</circle>'
+    if shape == "square":
+        s = r * 0.9
+        return f'<rect x="{cx - s:.1f}" y="{cy - s:.1f}" width="{2 * s:.1f}" height="{2 * s:.1f}" {paint}>{title}</rect>'
+    points = {"triangle": [(0, -1.1), (1, 0.75), (-1, 0.75)], "triangle-down": [(0, 1.1), (1, -0.75), (-1, -0.75)],
+              "diamond": [(0, -1.25), (1, 0), (0, 1.25), (-1, 0)], "pentagon": regular(5), "hexagon": regular(6),
+              "star": [(p[0] * (1.2 if i % 2 == 0 else 0.5), p[1] * (1.2 if i % 2 == 0 else 0.5))
+                       for i, p in enumerate(regular(10))]}[shape]
+    return f'<polygon points="{poly(points)}" {paint}>{title}</polygon>'
+
+
+def _axes(left: float, top: float, w: float, h: float) -> str:
+    return f'<rect x="{left}" y="{top}" width="{w}" height="{h}" fill="none" stroke="{INK}" stroke-width="1"/>'
+
+
+def _box_stats(vs: np.ndarray) -> tuple[float, float, float, float, float]:
+    """Quartiles and whiskers to the furthest value within 1.5 IQR."""
+    q1, med, q3 = np.percentile(vs, [25, 50, 75])
+    iqr = q3 - q1
+    lo = float(vs[vs >= q1 - 1.5 * iqr].min())
+    hi = float(vs[vs <= q3 + 1.5 * iqr].max())
+    return lo, float(q1), float(med), float(q3), hi
+
+
+def _find(brackets: dict[tuple[str, str], float | None], a: str, b: str) -> float | None:
+    return brackets.get((a, b), brackets.get((b, a)))
+
+
+def box_plot(measure_name: str, each: dict[str, list[float]], means: dict[int, dict[str, float]],
+             names: dict[int, str], brackets: dict[tuple[str, str], float | None], lay: dict[str, Any]) -> str:
+    """Every value per treatment: a box (quartiles, whiskers to 1.5 IQR) in
+    the treatment's colour over its values as faint jittered dots, each
+    culture's mean as a black marker of that culture's shape, and brackets
+    over the planned pairs the culture means' Tukey HSD finds to differ ("ns
+    (Tukey)" when none does)."""
+    order = [t for t in lay["order"] if each.get(t)]
+    short, colour = lay["short"], lay["colour"]
+    k = len(order)
+    cultures = sorted(means, key=lambda b: _natural(names[b]))
+    shape = {b: MARKERS[i % len(MARKERS)] for i, b in enumerate(cultures)}
+    width, plot_h = max(1000, 70 + 30 + 130 * k), 470
+    slot = (width - 70 - 30) / max(k, 1)
+    wrapped = {t: _wrap(short[t], slot - 10, 14) for t in order}
     lines = max((len(v) for v in wrapped.values()), default=1)
-    left, right, top, bottom = 64, 24, 48, 84 + 15 * (lines - 1)
-    order = {t: i for i, t in enumerate(treatments)}
-    # Shortest spans lowest, so brackets nest instead of crossing labels.
-    significant = sorted(((a, b, p) for (a, b), p in brackets.items() if p is not None and p < 0.05),
-                         key=lambda s: (abs(order[s[1]] - order[s[0]]), order[s[0]]))
-    top += BRACKET_STEP * len(significant)
-    width = max(left + right + slot * max(k, 2), 380)
-    plot_h = 300
-    height = top + plot_h + bottom
-    every = [v for by in means.values() for v in by.values()]
-    lo, hi = (min(every), max(every)) if every else (0.0, 1.0)
-    ticks = _ticks(min(0.0, lo), hi)
+    left, right, top = 70, 30, 50
+    plot_w = width - left - right
+    height = top + plot_h + 40 + 17 * (lines - 1) + 30
+    x = {t: left + slot * (i + 0.5) for i, t in enumerate(order)}
+    stats = {t: _box_stats(np.asarray(each[t], dtype=float)) for t in order}
+    significant = [(a, b, p) for a, b in lay["planned"] if a in x and b in x
+                   for p in [_find(brackets, a, b)] if p is not None and p < 0.05]
+    significant.sort(key=lambda s: (abs(order.index(s[1]) - order.index(s[0])), order.index(min(s[:2], key=order.index))))
+    every = [v for t in order for v in each[t]]
+    # The axis stops at the 99.5th percentile (or the whiskers and means, if
+    # higher), so a lone far value does not squash the boxes; the note says
+    # how many values lie above it.
+    data_hi = max([float(np.percentile(every, 99.5))] + [v for by in means.values() for v in by.values()]) if every else 1.0
+    whisk_hi = max((s[4] for s in stats.values()), default=data_hi)
+    data_hi = max(data_hi, whisk_hi)
+    span = max(data_hi, 1e-9)
+    step = 0.07 * span
+    base = whisk_hi + 0.02 * span
+    top_needed = base + step * len(significant) + (0.03 * span if significant else 0)
+    ticks = _ticks(0.0, max(data_hi, top_needed))
     y0, y1 = ticks[0], ticks[-1]
     y = lambda v: top + plot_h - (v - y0) / (y1 - y0) * plot_h   # noqa: E731
-    x = {t: left + slot * (i + 0.5) for i, t in enumerate(treatments)}
-    body = [f'<text x="{left}" y="22" font-size="15" fill="{INK}" font-weight="bold">{escape(measure_name)}: culture means</text>']
+    body = [f'<text x="{left + plot_w / 2:.0f}" y="32" text-anchor="middle" font-size="18" font-weight="bold" fill="{INK}">'
+            f'{escape(measure_name)} by Treatment ({escape(culture_span([names[b] for b in cultures]))})</text>']
     for t in ticks:
-        body.append(f'<line x1="{left}" x2="{width - right}" y1="{y(t):.1f}" y2="{y(t):.1f}" stroke="{GRID}"/>')
-        body.append(f'<text x="{left - 8}" y="{y(t) + 4:.1f}" text-anchor="end" fill="{MUTED}">{_fmt(t)}</text>')
-    body.append(f'<text transform="translate(16 {top + plot_h / 2:.0f}) rotate(-90)" text-anchor="middle" fill="{MUTED}">µm</text>')
-    for b, by in means.items():
-        pts = [(x[t], y(by[t])) for t in treatments if t in by]
-        if len(pts) > 1:
-            body.append('<polyline fill="none" stroke="#b9b8b2" stroke-width="1" points="'
-                        + " ".join(f"{px:.1f},{py:.1f}" for px, py in pts) + '"/>')
-    for t in treatments:
-        vs = np.array([by[t] for by in means.values() if t in by])
+        body.append(f'<line x1="{left - 5}" x2="{left}" y1="{y(t):.1f}" y2="{y(t):.1f}" stroke="{INK}"/>')
+        body.append(f'<text x="{left - 8}" y="{y(t) + 4.5:.1f}" text-anchor="end" font-size="13" fill="{INK}">{_fmt(t)}</text>')
+    body.append(f'<text transform="translate(22 {top + plot_h / 2:.0f}) rotate(-90)" text-anchor="middle" font-size="15" '
+                f'fill="{INK}">{escape(measure_name)} (µm)</text>')
+    rng = np.random.default_rng(0)
+    above = 0
+    for t in order:
         cx = x[t]
-        if vs.size:
-            q1, med, q3 = np.percentile(vs, [25, 50, 75])
-            body.append(f'<line x1="{cx:.1f}" x2="{cx:.1f}" y1="{y(vs.min()):.1f}" y2="{y(vs.max()):.1f}" stroke="{MUTED}" stroke-width="1.5"/>')
-            body.append(f'<rect x="{cx - 22:.1f}" y="{y(q3):.1f}" width="44" height="{max(y(q1) - y(q3), 1):.1f}" '
-                        f'fill="#eef3fb" stroke="{MUTED}" stroke-width="1.5" rx="2"/>')
-            body.append(f'<line x1="{cx - 22:.1f}" x2="{cx + 22:.1f}" y1="{y(med):.1f}" y2="{y(med):.1f}" stroke="{INK}" stroke-width="2"/>')
-            for b, by in means.items():
-                if t in by:
-                    body.append(f'<circle cx="{cx:.1f}" cy="{y(by[t]):.1f}" r="4" fill="{SERIES[0]}" stroke="{SURFACE}" '
-                                f'stroke-width="1.5"><title>{escape(names[b])}: {by[t]:.3f} µm</title></circle>')
-        label = "".join(f'<tspan x="{cx:.1f}" dy="{0 if i == 0 else 15}">{escape(line)}</tspan>'
+        half = min(0.25 * slot, 60)
+        for v in each[t]:
+            jx = cx + rng.uniform(-0.6, 0.6) * half
+            if v > y1:
+                above += 1
+                continue
+            body.append(f'<circle cx="{jx:.1f}" cy="{y(v):.1f}" r="1.9" fill="{colour[t]}" fill-opacity="0.3"/>')
+        lo, q1, med, q3, hi = stats[t]
+        cap = half * 0.5
+        body.append(f'<line x1="{cx:.1f}" x2="{cx:.1f}" y1="{y(q3):.1f}" y2="{y(hi):.1f}" stroke="{INK}" stroke-width="1.2"/>')
+        body.append(f'<line x1="{cx:.1f}" x2="{cx:.1f}" y1="{y(q1):.1f}" y2="{y(lo):.1f}" stroke="{INK}" stroke-width="1.2"/>')
+        for w in (lo, hi):
+            body.append(f'<line x1="{cx - cap:.1f}" x2="{cx + cap:.1f}" y1="{y(w):.1f}" y2="{y(w):.1f}" stroke="{INK}" stroke-width="1.2"/>')
+        body.append(f'<rect x="{cx - half:.1f}" y="{y(q3):.1f}" width="{2 * half:.1f}" height="{max(y(q1) - y(q3), 1):.1f}" '
+                    f'fill="{colour[t]}" fill-opacity="0.65" stroke="#333333" stroke-opacity="0.8" stroke-width="1.2"/>')
+        body.append(f'<line x1="{cx - half:.1f}" x2="{cx + half:.1f}" y1="{y(med):.1f}" y2="{y(med):.1f}" stroke="{MEDIAN}" stroke-width="1.6"/>')
+        for b in cultures:
+            if t in means[b]:
+                body.append(marker(shape[b], cx, y(means[b][t]), 6, tip=f"{names[b]}: {means[b][t]:.3f} µm"))
+        label = "".join(f'<tspan x="{cx:.1f}" dy="{0 if i == 0 else 17}">{escape(line)}</tspan>'
                         for i, line in enumerate(wrapped[t]))
-        body.append(f'<text x="{cx:.1f}" y="{top + plot_h + 18}" text-anchor="middle" fill="{INK}">{label}</text>')
-        body.append(f'<text x="{cx:.1f}" y="{top + plot_h + 34 + 15 * (lines - 1)}" text-anchor="middle" fill="{MUTED}" font-size="11">'
-                    f'n = {int(vs.size)}</text>')
+        body.append(f'<line x1="{cx:.1f}" x2="{cx:.1f}" y1="{top + plot_h}" y2="{top + plot_h + 5}" stroke="{INK}"/>')
+        body.append(f'<text x="{cx:.1f}" y="{top + plot_h + 22}" text-anchor="middle" font-size="14" fill="{INK}">{label}</text>')
+        body.append(f'<text x="{cx:.1f}" y="{top + plot_h + 38 + 17 * (lines - 1)}" text-anchor="middle" font-size="11" '
+                    f'fill="{MUTED}">n = {len(each[t])}</text>')
     for i, (a, b, p) in enumerate(significant):
-        by_ = top - 10 - BRACKET_STEP * i
-        body.append(f'<path d="M{x[a]:.1f},{by_ + 6:.1f} V{by_:.1f} H{x[b]:.1f} V{by_ + 6:.1f}" fill="none" stroke="{INK}"/>')
-        body.append(f'<text x="{(x[a] + x[b]) / 2:.1f}" y="{by_ - 3:.1f}" text-anchor="middle" fill="{INK}">{stars(p)}</text>')
-    notes = (f"One-way ANOVA and Tukey HSD on the means of {cultures} culture{'s' if cultures != 1 else ''};",
-             "brackets: Tukey-adjusted p &lt; 0.05." if significant else "no pair differs at p &lt; 0.05.")
-    for i, note in enumerate(notes):
-        body.append(f'<text x="{left}" y="{height - 26 + 14 * i}" fill="{MUTED}" font-size="11">{note}</text>')
-    return _svg(width, height, body, f"{measure_name}: culture means")
+        level = y(base + step * (i + 1))
+        body.append(f'<path d="M{x[a]:.1f},{level + 8:.1f} V{level:.1f} H{x[b]:.1f} V{level + 8:.1f}" fill="none" stroke="{INK}" stroke-width="1.2"/>')
+        body.append(f'<text x="{(x[a] + x[b]) / 2:.1f}" y="{level - 4:.1f}" text-anchor="middle" font-size="15" fill="{INK}">{stars(p)}</text>')
+    if not significant:
+        known = any(_find(brackets, a, b) is not None for a, b in lay["planned"])
+        badge = "ns (Tukey)" if known else "Tukey: n/a"
+        bw = _text_px(badge, 14) + 16
+        bx, by = left + plot_w - bw - 12, top + 12
+        body.append(f'<rect x="{bx:.1f}" y="{by}" width="{bw:.1f}" height="26" rx="5" fill="#dddddd" stroke="{INK}"/>')
+        body.append(f'<text x="{bx + bw / 2:.1f}" y="{by + 18}" text-anchor="middle" font-size="14" fill="{INK}">{badge}</text>')
+    if cultures:
+        lw = max(_text_px(names[b], 12) for b in cultures) + 44
+        lw = max(lw, _text_px("Culture", 13) + 16)
+        lx, ly = left + 8, top + 8
+        body.append(f'<rect x="{lx}" y="{ly}" width="{lw:.1f}" height="{28 + 22 * len(cultures)}" rx="4" fill="{SURFACE}" '
+                    f'fill-opacity="0.85" stroke="#cccccc"/>')
+        body.append(f'<text x="{lx + lw / 2:.1f}" y="{ly + 19}" text-anchor="middle" font-size="13" fill="{INK}">Culture</text>')
+        for i, b in enumerate(cultures):
+            my = ly + 38 + 22 * i
+            body.append(marker(shape[b], lx + 18, my, 5.5, stroke=INK))
+            body.append(f'<text x="{lx + 34}" y="{my + 4}" font-size="12" fill="{INK}">{escape(names[b])}</text>')
+    body.append(_axes(left, top, plot_w, plot_h))
+    note = ("Boxes and dots: every value. Markers: culture means. Brackets: Tukey HSD on the culture means "
+            "(planned pairs), * p &lt; 0.05, ** p &lt; 0.01, *** p &lt; 0.001.")
+    if above:
+        note += f" {above} value{'s' if above != 1 else ''} above {_fmt(y1)} µm not shown."
+    body.append(f'<text x="{left}" y="{height - 10}" font-size="11" fill="{MUTED}">{note}</text>')
+    return _svg(width, height, body, f"{measure_name} by treatment")
 
 
-def cdf_plot(measure_name: str, treatments: list[str], each: dict[str, list[float]]) -> str:
+def cdf_plot(measure_name: str, each: dict[str, list[float]], lay: dict[str, Any]) -> str:
     """The cumulative distribution of every value per treatment: a step line
-    each, in a fixed colour and dash, with a legend."""
-    left, right, top, bottom = 64, 24, 48, 56
-    plot_w, plot_h = 520, 300
-    legend_h = 18 * len(treatments)
-    width, height = left + plot_w + right, top + plot_h + bottom + legend_h
-    every = [v for vs in each.values() for v in vs]
-    lo, hi = (min(every), max(every)) if every else (0.0, 1.0)
-    ticks = _ticks(min(0.0, lo), hi)
+    each in the treatment's colour, y in percent with a dashed 50 % line, x
+    cut at a round number past the 99.5th percentile, legend inside."""
+    order = [t for t in lay["order"] if each.get(t)]
+    left, right, top, bottom = 80, 30, 50, 66
+    plot_w, plot_h = 790, 500
+    width, height = left + plot_w + right, top + plot_h + bottom
+    every = np.asarray([v for t in order for v in each[t]], dtype=float)
+    hi = float(np.percentile(every, 99.5)) if every.size else 1.0
+    ticks = _ticks(min(0.0, float(every.min())) if every.size else 0.0, hi)
     x0, x1 = ticks[0], ticks[-1]
     x = lambda v: left + (v - x0) / (x1 - x0) * plot_w   # noqa: E731
-    y = lambda f: top + plot_h - f * plot_h   # noqa: E731
-    body = [f'<text x="{left}" y="22" font-size="15" fill="{INK}" font-weight="bold">{escape(measure_name)}: cumulative distribution</text>']
-    for f in (0, 0.25, 0.5, 0.75, 1):
-        body.append(f'<line x1="{left}" x2="{left + plot_w}" y1="{y(f):.1f}" y2="{y(f):.1f}" stroke="{GRID}"/>')
-        body.append(f'<text x="{left - 8}" y="{y(f) + 4:.1f}" text-anchor="end" fill="{MUTED}">{_fmt(f)}</text>')
+    y = lambda f: top + plot_h - (f + 5) / 110 * plot_h   # noqa: E731   (-5..105 %)
+    body = [f'<text x="{left + plot_w / 2:.0f}" y="32" text-anchor="middle" font-size="18" font-weight="bold" fill="{INK}">'
+            f'Cumulative Frequency: {escape(measure_name)} by Treatment</text>',
+            f'<clipPath id="plot"><rect x="{left}" y="{top}" width="{plot_w}" height="{plot_h}"/></clipPath>']
+    for f in range(0, 101, 20):
+        body.append(f'<line x1="{left - 5}" x2="{left}" y1="{y(f):.1f}" y2="{y(f):.1f}" stroke="{INK}"/>')
+        body.append(f'<text x="{left - 8}" y="{y(f) + 4.5:.1f}" text-anchor="end" font-size="13" fill="{INK}">{f}</text>')
     for t in ticks:
-        body.append(f'<text x="{x(t):.1f}" y="{top + plot_h + 18}" text-anchor="middle" fill="{MUTED}">{_fmt(t)}</text>')
-    body.append(f'<text x="{left + plot_w / 2:.0f}" y="{top + plot_h + 38}" text-anchor="middle" fill="{MUTED}">µm</text>')
-    body.append(f'<text transform="translate(16 {top + plot_h / 2:.0f}) rotate(-90)" text-anchor="middle" fill="{MUTED}">'
-                'Cumulative fraction</text>')
-    for i, t in enumerate(treatments):
-        vs = sorted(each.get(t, []))
-        if not vs:
-            continue
-        colour, dash = SERIES[i % len(SERIES)], DASHES[i % len(DASHES)]
+        body.append(f'<line x1="{x(t):.1f}" x2="{x(t):.1f}" y1="{top + plot_h}" y2="{top + plot_h + 5}" stroke="{INK}"/>')
+        body.append(f'<text x="{x(t):.1f}" y="{top + plot_h + 21}" text-anchor="middle" font-size="13" fill="{INK}">{_fmt(t)}</text>')
+    body.append(f'<text x="{left + plot_w / 2:.0f}" y="{top + plot_h + 50}" text-anchor="middle" font-size="16" fill="{INK}">'
+                f'{escape(measure_name)} (µm)</text>')
+    body.append(f'<text transform="translate(26 {top + plot_h / 2:.0f}) rotate(-90)" text-anchor="middle" font-size="16" '
+                f'fill="{INK}">Cumulative Frequency (%)</text>')
+    body.append(f'<line x1="{left}" x2="{left + plot_w}" y1="{y(50):.1f}" y2="{y(50):.1f}" stroke="#bbbbbb" '
+                f'stroke-width="1.6" stroke-dasharray="7 4"/>')
+    for t in order:
+        vs = sorted(each[t])
+        n = len(vs)
         pts = [f"{x(vs[0]):.1f},{y(0):.1f}"]
         for j, v in enumerate(vs):
-            pts.append(f"{x(v):.1f},{y(j / len(vs)):.1f}")
-            pts.append(f"{x(v):.1f},{y((j + 1) / len(vs)):.1f}")
-        dashed = f' stroke-dasharray="{dash}"' if dash else ""
-        body.append(f'<polyline fill="none" stroke="{colour}" stroke-width="2"{dashed} points="{" ".join(pts)}"/>')
-        ly = top + plot_h + bottom + 18 * i
-        body.append(f'<line x1="{left}" x2="{left + 28}" y1="{ly:.0f}" y2="{ly:.0f}" stroke="{colour}" stroke-width="2"{dashed}/>')
-        body.append(f'<text x="{left + 36}" y="{ly + 4:.0f}" fill="{INK}">{escape(t)} (n = {len(vs)})</text>')
-    return _svg(width, height, body, f"{measure_name}: cumulative distribution")
+            pts.append(f"{x(v):.1f},{y(100 * j / n):.1f}")
+            pts.append(f"{x(v):.1f},{y(100 * (j + 1) / n):.1f}")
+        pts.append(f"{x(x1) + 10:.1f},{y(100):.1f}")
+        body.append(f'<polyline clip-path="url(#plot)" fill="none" stroke="{lay["colour"][t]}" stroke-width="2.4" '
+                    f'stroke-linejoin="round" points="{" ".join(pts)}"><title>{escape(t)} (n = {n})</title></polyline>')
+    labels = [lay["short"][t] for t in order]
+    lw = max((_text_px(s, 13) for s in labels), default=0) + 56
+    lh = 10 + 24 * len(order)
+    lx, ly = left + plot_w - lw - 10, top + plot_h - lh - 10
+    body.append(f'<rect x="{lx:.1f}" y="{ly:.1f}" width="{lw:.1f}" height="{lh}" rx="4" fill="{SURFACE}" fill-opacity="0.85" stroke="#cccccc"/>')
+    for i, t in enumerate(order):
+        my = ly + 17 + 24 * i
+        body.append(f'<line x1="{lx + 10:.1f}" x2="{lx + 38:.1f}" y1="{my:.1f}" y2="{my:.1f}" stroke="{lay["colour"][t]}" stroke-width="2.4"/>')
+        body.append(f'<text x="{lx + 46:.1f}" y="{my + 4.5:.1f}" font-size="13" fill="{INK}">{escape(lay["short"][t])}</text>')
+    body.append(_axes(left, top, plot_w, plot_h))
+    return _svg(width, height, body, f"{measure_name}: cumulative frequency")
 
 
 # --- all of it -------------------------------------------------------------------
@@ -597,13 +779,14 @@ def compare(store: Store, batch_ids: Any, labels: Any = None, tests: Any = None,
         if "paired" in tests:
             out["dropped"] += [{"measure": measure, "batch": b} for b in tested["dropped"]]
         name = names.get(measure) if isinstance(names.get(measure), str) else None
-        name = name or DEFAULT_LABELS.get(measure) or measure[len(TYPE_PREFIX):] or "(no type)"
+        name = title_case(name or DEFAULT_LABELS.get(measure) or measure[len(TYPE_PREFIX):] or "(no type)")
         means = culture_means(values, measure)
         treatments = sorted({t for by in means.values() for t in by}, key=str.casefold)
         if not treatments:
             continue
         each = {t: [v["value"] for v in values if v["measure"] == measure and v["treatment"] == t] for t in treatments}
+        lay = layout(treatments)
         out["plots"].append({"measure": measure, "kind": "box",
-                             "svg": box_plot(name, treatments, means, batch_names, tested["brackets"], len(means))})
-        out["plots"].append({"measure": measure, "kind": "cdf", "svg": cdf_plot(name, treatments, each)})
+                             "svg": box_plot(name, each, means, batch_names, tested["brackets"], lay)})
+        out["plots"].append({"measure": measure, "kind": "cdf", "svg": cdf_plot(name, each, lay)})
     return out
