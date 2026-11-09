@@ -1007,12 +1007,13 @@ const AisMeasure = {
         .replace( "{image}" , String( shown.indexOf( Ais.index ) + 1 ) ).replace( "{images}" , String( shown.length ) );
     }
     Dom.text( Dom.get( "ais-measure-where" ) , where );
-    let help;
-    if ( !r ) help = I18n.get( this.a ? "ais.measure_ruler_second" : this.sel ? "ais.measure_lines_selected" : manual ? "ais.measure_manual_help" : "ais.measure_no_ais" );
+    // Only the next step; how the keys work is on the Instructions screen.
+    let help = "";
+    if ( !r ) help = this.a ? I18n.get( "ais.measure_ruler_second" ) : !this.sel && !manual ? I18n.get( "ais.measure_no_ais" ) : "";
     else if ( !this.a ) help = I18n.get( "ais.measure_click_start" );
     else if ( !this.b ) help = I18n.get( "ais.measure_click_soma" );
-    else help = I18n.get( this.sel ? "ais.measure_selected" : "ais.measure_ready" );
     Dom.text( Dom.get( "ais-measure-help" ) , help );
+    Dom.show( Dom.get( "ais-measure-help" ) , Boolean( help ) );
     Dom.text( Dom.get( "ais-measure-end" ) , r ? I18n.get( this.end === "last" ? "ais.measure_end_last" : "ais.measure_end_first" ) : "" );
     Dom.get( "ais-measure-end" ).classList.toggle( "text-warning" , this.end === "last" );
     let value = "";

@@ -29,7 +29,7 @@ const Ais = {
   viewKey: "ais-view",
   lastKey: "ais-last",   // the last batch and image, for a bare #ais or /
   focusKey: "ais-focus",
-  hintKey: "ais-hint-hidden",
+  layersKey: "ais-layers-hidden",   // overlays switched off under Appearance
   noteKey: "ais-note-hidden",   // the batch whose single-image note was closed
   // An image: { key, cell, dir, dup_of?, add_id?, original_key?, included,
   // files: { processed?, raw?, czi? } } with a file { name, rel, sha, size,
@@ -96,6 +96,11 @@ const Ais = {
     Dom.get( "ais-prev" ).addEventListener( "click" , () => this.step( -1 ) );
     Dom.get( "ais-next" ).addEventListener( "click" , () => this.step( 1 ) );
     Dom.get( "ais-gamma" ).addEventListener( "input" , () => { this.buildBitmap(); this.draw(); } );
+    Dom.get( "ais-gamma-reset" ).addEventListener( "click" , () => {
+      const gamma = Dom.get( "ais-gamma" );
+      gamma.value = "1";
+      gamma.dispatchEvent( new Event( "input" ) );
+    } );
     Dom.get( "ais-channels" ).addEventListener( "click" , ( e ) => {
       if ( e.target.closest( "#ais-channels-toggle" ) ) {
         this.viewsOpen = !this.viewsOpen;
@@ -111,7 +116,8 @@ const Ais = {
       this.viewsOpen = false;
       this.renderViews();
     } );
-    Dom.all( "[data-layer]" ).forEach( ( box ) => box.addEventListener( "change" , () => this.draw() ) );
+    this.loadLayers();
+    Dom.all( "[data-layer]" ).forEach( ( box ) => box.addEventListener( "change" , () => { this.saveLayers(); this.draw(); } ) );
     Dom.get( "ais-accept" ).addEventListener( "click" , () => this.accept() );
     Dom.all( "[data-tool]" ).forEach( ( button ) => button.addEventListener( "click" , () => this.setTool( button.dataset.tool ) ) );
     Dom.get( "ais-reject" ).addEventListener( "click" , () => this.reject() );
@@ -148,8 +154,6 @@ const Ais = {
     Dom.get( "ais-redo" ).addEventListener( "click" , () => this.redo() );
     Dom.get( "ais-view-lock" ).addEventListener( "click" , () => this.setLocked( !this.locked ) );
     Dom.get( "ais-focus" ).addEventListener( "click" , () => this.setFocus( !this.focus ) );
-    Dom.get( "ais-hint-close" ).addEventListener( "click" , () => this.setHint( false ) );
-    Dom.get( "ais-hint-show" ).addEventListener( "click" , () => this.setHint( true ) );
     Dom.get( "ais-status-close" ).addEventListener( "click" , () => this.hideNote() );
     // Esc out of the browser's full screen leaves focus mode too.
     document.addEventListener( "fullscreenchange" , () => {
@@ -162,10 +166,10 @@ const Ais = {
     // whenever the stage itself changes size, including when it first shows.
     new ResizeObserver( () => this.resize() ).observe( Dom.get( "ais-stage" ) );
     // In focus mode the stage runs to the bottom of the window, so it grows
-    // back whatever the toolbar, file header or footer give up (closing the
-    // instructions, a shorter file name, a narrower window).
+    // back whatever the toolbar or file header give up (a shorter file name,
+    // a narrower window).
     const around = new ResizeObserver( () => this.fitStage() );
-    [ Dom.get( "ais-current" ) , document.querySelector( ".ais-layers" ) , document.querySelector( ".ais-toolbar" ) ]
+    [ Dom.get( "ais-current" ) , document.querySelector( ".ais-toolbar" ) ]
       .forEach( ( element ) => around.observe( element ) );
     window.addEventListener( "resize" , () => this.fitStage() );
     window.addEventListener( "hashchange" , () => this.followUrl() );
@@ -180,7 +184,6 @@ const Ais = {
     this.renderViewTools();
     this.renderTools();
     this.loadFocus();
-    this.loadHint();
     this.resize();
     this.loadLocal();
     // Whether this person's MATLAB helper is running changes while the page is
@@ -1400,31 +1403,25 @@ const Ais = {
     button.title = I18n.get( this.focus ? "ais.focus_exit" : "ais.focus" );
   },
 
-  // The keyboard help under the image can be closed; a ? brings it back.
-  setHint( shown ) {
+  // The overlays (Appearance page) are kept per browser: the ones switched off.
+  saveLayers() {
+    const off = Dom.all( "[data-layer]" ).filter( ( box ) => !box.checked ).map( ( box ) => box.dataset.layer );
     try {
-      if ( shown ) window.localStorage.removeItem( this.hintKey );
-      else window.localStorage.setItem( this.hintKey , "1" );
+      window.localStorage.setItem( this.layersKey , JSON.stringify( off ) );
     } catch ( error ) { /* storage blocked: it just is not remembered */ }
-    this.renderHint( shown );
   },
 
-  loadHint() {
-    let hidden = false;
+  loadLayers() {
+    let off = [];
     try {
-      hidden = window.localStorage.getItem( this.hintKey ) === "1";
-    } catch ( error ) { /* storage blocked */ }
-    this.renderHint( !hidden );
-  },
-
-  renderHint( shown ) {
-    Dom.show( Dom.get( "ais-hint" ) , shown );
-    Dom.show( Dom.get( "ais-hint-show" ) , !shown );
-    this.fitStage();
+      off = JSON.parse( window.localStorage.getItem( this.layersKey ) || "[]" );
+    } catch ( error ) { /* storage blocked or garbled */ }
+    if ( !Array.isArray( off ) ) off = [];
+    Dom.all( "[data-layer]" ).forEach( ( box ) => { box.checked = !off.includes( box.dataset.layer ); } );
   },
 
   // Focus mode: the stage takes the window's height below the toolbar and
-  // header, less the footer under it. Otherwise the stylesheet's height.
+  // header. Otherwise the stylesheet's height.
   fitStage() {
     const stage = Dom.get( "ais-stage" );
     if ( !this.focus || !stage.offsetParent ) {
@@ -1432,9 +1429,8 @@ const Ais = {
       return;
     }
     const top = stage.getBoundingClientRect().top + window.scrollY;
-    const footer = document.querySelector( ".ais-layers" ).offsetHeight;
     const margin = 8;   // .ais-focus .app-main's bottom padding
-    stage.style.height = Math.max( 240 , window.innerHeight - top - footer - margin ) + "px";
+    stage.style.height = Math.max( 240 , window.innerHeight - top - margin ) + "px";
   },
 
   renderViewTools() {

@@ -600,7 +600,8 @@ const AisAuto = {
     ).replace( "{k}" , k ).replace( "{n}" , total ) );
     Dom.show( Dom.get( "ais-auto-busy" ) , this.phase === "finding" );
     Dom.text( Dom.get( "ais-auto-busy-text" ) , I18n.get( run.mode === "each" ? "ais.auto_finding" : "ais.auto_saving" ) );
-    const help = reviewing ? "ais.auto_help_review" : background ? "ais.auto_help_saving" : saved ? "ais.auto_help_saved" : "";
+    // Review's keys are on the Instructions screen; only status shows here.
+    const help = reviewing ? "" : background ? "ais.auto_help_saving" : saved ? "ais.auto_help_saved" : "";
     Dom.text( Dom.get( "ais-auto-help" ) , help ? I18n.get( help ) : "" );
     Dom.show( Dom.get( "ais-auto-help" ) , Boolean( help ) );
     // Every mode while finding, confirming or saving; Review has nothing left to filter.

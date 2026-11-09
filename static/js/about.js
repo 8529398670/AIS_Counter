@@ -6,13 +6,16 @@
 // anywhere: /api/about/report serves the file in docs/, fetched the first
 // time this screen opens and rendered with the vendored marked.
 //
-// In-page links (#about-legend, the report's own #1-summary contents) scroll
+// The Instructions screen is markup only; its contents links scroll the same way.
+//
+// In-page links (#about-measures, the report's own #1-summary contents) scroll
 // instead of changing the URL hash, which Nav reads as the screen to show.
 const About = {
   loaded: false,
 
   init() {
     Dom.get( "about" ).addEventListener( "click" , ( e ) => this.onLink( e ) );
+    Dom.get( "instructions" ).addEventListener( "click" , ( e ) => this.onLink( e ) );
     window.addEventListener( "hashchange" , () => this.maybeLoad() );
     this.maybeLoad();
   },
@@ -81,7 +84,8 @@ const About = {
     const link = e.target.closest( 'a[href^="#"]' );
     if ( !link ) return;
     const target = document.getElementById( decodeURIComponent( link.getAttribute( "href" ).slice( 1 ) ) );
-    if ( !target ) return;
+    // A link to another screen (#instructions) changes screen as usual.
+    if ( !target || target.classList.contains( "view" ) ) return;
     e.preventDefault();
     target.scrollIntoView( { behavior: "smooth" , block: "start" } );
   },
