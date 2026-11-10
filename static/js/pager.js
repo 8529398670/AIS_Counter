@@ -106,6 +106,17 @@ const Pager = {
     if ( more ) more.remove();
   },
 
+  // Gives each cell its column's name, which a narrow screen shows beside the
+  // value once the header row is gone. See the stacked tables in style.css.
+  label( table ) {
+    const element = Dom.get( table );
+    const names = Array.from( element.querySelectorAll( "thead th:not([hidden])" ) ).map( ( header ) => header.textContent.trim() );
+    Array.from( element.querySelector( "tbody" ).rows ).forEach( ( row ) => {
+      if ( row.cells.length !== names.length ) return;
+      Array.from( row.cells ).forEach( ( cell , index ) => cell.setAttribute( "data-label" , names[ index ] ) );
+    } );
+  },
+
   // What can take the focus in a row.
   controls( row ) {
     return Array.from( row.querySelectorAll( "a[href], button, input, select, textarea" ) ).filter( ( control ) => control.offsetParent !== null );
@@ -161,6 +172,7 @@ const Pager = {
     page[ field ].forEach( renderRow );
     this.release( table );
     if ( !offset && page[ field ].length === 0 ) this.empty( element );
+    this.label( table );
     this.putBack( element , spot );
 
     const holder = element.closest( ".table-responsive" ) || element;

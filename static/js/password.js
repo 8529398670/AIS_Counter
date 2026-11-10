@@ -90,7 +90,7 @@ const Password = {
     if ( !me.passwords_enabled || me.password_blocked || me.auth !== "session" ) return;
     Dom.show( Dom.get( "password-panel" ) , true );
     Dom.onSubmit( Dom.get( "password-form" ) , this.onSave.bind( this ) );
-    Dom.get( "password-remove-button" ).addEventListener( "click" , this.onRemove.bind( this ) );
+    Dom.onPress( Dom.get( "password-remove-button" ) , this.onRemove.bind( this ) );
     Dom.get( "password-username" ).value = me.username;
     this.render();
   },

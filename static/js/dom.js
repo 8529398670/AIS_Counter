@@ -28,6 +28,9 @@ const Dom = {
   },
 
   // el( "button", { class: "small", text: name, on: { click: fn } } )
+  //
+  // A button's click goes through press, so one whose handler is async shows
+  // that it is working with nothing more said.
   el( tag , options ) {
     const settings = options || {};
     const node = document.createElement( tag );
@@ -39,14 +42,48 @@ const Dom = {
       } );
     }
     if ( settings.on ) {
-      Object.entries( settings.on ).forEach( function ( entry ) {
-        node.addEventListener( entry[ 0 ] , entry[ 1 ] );
+      Object.entries( settings.on ).forEach( ( entry ) => {
+        const pressed = tag === "button" && entry[ 0 ] === "click";
+        node.addEventListener( entry[ 0 ] , pressed ? this.press( node , entry[ 1 ] ) : entry[ 1 ] );
       } );
     }
     ( settings.children || [] ).forEach( function ( child ) {
       node.appendChild( child );
     } );
     return node;
+  },
+
+  // A click listener for button. A handler that answers a promise keeps the
+  // button busy until it settles; one that does not is simply run. Dom.el uses
+  // this for every button it makes, and a button in the page's HTML gets it
+  // with Dom.onPress. A question the handler asks counts as part of the wait, so
+  // the press cannot be repeated behind it; style.css hides the spinner meanwhile.
+  //
+  // Every press also goes through Dom.steady, so whatever the handler redraws,
+  // the button (or what took its place) stays where it was on screen. A button
+  // that is meant to take the reader somewhere else has data-scroll="free".
+  press( button , handler ) {
+    return ( event ) => {
+      if ( button.getAttribute( "aria-busy" ) === "true" ) return;
+      const result = button.getAttribute( "data-scroll" ) === "free"
+        ? handler( event )
+        : this.steady( button , () => handler( event ) );
+      if ( result && typeof result.then === "function" ) {
+        // A button in a row's menu is out of sight by now, so the menu's own
+        // button shows the work as well.
+        this.busy( button , () => this.busy( this.menuButton( button ) , () => result ) );
+      }
+    };
+  },
+
+  // The button that opens the menu this one is in, if it is in one.
+  menuButton( button ) {
+    const menu = button.closest( ".dropdown-menu" );
+    return menu ? menu.parentElement.querySelector( ".row-menu-toggle" ) : null;
+  },
+
+  onPress( button , handler ) {
+    button.addEventListener( "click" , this.press( button , handler ) );
   },
 
   // Nothing moves under the reader. Runs work (sync, or answering a promise)
@@ -178,15 +215,19 @@ const Dom = {
     return () => { element.style.minHeight = before; };
   },
 
-  // Runs work with button showing that it is busy: disabled, so a second click
-  // cannot send the same thing twice, and with a spinner, so a slow answer does
-  // not look like a press that did nothing. A press while it is busy is
-  // ignored. Answers what work answers.
+  // Runs work with button showing that it is busy: it cannot be pressed, so a
+  // second click cannot send the same thing twice, and it has a spinner, so a
+  // slow answer does not look like a press that did nothing. A press while it
+  // is busy is ignored. Answers what work answers.
+  //
+  // Not the disabled attribute: that drops the keyboard focus, and Dom.confirm
+  // hands the focus back to this button while it is still busy.
   async busy( button , work ) {
     if ( !button ) return work();
     if ( button.getAttribute( "aria-busy" ) === "true" ) return undefined;
     const spinner = this.el( "span" , { class: "spinner-border spinner-border-sm me-2" , attrs: { "aria-hidden": "true" } } );
-    button.disabled = true;
+    button.classList.add( "disabled" );
+    button.setAttribute( "aria-disabled" , "true" );
     button.setAttribute( "aria-busy" , "true" );
     button.prepend( spinner );
     try {
@@ -194,7 +235,8 @@ const Dom = {
     } finally {
       spinner.remove();
       button.removeAttribute( "aria-busy" );
-      button.disabled = false;
+      button.removeAttribute( "aria-disabled" );
+      button.classList.remove( "disabled" );
     }
   },
 
@@ -678,16 +720,50 @@ const Dom = {
   },
 
   // A row's buttons, as a group named after the row, so a screen reader can say
-  // whose Delete this is. Leaves out any that are null.
-  rowActions( name , buttons ) {
+  // whose Delete this is. Leaves out any that are null. The first `keep` stay in
+  // the row, so put what people reach for most first, and the rest go in a menu.
+  // A menu of one saves nothing, so one extra button just stays in the row.
+  rowActions( name , buttons , keep = 2 ) {
+    const all = buttons.filter( Boolean );
+    const folded = all.length > keep + 1;
+    const children = folded ? all.slice( 0 , keep ).concat( this.rowMenu( name , all.slice( keep ) ) ) : all;
     return this.el( "div" , {
       class: "row-actions",
       attrs: { role: "group" , "aria-label": name },
-      children: buttons.filter( Boolean ),
+      children: children,
     } );
   },
 
-  // A status pill for a table cell. tone is a Bootstrap colour name:
+  // The fixed strategy is what lets the menu out of .table-responsive, which
+  // would otherwise clip it.
+  rowMenu( name , items ) {
+    const label = I18n.get( "ui.more_actions" ).replace( "{name}" , () => name );
+    const toggle = this.el( "button" , {
+      class: "btn btn-sm btn-outline-secondary row-menu-toggle",
+      // Left out of the activity log: its label holds the row's name.
+      attrs: { type: "button" , "data-bs-toggle": "dropdown" , "aria-expanded": "false" , "aria-label": label , title: label , "data-no-track": "" },
+      children: [ this.el( "i" , { class: "bi bi-three-dots" , attrs: { "aria-hidden": "true" } } ) ],
+    } );
+    const list = this.el( "ul" , {
+      class: "dropdown-menu dropdown-menu-end",
+      children: items.map( ( item ) => {
+        item.className = "dropdown-item" + ( item.classList.contains( "btn-outline-danger" ) ? " text-danger" : "" );
+        return this.el( "li" , { children: [ item ] } );
+      } ),
+    } );
+    const holder = this.el( "div" , { class: "dropdown" , children: [ toggle , list ] } );
+    const menu = new bootstrap.Dropdown( toggle , { popperConfig: { strategy: "fixed" } } );
+    // Before the item's own click. Dom.confirm hands the focus back to whatever
+    // has it, and the item is about to be hidden. And the press makes the toggle
+    // busy, which Bootstrap takes as disabled and would leave the menu open.
+    list.addEventListener( "click" , () => {
+      menu.hide();
+      toggle.focus( { preventScroll: true } );
+    } , true );
+    return holder;
+  },
+
+  // A status pill for a table cell. tone is a Bootstrap color name:
   // "success", "secondary", "warning", "danger".
   badge( text , tone ) {
     return this.el( "span" , { class: "badge text-bg-" + ( tone || "secondary" ) , text: text } );

@@ -169,7 +169,7 @@ const App = {
 
     Dom.onSubmit( Dom.get( "rename-form" ) , this.onRename.bind( this ) );
     Dom.get( "logout-button" ).addEventListener( "click" , this.onLogout.bind( this ) );
-    Dom.get( "my-link-button" ).addEventListener( "click" , this.onMyLoginLink.bind( this ) );
+    Dom.onPress( Dom.get( "my-link-button" ) , this.onMyLoginLink.bind( this ) );
     Dom.get( "my-link-cancel-button" ).addEventListener( "click" , this.onCancelMyLoginLink.bind( this ) );
     this.showMyLiveLink( me.login_link );
     Dom.get( "my-link-copy-button" ).addEventListener( "click" , () => Dom.copy( Dom.get( "my-link-value" ) ) );

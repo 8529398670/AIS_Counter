@@ -46,7 +46,7 @@ const TwoFactor = {
     this.me = me;
     if ( !me.two_factor_enabled || me.auth !== "session" ) return;
     Dom.show( Dom.get( "two-factor-panel" ) , true );
-    Dom.get( "two-factor-start-button" ).addEventListener( "click" , this.onStart.bind( this ) );
+    Dom.onPress( Dom.get( "two-factor-start-button" ) , this.onStart.bind( this ) );
     Dom.onSubmit( Dom.get( "two-factor-confirm-form" ) , this.onConfirm.bind( this ) );
     Dom.onSubmit( Dom.get( "two-factor-disable-form" ) , this.onDisable.bind( this ) );
     Dom.get( "two-factor-recovery-copy" ).addEventListener( "click" , () => Dom.copy( Dom.get( "two-factor-recovery-codes" ) ) );

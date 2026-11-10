@@ -1,14 +1,19 @@
 """The tools /mcp offers (see app/mcp for the protocol and the rules a tool
 follows). Each one is a thin wrapper over the helper its HTTP route uses --
-me_row, team_rows, set_disabled_checked, ... -- so the two doors answer the
-same way and refuse for the same reasons.
+me_row, team_rows, set_disabled_checked, rename_checked, ... -- so the two doors
+answer the same way and refuse for the same reasons.
 
-What is deliberately missing: creating accounts, login links, invite links,
-PINs or keys, and deleting accounts, batches or folders. Those routes need a
-browser session (or, for batches and folders, are kept to one on purpose),
-and /mcp only takes API keys. See RequireSession for why. The one kind of
-delete a tool may do is the AIS app's own: one result, one recorded line, a
-batch's auto results (mcp_tools_ais.py), each marked destructive.
+The rule: every route an API key may call has a tool here (or in an
+mcp_tools_<feature>.py module), named in its route, or an "x-mcp-http" reason
+in config/openapi.json for staying HTTP only. app/tests/test_mcp_parity.py
+fails until that holds. What a key may not call -- managing users, keys and
+sign-in, and deleting accounts, batches or folders -- needs a browser session
+(see RequireSession), so it has no tool either. The one kind of delete a tool
+may do is the AIS app's own: one result, one recorded line, a batch's auto
+results (mcp_tools_ais.py), each marked destructive.
+
+After adding or changing a tool, run scripts/mcp_json.sh to rewrite
+config/mcp.json; the same test fails until it is current.
 
 An app's own tools go in a new module in this package (mcp_tools_<feature>.py)
 with a register(registry) function called from build_registry below.
@@ -22,9 +27,11 @@ from app.core.config import Config
 from app.core.db import Store
 from app.mcp.registry import Call, Refusal, Registry, Tool
 from app.models import invite_links
-from app.routes.account import me_row
+from app.routes import account
+from app.routes import themes
+from app.routes.account import me_row, rename_checked
 from app.routes.admin import RuleRefusal, revoke_access_checked, set_disabled_checked, user_rows
-from app.routes.helpers import PAGE_DEFAULT, PAGE_LIMIT_MESSAGE, PAGE_MAX, PAGE_OFFSET_MESSAGE, page_body
+from app.routes.helpers import PAGE_DEFAULT, PAGE_LIMIT_MESSAGE, PAGE_MAX, PAGE_OFFSET_MESSAGE, Refused, page_body
 from app.routes.invite_links import invite_link_rows
 from app.routes import mcp_tools_ais
 from app.routes.team import team_rows
@@ -49,6 +56,16 @@ def _schema(properties: dict[str, Any]) -> dict[str, Any]:
 
 def _no_args(call: Call) -> None:
     call.bind({})
+
+
+def _shared(helper: Callable[..., Any], *args: Any) -> Any:
+    """A helper its HTTP route shares, with its refusal in the same words."""
+    try:
+        return helper(*args)
+    except Refused as refused:
+        if refused.status >= 500:
+            raise RuntimeError(refused.cause) from None
+        raise Refusal(refused.message) from None
 
 
 def _page(call: Call, name: str, load: Callable[[Store], list[Any]]) -> dict[str, Any]:
@@ -91,6 +108,36 @@ def admin_revoke_access(call: Call) -> dict[str, Any]:
     return {"ok": True, "revoked": revoked.to_dict()}
 
 
+def rename_account(call: Call) -> dict[str, Any]:
+    args = call.bind({"display_name": str}, optional={"expect": str})
+    return _shared(rename_checked, call.request, args["display_name"], args.get("expect"))
+
+
+def set_shortcuts(call: Call) -> dict[str, Any]:
+    args = call.bind({"shortcuts": dict})
+    return _shared(account.set_shortcuts_checked, call.request, args["shortcuts"])
+
+
+def set_themes(call: Call) -> dict[str, Any]:
+    args = call.bind({"themes": object}, optional={"theme_id": str})
+    return _shared(themes.set_my_themes_checked, call.request, args["themes"], args.get("theme_id"))
+
+
+def set_theme(call: Call) -> dict[str, Any]:
+    args = call.bind({"theme_id": str})
+    return _shared(themes.set_my_theme_checked, call.request, args["theme_id"])
+
+
+def admin_get_theme_defaults(call: Call) -> dict[str, Any]:
+    _no_args(call)
+    return themes.theme_defaults(call.request)
+
+
+def admin_set_theme_defaults(call: Call) -> dict[str, Any]:
+    args = call.bind({"themes": object})
+    return _shared(themes.set_theme_defaults_checked, call.request, args["themes"])
+
+
 def _invite_links_on(cfg: Config) -> bool:
     return cfg.invite_links_enabled
 
@@ -110,6 +157,7 @@ def build_registry() -> Registry:
     registry = Registry()
     registry.register(Tool(
         name="whoami",
+        route="GET /api/me",
         title="Who am I",
         description="The account this API key belongs to, the role it acts with (role -- never higher than the key's own scope), and the account's own role.",
         call=whoami,
@@ -117,6 +165,7 @@ def build_registry() -> Registry:
     ))
     registry.register(Tool(
         name="list_team",
+        route="GET /api/team",
         title="List team",
         description="People with an active account, a page at a time: id and display name. Use the id wherever another tool asks for a user. next is the offset of the following page, or null on the last one.",
         call=list_team,
@@ -125,6 +174,7 @@ def build_registry() -> Registry:
     ))
     registry.register(Tool(
         name="admin_list_users",
+        route="GET /api/admin/users",
         title="List users (admin)",
         description="Accounts, a page at a time, including disabled ones, with each one's role and which is the owner. next is the offset of the following page, or null on the last one.",
         call=admin_list_users,
@@ -134,6 +184,7 @@ def build_registry() -> Registry:
     ))
     registry.register(Tool(
         name="admin_set_user_disabled",
+        route="POST /api/admin/users/{user_id}/disabled",
         title="Disable or enable a user (admin)",
         description="Switch an account off (disabled: true) or back on (false). Disabling signs it out everywhere and voids its live login link; its API keys stop working while it is off. Reversible. The owner and your own account cannot be disabled.",
         call=admin_set_user_disabled,
@@ -142,6 +193,7 @@ def build_registry() -> Registry:
     ))
     registry.register(Tool(
         name="admin_revoke_access",
+        route="POST /api/admin/users/{user_id}/revoke-access",
         title="Revoke a user's access (admin)",
         description="For an account that may be compromised: ends every session and voids its live login link and every API key it holds, at once. The account stays enabled; someone with a browser session must issue a new login link to let its owner back in. The owner and your own account cannot be revoked.",
         call=admin_revoke_access,
@@ -150,7 +202,68 @@ def build_registry() -> Registry:
         admin_only=True,
     ))
     registry.register(Tool(
+        name="rename_account",
+        route="POST /api/account/rename",
+        title="Rename your account",
+        description="Change your own display name (1-80 characters). expect, when given, is the name you think it has now; if someone changed it meanwhile the rename is refused with the current name, so nothing is overwritten unseen.",
+        call=rename_account,
+        input_schema={
+            "type": "object",
+            "properties": {"display_name": {"type": "string"}, "expect": {"type": "string", "description": "The current name, from whoami. Optional."}},
+            "required": ["display_name"],
+            "additionalProperties": False,
+        },
+    ))
+    registry.register(Tool(
+        name="set_shortcuts",
+        route="POST /api/account/shortcuts",
+        title="Change your keyboard shortcuts",
+        description="Replace your rebound keyboard shortcuts: action id to its list of keys, such as \"undo\": [\"Mod+Z\"] (Mod is Cmd on a Mac, Ctrl elsewhere). Send the whole map; an empty list switches an action's keys off, and {} puts every key back to its default. whoami shows the current map.",
+        call=set_shortcuts,
+        input_schema=_schema({"shortcuts": {"type": "object", "additionalProperties": {"type": "array", "items": {"type": "string"}}}}),
+    ))
+    registry.register(Tool(
+        name="set_themes",
+        route="POST /api/account/themes",
+        title="Replace your own themes",
+        description="Replace your whole list of color themes (1 to 40) and pick the one you use. themes: null goes back to following the app's defaults. A theme is the Theme schema in the API reference (config/openapi.json): id, name, mode light|dark, accent, second, and optional colors as #rrggbb. whoami shows the current list.",
+        call=set_themes,
+        input_schema={
+            "type": "object",
+            "properties": {"themes": {"type": ["array", "null"], "items": {"type": "object"}}, "theme_id": {"type": "string"}},
+            "required": ["themes"],
+            "additionalProperties": False,
+        },
+    ))
+    registry.register(Tool(
+        name="set_theme",
+        route="POST /api/account/theme",
+        title="Pick your theme",
+        description="Switch to another theme from your list (or the defaults), by its id.",
+        call=set_theme,
+        input_schema=_schema({"theme_id": {"type": "string"}}),
+    ))
+    registry.register(Tool(
+        name="admin_get_theme_defaults",
+        route="GET /api/admin/theme-defaults",
+        title="Default themes (admin)",
+        description="The theme list everyone without their own list sees. themes is null while the built-in ones apply.",
+        call=admin_get_theme_defaults,
+        read_only=True,
+        admin_only=True,
+    ))
+    registry.register(Tool(
+        name="admin_set_theme_defaults",
+        route="POST /api/admin/theme-defaults",
+        title="Replace the default themes (admin)",
+        description="Replace the theme list everyone without their own list sees, 1 to 40 themes in the Theme schema of the API reference. null puts the built-in themes back.",
+        call=admin_set_theme_defaults,
+        input_schema=_schema({"themes": {"type": ["array", "null"], "items": {"type": "object"}}}),
+        admin_only=True,
+    ))
+    registry.register(Tool(
         name="admin_list_invite_links",
+        route="GET /api/admin/invite-links",
         title="List invite links (admin)",
         description="Group invite links, a page at a time: label, places used and left, expiry, and whether each still works. The links themselves are never shown again after creation. next is the offset of the following page, or null on the last one.",
         call=admin_list_invite_links,
@@ -161,6 +274,7 @@ def build_registry() -> Registry:
     ))
     registry.register(Tool(
         name="admin_revoke_invite_link",
+        route="POST /api/admin/invite-links/{link_id}/revoke",
         title="Switch off an invite link (admin)",
         description="Stop an invite link from letting anyone else join or sign in through it. Accounts it already made keep working. Cannot be switched back on.",
         call=admin_revoke_invite_link,

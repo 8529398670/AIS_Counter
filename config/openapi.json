@@ -208,7 +208,8 @@
           "503": {
             "$ref": "#/components/responses/E503"
           }
-        }
+        },
+        "x-mcp-http": "Sign-in: managed from a browser, not by agents."
       }
     },
     "/api/account/password": {
@@ -1578,9 +1579,6 @@
         "security": [
           {
             "sessionCookie": []
-          },
-          {
-            "apiKey": []
           }
         ],
         "x-required-role": "admin",
@@ -1668,9 +1666,6 @@
         "security": [
           {
             "sessionCookie": []
-          },
-          {
-            "apiKey": []
           }
         ],
         "x-required-role": "admin",
@@ -1768,9 +1763,6 @@
         "security": [
           {
             "sessionCookie": []
-          },
-          {
-            "apiKey": []
           }
         ],
         "x-required-role": "admin",
@@ -3362,7 +3354,8 @@
           "503": {
             "$ref": "#/components/responses/E503"
           }
-        }
+        },
+        "x-mcp-http": "Sign-in: managed from a browser, not by agents."
       }
     },
     "/api/admin/users/{user_id}/reset-two-factor": {
@@ -4780,7 +4773,8 @@
           "503": {
             "$ref": "#/components/responses/E503"
           }
-        }
+        },
+        "x-mcp-http": "Ends a browser session; a key has none to end."
       }
     },
     "/api/logs/events": {
@@ -4864,7 +4858,8 @@
           "503": {
             "$ref": "#/components/responses/E503"
           }
-        }
+        },
+        "x-mcp-http": "The browser's own activity reports (track.js), not an action."
       }
     },
     "/api/me": {
@@ -4943,7 +4938,50 @@
           "503": {
             "$ref": "#/components/responses/E503"
           }
-        }
+        },
+        "x-mcp-http": "The API reference itself; GET /api/mcp.json is the MCP one."
+      }
+    },
+    "/api/mcp.json": {
+      "get": {
+        "summary": "The MCP tools: every tool /mcp has, its arguments, and the route it stands for",
+        "operationId": "get_api_mcp_json",
+        "tags": [
+          "Monitoring"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "503": {
+            "$ref": "#/components/responses/E503"
+          }
+        },
+        "x-mcp-http": "The MCP reference itself; tools/list gives the same list."
       }
     },
     "/api/owner/jobs": {
@@ -5786,7 +5824,8 @@
           "503": {
             "$ref": "#/components/responses/E503"
           }
-        }
+        },
+        "x-mcp-http": "The MCP endpoint itself."
       },
       "get": {
         "summary": "Refused: this server has no stream",
@@ -6387,7 +6426,8 @@
           "503": {
             "$ref": "#/components/responses/E503"
           }
-        }
+        },
+        "x-mcp-http": "The About screen's copy of a document in the repository; nothing to act on."
       }
     },
     "/api/ais/files": {
@@ -6544,7 +6584,8 @@
           "503": {
             "$ref": "#/components/responses/E503"
           }
-        }
+        },
+        "x-mcp-http": "Reached through get_image with kind thumb."
       }
     },
     "/api/ais/files/{sha}/channels": {
@@ -6595,7 +6636,8 @@
           "503": {
             "$ref": "#/components/responses/E503"
           }
-        }
+        },
+        "x-mcp-http": "Viewer detail for the Process screen's channel picker; get_batch names each image's files."
       }
     },
     "/api/ais/files/{sha}/channel/{index}.png": {
@@ -6653,7 +6695,8 @@
           "503": {
             "$ref": "#/components/responses/E503"
           }
-        }
+        },
+        "x-mcp-http": "Viewer images for the Process screen; get_image gives an agent the processed view."
       }
     },
     "/api/ais/files/{sha}/slice/{index}.png": {
@@ -6712,7 +6755,8 @@
           "503": {
             "$ref": "#/components/responses/E503"
           }
-        }
+        },
+        "x-mcp-http": "Viewer images for the Process screen's z-stack slider; get_image gives an agent the processed view."
       }
     },
     "/api/ais/files/{sha}/composite.png": {
@@ -6763,7 +6807,8 @@
           "503": {
             "$ref": "#/components/responses/E503"
           }
-        }
+        },
+        "x-mcp-http": "Reached through get_image with kind composite."
       }
     },
     "/api/ais/files/{sha}/somata": {
@@ -6814,7 +6859,8 @@
           "503": {
             "$ref": "#/components/responses/E503"
           }
-        }
+        },
+        "x-mcp-http": "Viewer overlay for the Process screen; detect_image and trace_click give an agent the results."
       }
     },
     "/api/ais/files/{sha}/file": {
@@ -6865,7 +6911,8 @@
           "503": {
             "$ref": "#/components/responses/E503"
           }
-        }
+        },
+        "x-mcp-http": "File bytes: MCP messages are JSON, and clients cap their size. Fetch it over HTTP with the same key."
       }
     },
     "/api/ais/files/{sha}/processed.tif": {
@@ -6916,7 +6963,8 @@
           "503": {
             "$ref": "#/components/responses/E503"
           }
-        }
+        },
+        "x-mcp-http": "File bytes: MCP messages are JSON, and clients cap their size. Fetch it over HTTP with the same key."
       }
     },
     "/api/ais/files/{sha}/channel/{index}.tif": {
@@ -6975,7 +7023,8 @@
           "503": {
             "$ref": "#/components/responses/E503"
           }
-        }
+        },
+        "x-mcp-http": "File bytes: MCP messages are JSON, and clients cap their size. Fetch it over HTTP with the same key."
       }
     },
     "/api/ais/trace": {
@@ -7416,7 +7465,8 @@
           "503": {
             "$ref": "#/components/responses/E503"
           }
-        }
+        },
+        "x-mcp-http": "A backup zip: MCP messages are JSON, and clients cap their size. Send it over HTTP with the same key."
       }
     },
     "/api/ais/batches/import/missing": {
@@ -7474,7 +7524,8 @@
           "503": {
             "$ref": "#/components/responses/E503"
           }
-        }
+        },
+        "x-mcp-http": "A backup zip: MCP messages are JSON, and clients cap their size. Send it over HTTP with the same key."
       }
     },
     "/api/ais/batches/{batch_id}/backup": {
@@ -7945,7 +7996,8 @@
           "503": {
             "$ref": "#/components/responses/E503"
           }
-        }
+        },
+        "x-mcp-http": "The Process screen reporting that someone is working on a batch, not an action."
       }
     },
     "/api/ais/batches/{batch_id}/done": {
@@ -8145,7 +8197,8 @@
           "503": {
             "$ref": "#/components/responses/E503"
           }
-        }
+        },
+        "x-mcp-http": "Deleting a whole batch is kept out of agents' reach on purpose."
       }
     },
     "/api/ais/batches/{batch_id}/assign": {
@@ -9208,7 +9261,8 @@
           "503": {
             "$ref": "#/components/responses/E503"
           }
-        }
+        },
+        "x-mcp-http": "A results file upload: MCP messages are JSON, and clients cap their size. Send it over HTTP with the same key."
       }
     },
     "/api/ais/results/{result_id}/delete": {
@@ -9767,7 +9821,8 @@
           "503": {
             "$ref": "#/components/responses/E503"
           }
-        }
+        },
+        "x-mcp-http": "Deleting a folder is kept out of agents' reach on purpose."
       }
     },
     "/api/ais/measure-types": {
@@ -10133,7 +10188,8 @@
           "503": {
             "$ref": "#/components/responses/E503"
           }
-        }
+        },
+        "x-mcp-http": "Whether Open path and MATLAB work on this machine: those routes need a browser session."
       }
     },
     "/api/ais/batches/path": {
@@ -10636,7 +10692,8 @@
           "503": {
             "$ref": "#/components/responses/E503"
           }
-        }
+        },
+        "x-mcp-http": "A MATLAB run as a zip download for a person's computer."
       }
     },
     "/api/ais/matlab/send": {
@@ -10795,7 +10852,8 @@
           "503": {
             "$ref": "#/components/responses/E503"
           }
-        }
+        },
+        "x-mcp-http": "The MATLAB helper program itself, a download for a person's computer."
       }
     },
     "/api/ais/matlab/helper/next": {
@@ -10834,7 +10892,8 @@
           "503": {
             "$ref": "#/components/responses/E503"
           }
-        }
+        },
+        "x-mcp-http": "Called by the MATLAB helper program, not by agents."
       }
     },
     "/api/ais/matlab/helper/jobs/{job_id}/bundle": {
@@ -10883,7 +10942,8 @@
           "503": {
             "$ref": "#/components/responses/E503"
           }
-        }
+        },
+        "x-mcp-http": "Called by the MATLAB helper program, not by agents; the bundle is a zip."
       }
     },
     "/api/ais/matlab/helper/jobs/{job_id}/done": {
@@ -10948,7 +11008,8 @@
           "503": {
             "$ref": "#/components/responses/E503"
           }
-        }
+        },
+        "x-mcp-http": "Called by the MATLAB helper program, not by agents."
       }
     },
     "/api/admin/theme-defaults": {
@@ -11637,6 +11698,10 @@
               }
             ],
             "description": "Your own live login link, or null."
+          },
+          "mcp_url": {
+            "type": "string",
+            "description": "Where to read the MCP reference: config/mcp.json in app.repo, or /api/mcp.json when there is no repo. Only with server.mcp on."
           }
         },
         "required": [
@@ -12044,7 +12109,7 @@
       },
       "Theme": {
         "type": "object",
-        "description": "A colour scheme on the Appearance screen. Colours are #rrggbb. Anything not given is worked out by static/js/theme.js at readable contrast.",
+        "description": "A color scheme on the Appearance screen. Colors are #rrggbb. Anything not given is worked out by static/js/theme.js at readable contrast.",
         "properties": {
           "id": {
             "type": "string",
@@ -12063,7 +12128,7 @@
           },
           "accent": {
             "type": "string",
-            "description": "The main colour: what you can press."
+            "description": "The main color: what you can press."
           },
           "second": {
             "type": "string",
@@ -12082,7 +12147,45 @@
             "additionalProperties": {
               "type": "string"
             },
-            "description": "Worked-out colours replaced by name: text, accent, accentFg, second, secondFg, secondText, link, navLink, background, surface, nested, chrome, info, infoBorder, border. Leaving one out puts the readable colour back."
+            "description": "Worked-out colors replaced by name: text, accent, accentFg, second, secondFg, secondText, link, navLink, background, surface, nested, chrome, info, infoBorder, border, and for each button variant V (Secondary, Success, Danger, Warning, Info, Light, Dark) btnV, btnVFg and btnVText. Leaving one out puts the readable color back."
+          },
+          "button": {
+            "type": "object",
+            "description": "How the theme's buttons look. A choice left out is the default (rounded, normal, raised, normal).",
+            "properties": {
+              "shape": {
+                "type": "string",
+                "enum": [
+                  "square",
+                  "soft",
+                  "rounded",
+                  "pill"
+                ]
+              },
+              "weight": {
+                "type": "string",
+                "enum": [
+                  "normal",
+                  "medium",
+                  "bold"
+                ]
+              },
+              "depth": {
+                "type": "string",
+                "enum": [
+                  "flat",
+                  "raised",
+                  "glossy"
+                ]
+              },
+              "case": {
+                "type": "string",
+                "enum": [
+                  "normal",
+                  "upper"
+                ]
+              }
+            }
           }
         },
         "required": [

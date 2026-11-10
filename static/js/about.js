@@ -32,6 +32,7 @@ const About = {
     Dom.text( Dom.get( "about-version" ) , me.version || "" );
     this.link( "about-source" , me.repo , me.repo );
     this.link( "about-api" , me.openapi_url );
+    this.link( "about-mcp" , me.mcp_enabled === true && me.api_keys_enabled !== false ? me.mcp_url : "" );
     Dom.show( Dom.get( "about-facts-card" ) , true );
   },
 

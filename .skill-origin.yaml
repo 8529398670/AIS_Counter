@@ -1,9 +1,9 @@
 # Written by the skill that scaffolded this app; `webserver-upgrade` reads and
 # updates it. Commit it: it is how an update knows where this app started.
 skill: python-webserver
-commit: 99445cc8a147beab924eee09bdc266406a5f9d10
+commit: 981a796d96ee966ac34f7e6c5003cc022289d431
 project_name: "AIS Counter"
 slug: ais-counter
 port: 24005
 features: [invite_links, api_keys, mcp, appearance, passwords, two_factor]
-skipped: [backups, busy-buttons, edit-webhooks, files, keyboard-shortcuts, metrics, rename-files, row-menu, webhooks]
+skipped: [backups, edit-webhooks, files, keyboard-shortcuts, metrics, rename-files, webhooks]

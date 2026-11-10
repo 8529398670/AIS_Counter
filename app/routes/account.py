@@ -19,7 +19,7 @@ from app.models import pins
 from app.models import themes
 from app.models import two_factor
 from app.routes.admin import link_options, link_response
-from app.routes.helpers import bad_request, conflict, forbidden, get_config, get_store, read_json, run, server_error
+from app.routes.helpers import Refused, bad_request, forbidden, get_config, get_store, read_json, run, server_error
 from app.routes.logs import audit
 
 
@@ -50,6 +50,12 @@ def open_api_url(cfg: Config) -> str:
     return repo_file(cfg, "config/openapi.json") or "/api/openapi.json"
 
 
+def mcp_url(cfg: Config) -> str:
+    """Where the MCP reference is read: config/mcp.json in app.repo when that
+    is set, else this server's own copy, which needs the same sign-in."""
+    return repo_file(cfg, "config/mcp.json") or "/api/mcp.json"
+
+
 def me_row(store: Store, cfg: Config, actor: Actor, version: str) -> dict[str, Any]:
     """me's answer, shared with the MCP whoami tool so the two cannot describe
     the same caller differently."""
@@ -72,6 +78,7 @@ def me_row(store: Store, cfg: Config, actor: Actor, version: str) -> dict[str, A
         "description": cfg.description,
         "show_about": cfg.show_about,
         "openapi_url": open_api_url(cfg),
+        "mcp_url": mcp_url(cfg),
         "shortcuts": actor.user.shortcuts,
         "themes": my_themes,
         "themes_custom": themes_custom,
@@ -109,23 +116,29 @@ async def rename(request: Request) -> Response:
         return bad_request("malformed request body")
     if not check_csrf(request, body.get("csrf_token")):
         return forbidden("invalid csrf token")
-    display_name = body.get("display_name")
+    try:
+        return JSONResponse(await run(rename_checked, request, body.get("display_name"), body.get("expect")))
+    except Refused as refused:
+        return refused.response(request)
+
+
+def rename_checked(request: Request, display_name: Any, expect: Any) -> dict[str, Any]:
+    """rename after the request is read, for it and the MCP rename_account
+    tool. Synchronous: it runs in a worker thread."""
     if not users.valid_display_name(display_name):
-        return bad_request("display name must be 1-80 characters")
+        raise Refused(400, "display name must be 1-80 characters")
     # Optional: the name the caller expects to replace. The frontend always
     # sends it, so its undo cannot overwrite a rename made elsewhere.
-    expect = body.get("expect")
     if expect is not None and not isinstance(expect, str):
-        return bad_request("expect must be a string")
-
+        raise Refused(400, "expect must be a string")
     try:
-        renamed = await run(users.rename_user, get_store(request), actor_from(request).user.id, display_name, expect)
+        renamed = users.rename_user(get_store(request), actor_from(request).user.id, display_name, expect)
     except users.RenameConflictError as refusal:
-        return conflict(str(refusal), display_name=refusal.current)
+        raise Refused(409, str(refusal), display_name=refusal.current) from None
     if not renamed:
-        return server_error(request, "rename: the signed-in account has no record")
+        raise Refused.internal("rename: the signed-in account has no record")
     audit(request, KIND_AUTH, "renamed own account", {"name": display_name.strip()})
-    return JSONResponse({"ok": True, "display_name": display_name.strip()})
+    return {"ok": True, "display_name": display_name.strip()}
 
 
 async def set_shortcuts(request: Request) -> Response:
@@ -136,12 +149,20 @@ async def set_shortcuts(request: Request) -> Response:
         return bad_request("malformed request body")
     if not check_csrf(request, body.get("csrf_token")):
         return forbidden("invalid csrf token")
-    shortcuts = body.get("shortcuts")
+    try:
+        return JSONResponse(await run(set_shortcuts_checked, request, body.get("shortcuts")))
+    except Refused as refused:
+        return refused.response(request)
+
+
+def set_shortcuts_checked(request: Request, shortcuts: Any) -> dict[str, Any]:
+    """set_shortcuts after the request is read, for it and the MCP
+    set_shortcuts tool. Synchronous: it runs in a worker thread."""
     if not users.valid_shortcuts(shortcuts):
-        return bad_request("bad_shortcuts")
-    if not await run(users.set_shortcuts, get_store(request), actor_from(request).user.id, shortcuts):
-        return server_error()
-    return JSONResponse({"ok": True})
+        raise Refused(400, "bad_shortcuts")
+    if not users.set_shortcuts(get_store(request), actor_from(request).user.id, shortcuts):
+        raise Refused.internal("set_shortcuts: the signed-in account has no record")
+    return {"ok": True}
 
 
 async def set_matlab_path(request: Request) -> Response:

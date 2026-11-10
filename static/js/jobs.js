@@ -67,6 +67,7 @@ const Jobs = {
         Dom.el( "td" , { children: [ this.runButton( job ) ] } ),
       ] } ) ) );
     if ( payload.jobs.length === 0 ) Pager.empty( Dom.get( "jobs-table" ) );
+    Pager.label( "jobs-table" );
     const running = payload.jobs.some( function ( job ) { return job.running; } );
     if ( running && Nav.current() === "jobs" ) {
       this.timer = window.setTimeout( () => this.refresh() , this.refreshMs );

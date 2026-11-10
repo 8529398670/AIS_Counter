@@ -45,8 +45,8 @@ const Logs = {
     } );
     Dom.typed( Dom.get( "logs-query" ) , () => this.search() , this.searchDelayMs );
     Dom.get( "logs-live" ).addEventListener( "click" , () => this.toggleLive() );
-    Dom.get( "logs-prune" ).addEventListener( "click" , () => this.onPrune() );
-    Dom.get( "ip-names-add" ).addEventListener( "click" , () => this.onNameIp( "" , "" ) );
+    Dom.onPress( Dom.get( "logs-prune" ) , () => this.onPrune() );
+    Dom.onPress( Dom.get( "ip-names-add" ) , () => this.onNameIp( "" , "" ) );
     window.addEventListener( "hashchange" , () => this.followScreen() );
     // The calendar's popup keeps 16px from the window's edges, so on a phone
     // it does not run into the side of the screen. Clicks inside it (the month
@@ -93,6 +93,7 @@ const Logs = {
       } ) ] ) ] } ),
     ] } ) ) );
     if ( listing.names.length === 0 ) Pager.empty( table );
+    Pager.label( "ip-names-table" );
   },
 
   // target is what the field starts with: the address clicked, or nothing. Saving

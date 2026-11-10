@@ -16,7 +16,7 @@ const Sessions = {
   storageKey: "sessions-open",
 
   async init() {
-    Dom.get( "sessions-revoke-others" ).addEventListener( "click" , () => this.onRevokeOthers() );
+    Dom.onPress( Dom.get( "sessions-revoke-others" ) , () => this.onRevokeOthers() );
     const card = Dom.get( "sessions-card" );
     card.open = this.savedOpen();
     // Opening it here fires a toggle too, later; only a real change counts,

@@ -40,6 +40,7 @@ from app.routes import (
     jobs,
     join,
     logs,
+    mcp_manifest,
     mcp_tools,
     meta,
     openapi,
@@ -287,6 +288,7 @@ def build_routes(static_server: StaticServer, cfg: Config) -> list[BaseRoute]:
         # A MATLAB run as a zip: the images it holds are ones every signed-in
         # user can already fetch.
         signed_in("/api/ais/matlab/bundle", ais.matlab_bundle_download, ["POST"]),
+        group(RequireLogin, RequireMCP)("/api/mcp.json", mcp_manifest.get_mcp_manifest),
         my_keys("/api/keys", api_keys.list_my_keys),
         my_keys("/api/keys", api_keys.create_my_key, ["POST"]),
         my_keys("/api/keys/{key_id}/rename", api_keys.rename_my_key, ["POST"]),

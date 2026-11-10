@@ -1,0 +1,2292 @@
+{
+  "auth": "Authorization: Bearer <API key>",
+  "description": "Every tool POST /mcp offers. Written by scripts/mcp_json.sh from the registered tools; do not edit by hand. A key sees the tools its role allows (adminOnly ones need an admin key), and a tool whose feature is switched off answers like one that does not exist. route is the HTTP route the tool stands for, with the same rules; http_only are the routes a key may call that have no tool, and why.",
+  "endpoint": "/mcp",
+  "http_only": [
+    {
+      "reason": "The About screen's copy of a document in the repository; nothing to act on.",
+      "route": "GET /api/about/report"
+    },
+    {
+      "reason": "Viewer images for the Process screen; get_image gives an agent the processed view.",
+      "route": "GET /api/ais/files/{sha}/channel/{index}.png"
+    },
+    {
+      "reason": "File bytes: MCP messages are JSON, and clients cap their size. Fetch it over HTTP with the same key.",
+      "route": "GET /api/ais/files/{sha}/channel/{index}.tif"
+    },
+    {
+      "reason": "Viewer detail for the Process screen's channel picker; get_batch names each image's files.",
+      "route": "GET /api/ais/files/{sha}/channels"
+    },
+    {
+      "reason": "Reached through get_image with kind composite.",
+      "route": "GET /api/ais/files/{sha}/composite.png"
+    },
+    {
+      "reason": "File bytes: MCP messages are JSON, and clients cap their size. Fetch it over HTTP with the same key.",
+      "route": "GET /api/ais/files/{sha}/file"
+    },
+    {
+      "reason": "File bytes: MCP messages are JSON, and clients cap their size. Fetch it over HTTP with the same key.",
+      "route": "GET /api/ais/files/{sha}/processed.tif"
+    },
+    {
+      "reason": "Viewer images for the Process screen's z-stack slider; get_image gives an agent the processed view.",
+      "route": "GET /api/ais/files/{sha}/slice/{index}.png"
+    },
+    {
+      "reason": "Viewer overlay for the Process screen; detect_image and trace_click give an agent the results.",
+      "route": "GET /api/ais/files/{sha}/somata"
+    },
+    {
+      "reason": "Reached through get_image with kind thumb.",
+      "route": "GET /api/ais/files/{sha}/thumb.png"
+    },
+    {
+      "reason": "Whether Open path and MATLAB work on this machine: those routes need a browser session.",
+      "route": "GET /api/ais/local/status"
+    },
+    {
+      "reason": "The MATLAB helper program itself, a download for a person's computer.",
+      "route": "GET /api/ais/matlab/helper/download/{platform}"
+    },
+    {
+      "reason": "Called by the MATLAB helper program, not by agents; the bundle is a zip.",
+      "route": "GET /api/ais/matlab/helper/jobs/{job_id}/bundle"
+    },
+    {
+      "reason": "Called by the MATLAB helper program, not by agents.",
+      "route": "GET /api/ais/matlab/helper/next"
+    },
+    {
+      "reason": "The MCP reference itself; tools/list gives the same list.",
+      "route": "GET /api/mcp.json"
+    },
+    {
+      "reason": "The API reference itself; GET /api/mcp.json is the MCP one.",
+      "route": "GET /api/openapi.json"
+    },
+    {
+      "reason": "Sign-in: managed from a browser, not by agents.",
+      "route": "POST /api/account/login-link/cancel"
+    },
+    {
+      "reason": "Sign-in: managed from a browser, not by agents.",
+      "route": "POST /api/admin/users/{user_id}/cancel-login-link"
+    },
+    {
+      "reason": "A backup zip: MCP messages are JSON, and clients cap their size. Send it over HTTP with the same key.",
+      "route": "POST /api/ais/batches/import"
+    },
+    {
+      "reason": "A backup zip: MCP messages are JSON, and clients cap their size. Send it over HTTP with the same key.",
+      "route": "POST /api/ais/batches/import/missing"
+    },
+    {
+      "reason": "The Process screen reporting that someone is working on a batch, not an action.",
+      "route": "POST /api/ais/batches/{batch_id}/activity"
+    },
+    {
+      "reason": "Deleting a whole batch is kept out of agents' reach on purpose.",
+      "route": "POST /api/ais/batches/{batch_id}/delete"
+    },
+    {
+      "reason": "Deleting a folder is kept out of agents' reach on purpose.",
+      "route": "POST /api/ais/folders/{folder_id}/delete"
+    },
+    {
+      "reason": "A MATLAB run as a zip download for a person's computer.",
+      "route": "POST /api/ais/matlab/bundle"
+    },
+    {
+      "reason": "Called by the MATLAB helper program, not by agents.",
+      "route": "POST /api/ais/matlab/helper/jobs/{job_id}/done"
+    },
+    {
+      "reason": "A results file upload: MCP messages are JSON, and clients cap their size. Send it over HTTP with the same key.",
+      "route": "POST /api/ais/results/import"
+    },
+    {
+      "reason": "Ends a browser session; a key has none to end.",
+      "route": "POST /api/logout"
+    },
+    {
+      "reason": "The browser's own activity reports (track.js), not an action.",
+      "route": "POST /api/logs/events"
+    },
+    {
+      "reason": "The MCP endpoint itself.",
+      "route": "POST /mcp"
+    }
+  ],
+  "protocolVersions": [
+    "2025-11-25",
+    "2025-06-18",
+    "2025-03-26"
+  ],
+  "tools": [
+    {
+      "adminOnly": false,
+      "annotations": {
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": true,
+        "title": "Who am I"
+      },
+      "description": "The account this API key belongs to, the role it acts with (role -- never higher than the key's own scope), and the account's own role.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      },
+      "name": "whoami",
+      "route": "GET /api/me",
+      "title": "Who am I"
+    },
+    {
+      "adminOnly": false,
+      "annotations": {
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": true,
+        "title": "List team"
+      },
+      "description": "People with an active account, a page at a time: id and display name. Use the id wherever another tool asks for a user. next is the offset of the following page, or null on the last one.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "description": "Rows to return. Default 200.",
+            "maximum": 1000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "offset": {
+            "description": "Rows to skip: the next value of the previous page.",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "name": "list_team",
+      "route": "GET /api/team",
+      "title": "List team"
+    },
+    {
+      "adminOnly": true,
+      "annotations": {
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": true,
+        "title": "List users (admin)"
+      },
+      "description": "Accounts, a page at a time, including disabled ones, with each one's role and which is the owner. next is the offset of the following page, or null on the last one.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "description": "Rows to return. Default 200.",
+            "maximum": 1000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "offset": {
+            "description": "Rows to skip: the next value of the previous page.",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "name": "admin_list_users",
+      "route": "GET /api/admin/users",
+      "title": "List users (admin)"
+    },
+    {
+      "adminOnly": true,
+      "annotations": {
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false,
+        "title": "Disable or enable a user (admin)"
+      },
+      "description": "Switch an account off (disabled: true) or back on (false). Disabling signs it out everywhere and voids its live login link; its API keys stop working while it is off. Reversible. The owner and your own account cannot be disabled.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "disabled": {
+            "type": "boolean"
+          },
+          "user_id": {
+            "description": "The account's id, from list_team or admin_list_users.",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "user_id",
+          "disabled"
+        ],
+        "type": "object"
+      },
+      "name": "admin_set_user_disabled",
+      "route": "POST /api/admin/users/{user_id}/disabled",
+      "title": "Disable or enable a user (admin)"
+    },
+    {
+      "adminOnly": true,
+      "annotations": {
+        "destructiveHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false,
+        "title": "Revoke a user's access (admin)"
+      },
+      "description": "For an account that may be compromised: ends every session and voids its live login link and every API key it holds, at once. The account stays enabled; someone with a browser session must issue a new login link to let its owner back in. The owner and your own account cannot be revoked.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "user_id": {
+            "description": "The account's id, from list_team or admin_list_users.",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "user_id"
+        ],
+        "type": "object"
+      },
+      "name": "admin_revoke_access",
+      "route": "POST /api/admin/users/{user_id}/revoke-access",
+      "title": "Revoke a user's access (admin)"
+    },
+    {
+      "adminOnly": false,
+      "annotations": {
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false,
+        "title": "Rename your account"
+      },
+      "description": "Change your own display name (1-80 characters). expect, when given, is the name you think it has now; if someone changed it meanwhile the rename is refused with the current name, so nothing is overwritten unseen.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "display_name": {
+            "type": "string"
+          },
+          "expect": {
+            "description": "The current name, from whoami. Optional.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "display_name"
+        ],
+        "type": "object"
+      },
+      "name": "rename_account",
+      "route": "POST /api/account/rename",
+      "title": "Rename your account"
+    },
+    {
+      "adminOnly": false,
+      "annotations": {
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false,
+        "title": "Change your keyboard shortcuts"
+      },
+      "description": "Replace your rebound keyboard shortcuts: action id to its list of keys, such as \"undo\": [\"Mod+Z\"] (Mod is Cmd on a Mac, Ctrl elsewhere). Send the whole map; an empty list switches an action's keys off, and {} puts every key back to its default. whoami shows the current map.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "shortcuts": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "shortcuts"
+        ],
+        "type": "object"
+      },
+      "name": "set_shortcuts",
+      "route": "POST /api/account/shortcuts",
+      "title": "Change your keyboard shortcuts"
+    },
+    {
+      "adminOnly": false,
+      "annotations": {
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false,
+        "title": "Replace your own themes"
+      },
+      "description": "Replace your whole list of color themes (1 to 40) and pick the one you use. themes: null goes back to following the app's defaults. A theme is the Theme schema in the API reference (config/openapi.json): id, name, mode light|dark, accent, second, and optional colors as #rrggbb. whoami shows the current list.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "theme_id": {
+            "type": "string"
+          },
+          "themes": {
+            "items": {
+              "type": "object"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "themes"
+        ],
+        "type": "object"
+      },
+      "name": "set_themes",
+      "route": "POST /api/account/themes",
+      "title": "Replace your own themes"
+    },
+    {
+      "adminOnly": false,
+      "annotations": {
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false,
+        "title": "Pick your theme"
+      },
+      "description": "Switch to another theme from your list (or the defaults), by its id.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "theme_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "theme_id"
+        ],
+        "type": "object"
+      },
+      "name": "set_theme",
+      "route": "POST /api/account/theme",
+      "title": "Pick your theme"
+    },
+    {
+      "adminOnly": true,
+      "annotations": {
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": true,
+        "title": "Default themes (admin)"
+      },
+      "description": "The theme list everyone without their own list sees. themes is null while the built-in ones apply.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      },
+      "name": "admin_get_theme_defaults",
+      "route": "GET /api/admin/theme-defaults",
+      "title": "Default themes (admin)"
+    },
+    {
+      "adminOnly": true,
+      "annotations": {
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false,
+        "title": "Replace the default themes (admin)"
+      },
+      "description": "Replace the theme list everyone without their own list sees, 1 to 40 themes in the Theme schema of the API reference. null puts the built-in themes back.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "themes": {
+            "items": {
+              "type": "object"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "themes"
+        ],
+        "type": "object"
+      },
+      "name": "admin_set_theme_defaults",
+      "route": "POST /api/admin/theme-defaults",
+      "title": "Replace the default themes (admin)"
+    },
+    {
+      "adminOnly": true,
+      "annotations": {
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": true,
+        "title": "List invite links (admin)"
+      },
+      "description": "Group invite links, a page at a time: label, places used and left, expiry, and whether each still works. The links themselves are never shown again after creation. next is the offset of the following page, or null on the last one.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "description": "Rows to return. Default 200.",
+            "maximum": 1000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "offset": {
+            "description": "Rows to skip: the next value of the previous page.",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "name": "admin_list_invite_links",
+      "route": "GET /api/admin/invite-links",
+      "title": "List invite links (admin)"
+    },
+    {
+      "adminOnly": true,
+      "annotations": {
+        "destructiveHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false,
+        "title": "Switch off an invite link (admin)"
+      },
+      "description": "Stop an invite link from letting anyone else join or sign in through it. Accounts it already made keep working. Cannot be switched back on.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "link_id": {
+            "description": "The id from admin_list_invite_links.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "link_id"
+        ],
+        "type": "object"
+      },
+      "name": "admin_revoke_invite_link",
+      "route": "POST /api/admin/invite-links/{link_id}/revoke",
+      "title": "Switch off an invite link (admin)"
+    },
+    {
+      "adminOnly": false,
+      "annotations": {
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": true,
+        "title": "List batches"
+      },
+      "description": "Batches in the team's order, a page at a time, with progress (images, included, completed, ais, auto, stored, assignees, live activity) and the folders. Archived ones only with archived: true. next is the offset of the following page, or null.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "archived": {
+            "type": "boolean"
+          },
+          "folder_id": {
+            "description": "The folder's id, from list_folders.",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "limit": {
+            "description": "Rows to return. Default 200.",
+            "maximum": 1000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "offset": {
+            "description": "Rows to skip: the next value of the previous page.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "q": {
+            "description": "Only names containing this.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "list_batches",
+      "route": "GET /api/ais/batches",
+      "title": "List batches"
+    },
+    {
+      "adminOnly": false,
+      "annotations": {
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": true,
+        "title": "List folders"
+      },
+      "description": "The batch folders, each with its parent and order.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      },
+      "name": "list_folders",
+      "route": "GET /api/ais/folders",
+      "title": "List folders"
+    },
+    {
+      "adminOnly": false,
+      "annotations": {
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": true,
+        "title": "Get a batch"
+      },
+      "description": "One batch whole: its images (key, cell, dir, files per role with sha and whether the server has them stored), adds, done marks (skipped), excluded images, assignment. Admins also see original names.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "batch_id": {
+            "description": "The batch's id, from list_batches.",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "batch_id"
+        ],
+        "type": "object"
+      },
+      "name": "get_batch",
+      "route": "GET /api/ais/batches/{batch_id}",
+      "title": "Get a batch"
+    },
+    {
+      "adminOnly": false,
+      "annotations": {
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": true,
+        "title": "Batch image status"
+      },
+      "description": "Per image, a page at a time: files and how many are stored, accepted AIS (and how many by auto mode), done, duplicate of, assignee, included.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "batch_id": {
+            "description": "The batch's id, from list_batches.",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "limit": {
+            "description": "Rows to return. Default 200.",
+            "maximum": 1000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "offset": {
+            "description": "Rows to skip: the next value of the previous page.",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "batch_id"
+        ],
+        "type": "object"
+      },
+      "name": "batch_status",
+      "route": "GET /api/ais/batches/{batch_id}/status",
+      "title": "Batch image status"
+    },
+    {
+      "adminOnly": false,
+      "annotations": {
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": true,
+        "title": "Batch .czi channels"
+      },
+      "description": "The channels of the batch's included .czi files, by name, with how many files have each.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "batch_id": {
+            "description": "The batch's id, from list_batches.",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "batch_id"
+        ],
+        "type": "object"
+      },
+      "name": "batch_channels",
+      "route": "GET /api/ais/batches/{batch_id}/channels",
+      "title": "Batch .czi channels"
+    },
+    {
+      "adminOnly": false,
+      "annotations": {
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": true,
+        "title": "List results"
+      },
+      "description": "Accepted AIS, a page at a time: one batch's, or every batch's without batch_id; image narrows it to one image. Each row's numbers as the export has them (length_um, ...), its rev for update_result, created_by. pixels only with include_pixels: true.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "batch_id": {
+            "description": "The batch's id, from list_batches.",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "image": {
+            "description": "The image's key in the batch (batch_status or get_batch: key).",
+            "type": "string"
+          },
+          "include_pixels": {
+            "type": "boolean"
+          },
+          "limit": {
+            "description": "Rows to return. Default 200.",
+            "maximum": 1000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "offset": {
+            "description": "Rows to skip: the next value of the previous page.",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "name": "list_results",
+      "route": "GET /api/ais/results",
+      "title": "List results"
+    },
+    {
+      "adminOnly": false,
+      "annotations": {
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": true,
+        "title": "List recorded lines"
+      },
+      "description": "Lines recorded with the Measure tool, a page at a time: one batch's, or every batch's; image narrows it.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "batch_id": {
+            "description": "The batch's id, from list_batches.",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "image": {
+            "description": "The image's key in the batch (batch_status or get_batch: key).",
+            "type": "string"
+          },
+          "limit": {
+            "description": "Rows to return. Default 200.",
+            "maximum": 1000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "offset": {
+            "description": "Rows to skip: the next value of the previous page.",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "name": "list_measurements",
+      "route": "GET /api/ais/measurements",
+      "title": "List recorded lines"
+    },
+    {
+      "adminOnly": false,
+      "annotations": {
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": true,
+        "title": "List measurement types"
+      },
+      "description": "The team's types a recorded line can have.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      },
+      "name": "list_measure_types",
+      "route": "GET /api/ais/measure-types",
+      "title": "List measurement types"
+    },
+    {
+      "adminOnly": false,
+      "annotations": {
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false,
+        "title": "Create an empty batch"
+      },
+      "description": "A new batch with no images yet, in that folder or at the top. Add files with add_files_to_batch.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "folder_id": {
+            "description": "The folder's id, from list_folders.",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "name": "create_batch",
+      "route": "POST /api/ais/batches",
+      "title": "Create an empty batch"
+    },
+    {
+      "adminOnly": false,
+      "annotations": {
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false,
+        "title": "Create a batch from files"
+      },
+      "description": "A new batch from files you hashed (name, rel, sha, size each), grouped into images as the browser does (<cell>.tif raw, '<cell>.tif - Processed method 2.5.tif' processed, .czi, *_zNNN.tif with stack). Duplicates start left out. Answers with the files the server still needs and how to upload them (POST each file's bytes to /api/ais/files with your API key).",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "files": {
+            "description": "The files, hashed on your side: name and rel (path inside the picked folder) as they are, sha256 of the bytes, size in bytes.",
+            "items": {
+              "properties": {
+                "modified": {
+                  "type": "number"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "rel": {
+                  "type": "string"
+                },
+                "sha": {
+                  "description": "sha-256 of the file, lower-case hex.",
+                  "type": "string"
+                },
+                "size": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "name",
+                "rel",
+                "sha",
+                "size"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "name": {
+            "type": "string"
+          },
+          "randomize": {
+            "description": "Blind the names (default true): images get random n-n-n names, the originals kept for admins.",
+            "type": "boolean"
+          },
+          "stack": {
+            "description": "Z-stack slices (name_zNNN.tif) become one image each stack: {plane: 0 red | 1 green, z_step_um, pixel_um}.",
+            "properties": {
+              "pixel_um": {
+                "type": "number"
+              },
+              "plane": {
+                "type": "integer"
+              },
+              "z_step_um": {
+                "type": "number"
+              }
+            },
+            "type": "object"
+          },
+          "translations": {
+            "description": "__Translation.txt files that came with them: [{dir, text}].",
+            "items": {
+              "properties": {
+                "dir": {
+                  "type": "string"
+                },
+                "text": {
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "files"
+        ],
+        "type": "object"
+      },
+      "name": "create_batch_from_files",
+      "route": "POST /api/ais/batches/upload",
+      "title": "Create a batch from files"
+    },
+    {
+      "adminOnly": false,
+      "annotations": {
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false,
+        "title": "Add files to a batch"
+      },
+      "description": "More files into an existing batch, as create_batch_from_files. add_name names this add (a folder name).",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "add_name": {
+            "type": "string"
+          },
+          "batch_id": {
+            "description": "The batch's id, from list_batches.",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "files": {
+            "description": "The files, hashed on your side: name and rel (path inside the picked folder) as they are, sha256 of the bytes, size in bytes.",
+            "items": {
+              "properties": {
+                "modified": {
+                  "type": "number"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "rel": {
+                  "type": "string"
+                },
+                "sha": {
+                  "description": "sha-256 of the file, lower-case hex.",
+                  "type": "string"
+                },
+                "size": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "name",
+                "rel",
+                "sha",
+                "size"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "randomize": {
+            "description": "Blind the names (default true): images get random n-n-n names, the originals kept for admins.",
+            "type": "boolean"
+          },
+          "stack": {
+            "description": "Z-stack slices (name_zNNN.tif) become one image each stack: {plane: 0 red | 1 green, z_step_um, pixel_um}.",
+            "properties": {
+              "pixel_um": {
+                "type": "number"
+              },
+              "plane": {
+                "type": "integer"
+              },
+              "z_step_um": {
+                "type": "number"
+              }
+            },
+            "type": "object"
+          },
+          "translations": {
+            "description": "__Translation.txt files that came with them: [{dir, text}].",
+            "items": {
+              "properties": {
+                "dir": {
+                  "type": "string"
+                },
+                "text": {
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "batch_id",
+          "files"
+        ],
+        "type": "object"
+      },
+      "name": "add_files_to_batch",
+      "route": "POST /api/ais/batches/{batch_id}/upload",
+      "title": "Add files to a batch"
+    },
+    {
+      "adminOnly": false,
+      "annotations": {
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false,
+        "title": "Rename a batch"
+      },
+      "description": "Its accepted AIS carry the new name too. Whoever opened it, or an admin.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "batch_id": {
+            "description": "The batch's id, from list_batches.",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "batch_id",
+          "name"
+        ],
+        "type": "object"
+      },
+      "name": "rename_batch",
+      "route": "POST /api/ais/batches/{batch_id}/rename",
+      "title": "Rename a batch"
+    },
+    {
+      "adminOnly": false,
+      "annotations": {
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false,
+        "title": "Archive or bring back a batch"
+      },
+      "description": "archived: true hides it from the list (its results stay); false brings it back.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "archived": {
+            "type": "boolean"
+          },
+          "batch_id": {
+            "description": "The batch's id, from list_batches.",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "batch_id",
+          "archived"
+        ],
+        "type": "object"
+      },
+      "name": "archive_batch",
+      "route": "POST /api/ais/batches/{batch_id}/archive",
+      "title": "Archive or bring back a batch"
+    },
+    {
+      "adminOnly": false,
+      "annotations": {
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false,
+        "title": "Include or leave out images"
+      },
+      "description": "Include these images (included: true) or leave them out for the whole team. Left-out images are skipped by auto runs and the report.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "batch_id": {
+            "description": "The batch's id, from list_batches.",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "included": {
+            "type": "boolean"
+          },
+          "keys": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "batch_id",
+          "keys",
+          "included"
+        ],
+        "type": "object"
+      },
+      "name": "set_images_included",
+      "route": "POST /api/ais/batches/{batch_id}/include",
+      "title": "Include or leave out images"
+    },
+    {
+      "adminOnly": false,
+      "annotations": {
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false,
+        "title": "Mark an image done"
+      },
+      "description": "Mark (done: true) or unmark an image done by hand: for images with no AIS worth accepting.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "batch_id": {
+            "description": "The batch's id, from list_batches.",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "done": {
+            "type": "boolean"
+          },
+          "image": {
+            "description": "The image's key in the batch (batch_status or get_batch: key).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "batch_id",
+          "image",
+          "done"
+        ],
+        "type": "object"
+      },
+      "name": "set_image_done",
+      "route": "POST /api/ais/batches/{batch_id}/done",
+      "title": "Mark an image done"
+    },
+    {
+      "adminOnly": true,
+      "annotations": {
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false,
+        "title": "Assign a batch (admin)"
+      },
+      "description": "Split the batch's images among people: shares [{user_id, percent}] (ids from list_team). An empty list clears it.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "batch_id": {
+            "description": "The batch's id, from list_batches.",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "shares": {
+            "items": {
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "batch_id",
+          "shares"
+        ],
+        "type": "object"
+      },
+      "name": "assign_batch",
+      "route": "POST /api/ais/batches/{batch_id}/assign",
+      "title": "Assign a batch (admin)"
+    },
+    {
+      "adminOnly": true,
+      "annotations": {
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false,
+        "title": "Order batches (admin)"
+      },
+      "description": "The team's priority order: batch ids, first on top.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "ids": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "ids"
+        ],
+        "type": "object"
+      },
+      "name": "order_batches",
+      "route": "POST /api/ais/batches/order",
+      "title": "Order batches (admin)"
+    },
+    {
+      "adminOnly": true,
+      "annotations": {
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false,
+        "title": "Move batches into a folder (admin)"
+      },
+      "description": "Those batches into that folder; folder_id null for the top.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "folder_id": {
+            "description": "The parent folder's id, or null for the top.",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "ids": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "ids",
+          "folder_id"
+        ],
+        "type": "object"
+      },
+      "name": "move_batches",
+      "route": "POST /api/ais/batches/move",
+      "title": "Move batches into a folder (admin)"
+    },
+    {
+      "adminOnly": true,
+      "annotations": {
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false,
+        "title": "Create a folder (admin)"
+      },
+      "description": "A new folder, first in its parent (null: the top).",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "parent_id": {
+            "description": "The parent folder's id, or null for the top.",
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "name": "create_folder",
+      "route": "POST /api/ais/folders",
+      "title": "Create a folder (admin)"
+    },
+    {
+      "adminOnly": true,
+      "annotations": {
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false,
+        "title": "Rename a folder (admin)"
+      },
+      "description": "",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "folder_id": {
+            "description": "The folder's id, from list_folders.",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "folder_id",
+          "name"
+        ],
+        "type": "object"
+      },
+      "name": "rename_folder",
+      "route": "POST /api/ais/folders/{folder_id}/rename",
+      "title": "Rename a folder (admin)"
+    },
+    {
+      "adminOnly": true,
+      "annotations": {
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false,
+        "title": "Move a folder (admin)"
+      },
+      "description": "Into another folder; parent_id null for the top.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "folder_id": {
+            "description": "The folder's id, from list_folders.",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "parent_id": {
+            "description": "The parent folder's id, or null for the top.",
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "folder_id",
+          "parent_id"
+        ],
+        "type": "object"
+      },
+      "name": "move_folder",
+      "route": "POST /api/ais/folders/{folder_id}/move",
+      "title": "Move a folder (admin)"
+    },
+    {
+      "adminOnly": true,
+      "annotations": {
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false,
+        "title": "Order folders (admin)"
+      },
+      "description": "The order of one folder's folders (parent_id null: the top).",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "ids": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "parent_id": {
+            "description": "The parent folder's id, or null for the top.",
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "parent_id",
+          "ids"
+        ],
+        "type": "object"
+      },
+      "name": "order_folders",
+      "route": "POST /api/ais/folders/order",
+      "title": "Order folders (admin)"
+    },
+    {
+      "adminOnly": true,
+      "annotations": {
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": true,
+        "title": "Get treatments (admin)"
+      },
+      "description": "Each image's original name, saved treatment and the guessed one.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "batch_id": {
+            "description": "The batch's id, from list_batches.",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "batch_id"
+        ],
+        "type": "object"
+      },
+      "name": "get_treatments",
+      "route": "GET /api/ais/batches/{batch_id}/treatments",
+      "title": "Get treatments (admin)"
+    },
+    {
+      "adminOnly": true,
+      "annotations": {
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false,
+        "title": "Set treatments (admin)"
+      },
+      "description": "treatments: {image key: treatment name}; \"\" takes one off.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "batch_id": {
+            "description": "The batch's id, from list_batches.",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "treatments": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "batch_id",
+          "treatments"
+        ],
+        "type": "object"
+      },
+      "name": "set_treatments",
+      "route": "POST /api/ais/batches/{batch_id}/treatments",
+      "title": "Set treatments (admin)"
+    },
+    {
+      "adminOnly": true,
+      "annotations": {
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": true,
+        "title": "Get __Translation.txt (admin)"
+      },
+      "description": "The batch's original/random name per file, as text.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "batch_id": {
+            "description": "The batch's id, from list_batches.",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "batch_id"
+        ],
+        "type": "object"
+      },
+      "name": "get_translation",
+      "route": "GET /api/ais/batches/{batch_id}/translation.txt",
+      "title": "Get __Translation.txt (admin)"
+    },
+    {
+      "adminOnly": true,
+      "annotations": {
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false,
+        "title": "Load a __Translation.txt (admin)"
+      },
+      "description": "For a batch blinded somewhere else: the original names of the files it names.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "batch_id": {
+            "description": "The batch's id, from list_batches.",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "batch_id",
+          "text"
+        ],
+        "type": "object"
+      },
+      "name": "load_translation",
+      "route": "POST /api/ais/batches/{batch_id}/translation",
+      "title": "Load a __Translation.txt (admin)"
+    },
+    {
+      "adminOnly": true,
+      "annotations": {
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false,
+        "title": "New random names for a folder (admin)"
+      },
+      "description": "New random names for one add of the batch (add_id from get_batch adds, or \"earlier\"); its results, done marks, exclusions and assignment move with them.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "add_id": {
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "batch_id": {
+            "description": "The batch's id, from list_batches.",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "batch_id",
+          "add_id"
+        ],
+        "type": "object"
+      },
+      "name": "rerandomize_add",
+      "route": "POST /api/ais/batches/{batch_id}/adds/{add_id}/randomize",
+      "title": "New random names for a folder (admin)"
+    },
+    {
+      "adminOnly": true,
+      "annotations": {
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": true,
+        "title": "Back up a batch (admin)"
+      },
+      "description": "The batch as data, with its results and recorded lines and the people in it: what a restorable backup's manifest holds.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "batch_id": {
+            "description": "The batch's id, from list_batches.",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "batch_id"
+        ],
+        "type": "object"
+      },
+      "name": "get_backup",
+      "route": "GET /api/ais/batches/{batch_id}/backup",
+      "title": "Back up a batch (admin)"
+    },
+    {
+      "adminOnly": false,
+      "annotations": {
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false,
+        "title": "Save an AIS"
+      },
+      "description": "Accept an AIS on an image: row as trace_click or detect_image gives it (or your own numbers). Give a client_id so a retry never saves it twice.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "batch_id": {
+            "description": "The batch's id, from list_batches.",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "client_id": {
+            "description": "Your own id for this create (8-64 letters, digits, -). Sent again, it finds the first one instead of adding a second.",
+            "pattern": "^[A-Za-z0-9-]{8,64}$",
+            "type": "string"
+          },
+          "image": {
+            "description": "The image's key in the batch (batch_status or get_batch: key).",
+            "type": "string"
+          },
+          "row": {
+            "description": "The row as save_result takes it: the 'row' a trace_click or detect_image candidate gives, or your own numbers (app/models/ais.py RESULT_NUMBERS).",
+            "type": "object"
+          }
+        },
+        "required": [
+          "batch_id",
+          "image",
+          "row"
+        ],
+        "type": "object"
+      },
+      "name": "save_result",
+      "route": "POST /api/ais/results",
+      "title": "Save an AIS"
+    },
+    {
+      "adminOnly": false,
+      "annotations": {
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false,
+        "title": "Change an AIS"
+      },
+      "description": "An accepted AIS traced again: it keeps its number and origin. Whoever accepted it, the image's assignee, or an admin.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "expect": {
+            "description": "The rev you last saw (optional). If someone changed it since, the call is refused with the current one.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "result_id": {
+            "description": "The result's id, from list_results.",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "row": {
+            "description": "The row as save_result takes it: the 'row' a trace_click or detect_image candidate gives, or your own numbers (app/models/ais.py RESULT_NUMBERS).",
+            "type": "object"
+          }
+        },
+        "required": [
+          "result_id",
+          "row"
+        ],
+        "type": "object"
+      },
+      "name": "update_result",
+      "route": "POST /api/ais/results/{result_id}/update",
+      "title": "Change an AIS"
+    },
+    {
+      "adminOnly": false,
+      "annotations": {
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false,
+        "title": "Set an AIS's soma distance"
+      },
+      "description": "soma: {soma_um, soma_px, soma_ais_x, soma_ais_y, soma_x, soma_y}, or null to clear it. The trace stays as it is.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "expect": {
+            "description": "The rev you last saw (optional). If someone changed it since, the call is refused with the current one.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "result_id": {
+            "description": "The result's id, from list_results.",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "soma": {
+            "type": [
+              "object",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "result_id",
+          "soma"
+        ],
+        "type": "object"
+      },
+      "name": "set_result_soma",
+      "route": "POST /api/ais/results/{result_id}/soma",
+      "title": "Set an AIS's soma distance"
+    },
+    {
+      "adminOnly": false,
+      "annotations": {
+        "destructiveHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false,
+        "title": "Delete an AIS"
+      },
+      "description": "One accepted AIS gone; the image's others renumbered. Whoever accepted it, the image's assignee, or an admin. Cannot be undone.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "expect": {
+            "description": "The rev you last saw (optional). If someone changed it since, the call is refused with the current one.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "result_id": {
+            "description": "The result's id, from list_results.",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "result_id"
+        ],
+        "type": "object"
+      },
+      "name": "delete_result",
+      "route": "POST /api/ais/results/{result_id}/delete",
+      "title": "Delete an AIS"
+    },
+    {
+      "adminOnly": false,
+      "annotations": {
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false,
+        "title": "Record a line"
+      },
+      "description": "A line measured on an image (the Measure tool's Record).",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "batch_id": {
+            "description": "The batch's id, from list_batches.",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "client_id": {
+            "description": "Your own id for this create (8-64 letters, digits, -). Sent again, it finds the first one instead of adding a second.",
+            "pattern": "^[A-Za-z0-9-]{8,64}$",
+            "type": "string"
+          },
+          "image": {
+            "description": "The image's key in the batch (batch_status or get_batch: key).",
+            "type": "string"
+          },
+          "measurement": {
+            "description": "{a_x, a_y, b_x, b_y, length_px, length_um, pixconv, label?, type?}: a line's ends in MATLAB axes and its length.",
+            "type": "object"
+          }
+        },
+        "required": [
+          "batch_id",
+          "image",
+          "measurement"
+        ],
+        "type": "object"
+      },
+      "name": "add_measurement",
+      "route": "POST /api/ais/measurements",
+      "title": "Record a line"
+    },
+    {
+      "adminOnly": false,
+      "annotations": {
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false,
+        "title": "Change a recorded line"
+      },
+      "description": "Its new ends, length, label and type.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "expect": {
+            "description": "The rev you last saw (optional). If someone changed it since, the call is refused with the current one.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "measurement": {
+            "description": "{a_x, a_y, b_x, b_y, length_px, length_um, pixconv, label?, type?}: a line's ends in MATLAB axes and its length.",
+            "type": "object"
+          },
+          "measurement_id": {
+            "description": "The recorded line's id, from list_measurements.",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "measurement_id",
+          "measurement"
+        ],
+        "type": "object"
+      },
+      "name": "update_measurement",
+      "route": "POST /api/ais/measurements/{measurement_id}/update",
+      "title": "Change a recorded line"
+    },
+    {
+      "adminOnly": false,
+      "annotations": {
+        "destructiveHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false,
+        "title": "Delete a recorded line"
+      },
+      "description": "Cannot be undone.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "expect": {
+            "description": "The rev you last saw (optional). If someone changed it since, the call is refused with the current one.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "measurement_id": {
+            "description": "The recorded line's id, from list_measurements.",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "measurement_id"
+        ],
+        "type": "object"
+      },
+      "name": "delete_measurement",
+      "route": "POST /api/ais/measurements/{measurement_id}/delete",
+      "title": "Delete a recorded line"
+    },
+    {
+      "adminOnly": true,
+      "annotations": {
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false,
+        "title": "Set measurement types (admin)"
+      },
+      "description": "The team's new list of types: names.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "types": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "types"
+        ],
+        "type": "object"
+      },
+      "name": "set_measure_types",
+      "route": "POST /api/ais/measure-types",
+      "title": "Set measurement types (admin)"
+    },
+    {
+      "adminOnly": true,
+      "annotations": {
+        "destructiveHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false,
+        "title": "Delete a batch's auto AIS (admin)"
+      },
+      "description": "Deletes every AIS auto mode saved on the batch (the rest renumbered) and the done marks of the images they were on, to run auto again. Cannot be undone; get_backup or export_report first.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "batch_id": {
+            "description": "The batch's id, from list_batches.",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "batch_id"
+        ],
+        "type": "object"
+      },
+      "name": "reset_batch_auto",
+      "route": "POST /api/ais/batches/{batch_id}/reset",
+      "title": "Delete a batch's auto AIS (admin)"
+    },
+    {
+      "adminOnly": false,
+      "annotations": {
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": true,
+        "title": "Auto mode defaults"
+      },
+      "description": "What an auto run or detect_image uses unless told otherwise, and what may be set: general (methods, filters), settings (the method's), threshold, engines, z_methods.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      },
+      "name": "auto_defaults",
+      "route": "GET /api/ais/auto/defaults",
+      "title": "Auto mode defaults"
+    },
+    {
+      "adminOnly": false,
+      "annotations": {
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false,
+        "title": "Start an auto run"
+      },
+      "description": "Auto mode over a whole batch, run by the server: every included image (less the complete ones unless skip_done: false), each AIS the filters keep saved straight to the batch, as the browser's review 'all'. Answers at once; follow it with get_auto_run. mark_done also marks each image done. images: only these keys.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "batch_id": {
+            "description": "The batch's id, from list_batches.",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "engine": {
+            "description": "fast: Settings' Method 'ais_auto.m (fast)', the same answer, sooner.",
+            "enum": [
+              "fast",
+              null
+            ],
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "general": {
+            "description": "Settings' general auto mode fields (see auto_defaults), e.g. {auto_method: 'fitted', fitted_min_length: 13}. Left out: the defaults.",
+            "type": "object"
+          },
+          "images": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "mark_done": {
+            "type": "boolean"
+          },
+          "settings": {
+            "description": "The method settings (see auto_defaults: settings), e.g. {pixconv: 0.161}. Left out: the defaults.",
+            "type": "object"
+          },
+          "skip_done": {
+            "type": "boolean"
+          },
+          "threshold": {
+            "description": "Default 0.01 (0 = Otsu).",
+            "maximum": 1,
+            "minimum": 0,
+            "type": "number"
+          }
+        },
+        "required": [
+          "batch_id"
+        ],
+        "type": "object"
+      },
+      "name": "start_auto_run",
+      "route": "POST /api/ais/batches/{batch_id}/auto",
+      "title": "Start an auto run"
+    },
+    {
+      "adminOnly": false,
+      "annotations": {
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": true,
+        "title": "Auto run status"
+      },
+      "description": "How far a run has got: state (queued, running, finished, stopped, failed), done/total images, found, hidden, saved, errors per image.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "run_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id"
+        ],
+        "type": "object"
+      },
+      "name": "get_auto_run",
+      "route": "GET /api/ais/auto/{run_id}",
+      "title": "Auto run status"
+    },
+    {
+      "adminOnly": false,
+      "annotations": {
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": true,
+        "title": "List auto runs"
+      },
+      "description": "The server's auto runs since it started, newest first; batch_id narrows them.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "batch_id": {
+            "description": "The batch's id, from list_batches.",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "name": "list_auto_runs",
+      "route": "GET /api/ais/auto",
+      "title": "List auto runs"
+    },
+    {
+      "adminOnly": false,
+      "annotations": {
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false,
+        "title": "Stop an auto run"
+      },
+      "description": "Stops after the image it is on; what it saved stays. Whoever started it, or an admin.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "run_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id"
+        ],
+        "type": "object"
+      },
+      "name": "cancel_auto_run",
+      "route": "POST /api/ais/auto/{run_id}/cancel",
+      "title": "Stop an auto run"
+    },
+    {
+      "adminOnly": false,
+      "annotations": {
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": true,
+        "title": "Export a report as JSON"
+      },
+      "description": "The Batches screen's report (report.xlsx) as JSON sheets -- summary, images, assignees, ais, measurements, measurement_types, and for admins original_names, by_treatment, statistics -- each {columns, rows}. batch: one id, several separated by commas, or all. Left-out images only with everything. unblind (admins): blinded images under their original names. sheets narrows it to those.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "batch": {
+            "description": "A batch id, ids separated by commas, or all.",
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "everything": {
+            "type": "boolean"
+          },
+          "sheets": {
+            "description": "Sheet names separated by commas.",
+            "type": "string"
+          },
+          "unblind": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "batch"
+        ],
+        "type": "object"
+      },
+      "name": "export_report",
+      "route": "GET /api/ais/report",
+      "title": "Export a report as JSON"
+    },
+    {
+      "adminOnly": true,
+      "annotations": {
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": true,
+        "title": "Compare batches by treatment (admin)"
+      },
+      "description": "The comparison export (comparison.xlsx) as JSON: per measure the culture means, the treatment summary, every test with Holm-corrected p and stars, all values and original names, each sheet {columns, rows}; plus the raw groups, pooled, stats. Two batches or more (one culture each) for the tests between cultures. tests: anova, tukey, welch, dunnett, paired, unpaired, ks; units: culture means, image means, individual values (every one when left out). plots: true adds the box and cumulative plots as SVG.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "batch_ids": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "labels": {
+            "description": "{measure id: name} for the plots' titles.",
+            "type": "object"
+          },
+          "plots": {
+            "type": "boolean"
+          },
+          "tests": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "units": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "batch_ids"
+        ],
+        "type": "object"
+      },
+      "name": "compare_batches",
+      "route": "POST /api/ais/compare",
+      "title": "Compare batches by treatment (admin)"
+    },
+    {
+      "adminOnly": false,
+      "annotations": {
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": true,
+        "title": "How to upload files"
+      },
+      "description": "Image bytes do not go through MCP: POST each file's raw bytes to the url given, with your API key (Content-Type: application/octet-stream). With batch_id, also the files that batch still needs (sha, name, rel, image).",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "batch_id": {
+            "description": "A batch: also list the files it still needs.",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "name": "upload_instructions",
+      "route": "POST /api/ais/files",
+      "title": "How to upload files"
+    },
+    {
+      "adminOnly": false,
+      "annotations": {
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": true,
+        "title": "Which files the server has"
+      },
+      "description": "For each sha-256, whether the server already holds that file (so it need not be uploaded again).",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "shas": {
+            "description": "sha-256s, lower-case hex.",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 10000,
+            "type": "array"
+          }
+        },
+        "required": [
+          "shas"
+        ],
+        "type": "object"
+      },
+      "name": "files_stored",
+      "route": "POST /api/ais/files",
+      "title": "Which files the server has"
+    },
+    {
+      "adminOnly": false,
+      "annotations": {
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": true,
+        "title": "Look at an image"
+      },
+      "description": "An image as PNG: the processed view the Process screen traces on (view), a thumbnail (thumb), or a .czi's channels together (composite).",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "description": "view (default): the processed image as the Process screen shows it; thumb: small; composite: a .czi's channels together.",
+            "enum": [
+              "view",
+              "thumb",
+              "composite"
+            ],
+            "type": "string"
+          },
+          "sha": {
+            "description": "The file's sha (get_batch: images[].files[role].sha).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sha"
+        ],
+        "type": "object"
+      },
+      "name": "get_image",
+      "route": "GET /api/ais/files/{sha}/view.png",
+      "title": "Look at an image"
+    },
+    {
+      "adminOnly": false,
+      "annotations": {
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": true,
+        "title": "Trace an AIS from a click"
+      },
+      "description": "What a click on the Process screen does: the AIS traced from that point, with the row to save (save_result) when it worked. Uses the auto_defaults settings unless given.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "batch_id": {
+            "description": "The batch's id, from list_batches.",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "click": {
+            "description": "[x, y] in MATLAB axes: x = column, y = row, pixel centres at 1..n.",
+            "items": {
+              "type": "number"
+            },
+            "maxItems": 2,
+            "minItems": 2,
+            "type": "array"
+          },
+          "click2": {
+            "description": "The second click after re-thresholding; default the first again.",
+            "items": {
+              "type": "number"
+            },
+            "maxItems": 2,
+            "minItems": 2,
+            "type": "array"
+          },
+          "engine": {
+            "description": "fast: Settings' Method 'ais_auto.m (fast)', the same answer, sooner.",
+            "enum": [
+              "fast",
+              null
+            ],
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "image": {
+            "description": "The image's key in the batch (batch_status or get_batch: key).",
+            "type": "string"
+          },
+          "settings": {
+            "description": "The method settings (see auto_defaults: settings), e.g. {pixconv: 0.161}. Left out: the defaults.",
+            "type": "object"
+          },
+          "threshold": {
+            "description": "Default 0.01 (0 = Otsu).",
+            "maximum": 1,
+            "minimum": 0,
+            "type": "number"
+          },
+          "z_method": {
+            "description": "A Z-stack's method (default trace_lift).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "batch_id",
+          "image",
+          "click"
+        ],
+        "type": "object"
+      },
+      "name": "trace_click",
+      "route": "POST /api/ais/trace",
+      "title": "Trace an AIS from a click"
+    },
+    {
+      "adminOnly": false,
+      "annotations": {
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": true,
+        "title": "Find AIS on one image"
+      },
+      "description": "Auto mode on one image without saving: every candidate the filters keep (include_hidden: the rest too), each with passes and the row save_result takes -- so you can review and save them yourself. The image's saved AIS are left out of the search.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "batch_id": {
+            "description": "The batch's id, from list_batches.",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "engine": {
+            "description": "fast: Settings' Method 'ais_auto.m (fast)', the same answer, sooner.",
+            "enum": [
+              "fast",
+              null
+            ],
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "general": {
+            "description": "Settings' general auto mode fields (see auto_defaults), e.g. {auto_method: 'fitted', fitted_min_length: 13}. Left out: the defaults.",
+            "type": "object"
+          },
+          "image": {
+            "description": "The image's key in the batch (batch_status or get_batch: key).",
+            "type": "string"
+          },
+          "include_hidden": {
+            "description": "Also list the candidates the filters leave out (default false).",
+            "type": "boolean"
+          },
+          "settings": {
+            "description": "The method settings (see auto_defaults: settings), e.g. {pixconv: 0.161}. Left out: the defaults.",
+            "type": "object"
+          },
+          "threshold": {
+            "description": "Default 0.01 (0 = Otsu).",
+            "maximum": 1,
+            "minimum": 0,
+            "type": "number"
+          },
+          "verbose": {
+            "description": "Keep each candidate's whole trace data (path, spline, profile, component). Default false.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "batch_id",
+          "image"
+        ],
+        "type": "object"
+      },
+      "name": "detect_image",
+      "route": "POST /api/ais/detect",
+      "title": "Find AIS on one image"
+    }
+  ],
+  "transport": "Streamable HTTP, stateless: one JSON-RPC message per POST, a JSON reply"
+}

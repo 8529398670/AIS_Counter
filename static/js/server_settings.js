@@ -42,7 +42,7 @@ const ServerSettings = {
       event.preventDefault();
       await this.save();
     } );
-    Dom.get( "server-settings-reload" ).addEventListener( "click" , () => this.onReload() );
+    Dom.onPress( Dom.get( "server-settings-reload" ) , () => this.onReload() );
     Dom.get( "server-settings-filter" ).addEventListener( "input" , () => this.applyFilter() );
     window.addEventListener( "beforeunload" , ( event ) => {
       if ( this.changes().count > 0 ) event.preventDefault();
