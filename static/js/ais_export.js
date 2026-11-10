@@ -18,6 +18,10 @@ const AisExport = {
   // What a row measured on a Z-stack adds, at the end so nothing else moves,
   // and only when there are such rows (colsFor).
   zCols: [ "length_3d_um" , "length_xy_um" , "z_start" , "z_end" , "z_span_um" , "z_step_um" , "z_confidence" , "z_clipped" , "z_method" ],
+  // The auto mode settings a row auto mode saved was found with (ais_auto.js
+  // autoFields), after those, and only when there are such rows (colsFor).
+  autoCols: [ "auto_method" , "auto_review" , "auto_start" , "auto_min_length" , "auto_min_length_shown" ,
+    "auto_min_brightness" , "auto_min_contrast" , "auto_min_width" , "auto_max_soma_gap" , "auto_max_branchiness" , "auto_min_score" ],
   // A line the Measure tool recorded (Record): its own file and sheet, since it
   // is no AIS and an image may have them without having any AIS.
   measureCols: [ "batch_name" , "batch_id" , "image" , "n" , "type" , "label" , "length_um" , "length_px" , "a_x" , "a_y" , "b_x" , "b_y" ,
@@ -191,7 +195,9 @@ const AisExport = {
   },
 
   colsFor( rows ) {
-    return rows.some( ( row ) => row.z_method ) ? this.cols.concat( this.zCols ) : this.cols;
+    let cols = rows.some( ( row ) => row.z_method ) ? this.cols.concat( this.zCols ) : this.cols;
+    if ( rows.some( ( row ) => row.auto_method ) ) cols = cols.concat( this.autoCols );
+    return cols;
   },
 
   csv( rows ) {

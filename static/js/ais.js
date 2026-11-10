@@ -2075,6 +2075,9 @@ const Ais = {
       .forEach( ( k ) => { if ( k in current ) local[ k ] = current[ k ]; } );
     // An edit drops the soma distance on the server (the start may move).
     [ "soma_um" , "soma_px" , "soma_ais_x" , "soma_ais_y" , "soma_x" , "soma_y" , "soma_at" , "soma_by" ].forEach( ( k ) => delete local[ k ] );
+    // How auto mode found it stays too (app/models/ais.py update_result).
+    Object.keys( local ).forEach( ( k ) => { if ( k.startsWith( "auto_" ) ) delete local[ k ]; } );
+    AisExport.autoCols.forEach( ( k ) => { if ( k in current ) local[ k ] = current[ k ]; } );
     Object.assign( local , { origin: current.origin || "" , edited_at: new Date().toISOString() , edited_by: this.me ? this.me.id : null } );
     this.swapRow( current , local );
     Outbox.add( { kind: "update" , bucket: "results" , key: this.rowKey( current ) , path: "/api/ais/results/{id}/update" ,

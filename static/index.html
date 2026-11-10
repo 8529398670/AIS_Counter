@@ -220,10 +220,93 @@
               <button id="ais-images-open" class="btn btn-outline-secondary ais-focus-hide" type="button" disabled>
                 <i class="bi bi-grid-3x3-gap" aria-hidden="true"></i> <span data-i18n="ais.images"></span> <span id="ais-images-count" class="badge text-bg-secondary"></span>
               </button>
-              <!-- Auto mode (static/js/ais_auto.js): every AIS on every image, as Settings > Auto mode says. -->
-              <button id="ais-auto-start" class="btn btn-outline-primary ais-focus-hide" type="button" disabled data-i18n-attr="title:ais.auto_start_help">
-                <i class="bi bi-magic" aria-hidden="true"></i> <span data-i18n="ais.auto"></span>
-              </button>
+              <!-- Auto mode (static/js/ais_auto.js): every AIS on every image. Its arrow has every
+                   Settings > Auto mode setting (the same saved values, data-auto-field) and Start. -->
+              <div class="btn-group ais-focus-hide">
+                <button id="ais-auto-start" class="btn btn-outline-primary" type="button" disabled data-i18n-attr="title:ais.auto_start_help">
+                  <i class="bi bi-magic" aria-hidden="true"></i> <span data-i18n="ais.auto"></span>
+                </button>
+                <button id="ais-auto-menu" class="btn btn-outline-primary dropdown-toggle dropdown-toggle-split" type="button" disabled data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false" data-i18n-attr="title:ais.auto_options,aria-label:ais.auto_options"></button>
+                <div id="ais-auto-menu-body" class="dropdown-menu p-3 small ais-auto-menu">
+                  <label class="d-block mb-2"><span data-i18n="settings.auto_review_label"></span>
+                    <select class="form-select form-select-sm" data-auto-field="auto_review">
+                      <option value="each" data-i18n="settings.auto_review_each"></option>
+                      <option value="end" data-i18n="settings.auto_review_end"></option>
+                      <option value="all" data-i18n="settings.auto_review_all"></option>
+                    </select>
+                  </label>
+                  <label class="d-block mb-2"><span data-i18n="settings.auto_method_label"></span>
+                    <select class="form-select form-select-sm" data-auto-field="auto_method">
+                      <option value="classic" data-i18n="settings.auto_method_classic"></option>
+                      <option value="fitted" data-i18n="settings.auto_method_fitted"></option>
+                      <option value="fitted2" data-i18n="settings.auto_method_fitted2"></option>
+                      <option value="learned" data-i18n="settings.auto_method_learned"></option>
+                    </select>
+                  </label>
+                  <div class="ais-auto-menu-fields" data-auto-method="classic" hidden>
+                    <label><span data-i18n="settings.auto_start_label"></span>
+                      <select class="form-select form-select-sm" data-auto-field="auto_start">
+                        <option value="soma" data-i18n="settings.auto_start_soma"></option>
+                        <option value="both" data-i18n="settings.auto_start_both"></option>
+                        <option value="brighter" data-i18n="settings.auto_start_brighter"></option>
+                        <option value="dimmer" data-i18n="settings.auto_start_dimmer"></option>
+                      </select>
+                    </label>
+                    <label><span data-i18n="settings.auto_min_length_label"></span>
+                      <span class="input-group input-group-sm"><input class="form-control" type="number" min="0" max="1000" step="0.1" data-auto-field="auto_min_length" /><span class="input-group-text">µm</span></span></label>
+                    <label><span data-i18n="settings.auto_min_brightness_label"></span>
+                      <span class="input-group input-group-sm"><input class="form-control" type="number" min="0" max="100" step="1" data-auto-field="auto_min_brightness" /><span class="input-group-text">%</span></span></label>
+                    <label><span data-i18n="settings.auto_min_width_label"></span>
+                      <span class="input-group input-group-sm"><input class="form-control" type="number" min="0" max="20" step="0.1" data-auto-field="auto_min_width" /><span class="input-group-text">µm</span></span></label>
+                    <label><span data-i18n="settings.auto_max_soma_gap_label"></span>
+                      <span class="input-group input-group-sm"><input class="form-control" type="number" min="0" max="100" step="0.5" data-auto-field="auto_max_soma_gap" /><span class="input-group-text">µm</span></span></label>
+                  </div>
+                  <div class="ais-auto-menu-fields" data-auto-method="fitted" hidden>
+                    <label><span data-i18n="settings.fitted_min_length_label"></span>
+                      <span class="input-group input-group-sm"><input class="form-control" type="number" min="0" max="1000" step="0.1" data-auto-field="fitted_min_length" /><span class="input-group-text">µm</span></span></label>
+                    <label><span data-i18n="settings.fitted_min_brightness_label"></span>
+                      <span class="input-group input-group-sm"><input class="form-control" type="number" min="0" max="100" step="1" data-auto-field="fitted_min_brightness" /><span class="input-group-text">%</span></span></label>
+                    <label><span data-i18n="settings.fitted_max_branchiness_label"></span>
+                      <input class="form-control form-control-sm" type="number" min="0" max="10" step="0.01" data-auto-field="fitted_max_branchiness" /></label>
+                  </div>
+                  <div class="ais-auto-menu-fields" data-auto-method="fitted2" hidden>
+                    <label><span data-i18n="settings.fitted_min_length_label"></span>
+                      <span class="input-group input-group-sm"><input class="form-control" type="number" min="0" max="1000" step="0.1" data-auto-field="fitted2_min_length" /><span class="input-group-text">µm</span></span></label>
+                    <label><span data-i18n="settings.fitted2_min_contrast_label"></span>
+                      <span class="input-group input-group-sm"><input class="form-control" type="number" min="0" max="100" step="1" data-auto-field="fitted2_min_contrast" /><span class="input-group-text">%</span></span></label>
+                    <label><span data-i18n="settings.fitted_min_brightness_label"></span>
+                      <span class="input-group input-group-sm"><input class="form-control" type="number" min="0" max="100" step="1" data-auto-field="fitted2_min_brightness" /><span class="input-group-text">%</span></span></label>
+                    <label><span data-i18n="settings.fitted_max_branchiness_label"></span>
+                      <input class="form-control form-control-sm" type="number" min="0" max="10" step="0.01" data-auto-field="fitted2_max_branchiness" /></label>
+                  </div>
+                  <div class="ais-auto-menu-fields" data-auto-method="learned" hidden>
+                    <label><span data-i18n="settings.learned_min_score_label"></span>
+                      <span class="input-group input-group-sm"><input class="form-control" type="number" min="0" max="100" step="1" data-auto-field="learned_min_score" /><span class="input-group-text">%</span></span></label>
+                    <label><span data-i18n="settings.fitted_min_length_label"></span>
+                      <span class="input-group input-group-sm"><input class="form-control" type="number" min="0" max="1000" step="0.1" data-auto-field="learned_min_length" /><span class="input-group-text">µm</span></span></label>
+                  </div>
+                  <div class="form-check form-switch mt-2"><input class="form-check-input" type="checkbox" id="ais-auto-menu-skip-done" data-auto-field="auto_skip_done" /><label class="form-check-label" for="ais-auto-menu-skip-done" data-i18n="settings.auto_skip_done_label"></label></div>
+                  <p id="ais-auto-menu-running" class="text-body-secondary mt-2 mb-0" data-i18n="ais.auto_menu_running" hidden></p>
+                  <button id="ais-auto-menu-start" class="btn btn-primary btn-sm w-100 mt-2" type="button"><i class="bi bi-play-fill" aria-hidden="true"></i> <span data-i18n="ais.auto_menu_start"></span></button>
+                  <!-- Reset auto results: the image shown (anyone; undoable, like the Delete tool), or the
+                       whole batch (admins; as Batches > Reset results > Auto AIS only). Asked first. -->
+                  <div id="ais-auto-menu-reset-box" hidden>
+                    <hr class="my-2" />
+                    <div class="mb-1" data-i18n="ais.auto_reset_heading"></div>
+                    <div id="ais-auto-menu-reset-buttons" class="d-flex gap-2">
+                      <button id="ais-auto-menu-reset-image" class="btn btn-outline-danger btn-sm flex-fill" type="button"><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i> <span id="ais-auto-menu-reset-image-text"></span></button>
+                      <button id="ais-auto-menu-reset-batch" class="btn btn-outline-danger btn-sm flex-fill" type="button"><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i> <span id="ais-auto-menu-reset-batch-text"></span></button>
+                    </div>
+                    <div id="ais-auto-menu-reset-confirm" hidden>
+                      <p id="ais-auto-menu-reset-question" class="text-danger-emphasis mb-2"></p>
+                      <div class="d-flex gap-2">
+                        <button id="ais-auto-menu-reset-yes" class="btn btn-danger btn-sm flex-fill" type="button" data-i18n="ais.auto_reset_yes"></button>
+                        <button id="ais-auto-menu-reset-no" class="btn btn-outline-secondary btn-sm flex-fill" type="button" data-i18n="ais.cancel"></button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
               <button id="ais-auto-review" class="btn btn-outline-secondary ais-focus-hide" type="button" hidden data-i18n-attr="title:ais.auto_review_help">
                 <i class="bi bi-list-check" aria-hidden="true"></i> <span data-i18n="ais.auto_review"></span> <span id="ais-auto-review-count" class="badge text-bg-secondary"></span>
               </button>

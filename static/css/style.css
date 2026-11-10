@@ -569,6 +569,10 @@ th[aria-sort="descending"] .th-sort::after { content: " \2193"; }
 /* Measure (static/js/ais_measure.js): the toolbar button while on, its options, and the loupe beside the pointer. */
 #ais-measure.active { background: rgb(200, 40, 170); color: #fff; border-color: rgb(200, 40, 170); }
 .ais-measure-menu { min-width: 17rem; }
+/* The Auto arrow's settings (ais_auto.js renderMenu): one method's fields at a time. */
+.ais-auto-menu { width: 20rem; max-height: 80vh; overflow-y: auto; }
+.ais-auto-menu-fields { display: grid; gap: 0.5rem; }
+.ais-auto-menu-fields[hidden] { display: none; }
 .ais-measure-list { display: flex; flex-direction: column; gap: 0.25rem; max-height: 16rem; overflow-y: auto; }
 .ais-measure-line { display: flex; align-items: center; gap: 0.4rem; }
 .ais-measure-line .form-control { flex: 1 1 0; min-width: 0; }

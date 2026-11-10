@@ -61,6 +61,111 @@ const AisAuto = {
     Object.keys( Object.assign( {} , this.quick , this.quickFitted , this.quickFitted2 , this.quickLearned ) ).forEach( ( id ) => {
       Dom.get( id ).addEventListener( "change" , ( e ) => this.setQuick( this.quickFields()[ id ] , e.target ) );
     } );
+    Dom.get( "ais-auto-menu-body" ).addEventListener( "change" , ( e ) => this.setMenu( e.target ) );
+    Dom.get( "ais-auto-menu-start" ).addEventListener( "click" , () => {
+      bootstrap.Dropdown.getOrCreateInstance( Dom.get( "ais-auto-menu" ) ).hide();
+      this.start();
+    } );
+    const ask = ( scope ) => { this.resetAsking = scope; this.renderMenu(); };
+    Dom.get( "ais-auto-menu-reset-image" ).addEventListener( "click" , () => ask( "image" ) );
+    Dom.get( "ais-auto-menu-reset-batch" ).addEventListener( "click" , () => ask( "batch" ) );
+    Dom.get( "ais-auto-menu-reset-no" ).addEventListener( "click" , () => ask( null ) );
+    Dom.get( "ais-auto-menu-reset-yes" ).addEventListener( "click" , () => this.resetAuto( this.resetAsking ) );
+    Dom.get( "ais-auto-menu" ).addEventListener( "hidden.bs.dropdown" , () => ask( null ) );
+    Settings.onChange( () => this.renderMenu() );
+    this.renderMenu();
+  },
+
+  // The AIS auto mode saved in this batch (any image, whoever saved them),
+  // or (image) on the image shown.
+  autoRows( image ) {
+    if ( !Ais.batch ) return [];
+    const entry = image ? Ais.images[ Ais.index ] : null;
+    if ( image && !entry ) return [];
+    return ( Ais.batchRows || [] ).filter( ( row ) => row.origin === "auto" && ( !entry || row.image === entry.key ) );
+  },
+
+  // Reset auto results. "image": the image shown's auto AIS deleted one by
+  // one, as the Delete tool does (so Undo brings them back), and the image
+  // unmarked done. "batch" (admins; POST .../reset is admins-only): the
+  // server deletes the batch's auto AIS and their images' done marks, as
+  // Batches > Reset results > Auto AIS only does; edits still queued go
+  // first so none lands after it, then the batch is loaded again.
+  async resetAuto( scope ) {
+    const batch = Ais.batch;
+    if ( !batch || this.run || this.resetBusy || !scope ) return;
+    this.resetBusy = true;
+    this.renderMenu();
+    let text;
+    try {
+      if ( scope === "image" ) {
+        const entry = Ais.images[ Ais.index ];
+        const rows = this.autoRows( true );
+        for ( const row of rows ) await Ais.deleteRow( row );
+        if ( entry && Ais.isMarkedDone( entry ) ) Ais.setDone( entry , false );
+        text = I18n.get( "ais.auto_reset_image_done" ).replace( "{n}" , rows.length );
+      } else {
+        await Outbox.settled( 10000 );
+        const out = await Api.post( "/api/ais/batches/" + batch.id + "/reset" , { scope: "auto" } );
+        text = I18n.get( "ais.auto_reset_done" ).replace( "{n}" , out.deleted );
+        if ( Ais.batch && Ais.batch.id === batch.id ) {
+          Ais.batchChanged( out.batch , true );   // marks it stale: loaded again
+          await Ais.followUrlNow();
+        }
+      }
+    } catch ( error ) {
+      App.showError( error.message );
+      return;
+    } finally {
+      this.resetBusy = false;
+      this.resetAsking = null;
+      this.renderMenu();
+    }
+    bootstrap.Dropdown.getOrCreateInstance( Dom.get( "ais-auto-menu" ) ).hide();
+    Ais.renderTable();
+    Ais.renderPicker();
+    Ais.draw();
+    // The batch loaded again clears the image's note, so that one is a toast.
+    if ( scope === "batch" ) Dom.toast( text );
+    else Ais.status( text , true );
+  },
+
+  renderMenu() {
+    const menu = Dom.get( "ais-auto-menu-body" );
+    Dom.all( "[data-auto-field]" , menu ).forEach( ( control ) => {
+      if ( document.activeElement === control ) return;
+      const value = Settings.values[ control.getAttribute( "data-auto-field" ) ];
+      if ( control.type === "checkbox" ) control.checked = value;
+      else control.value = value;
+    } );
+    // A run keeps the method it started with: its fields are the ones shown.
+    const method = this.run && this.run.params ? this.run.params.method : Settings.autoMethod();
+    Dom.all( "[data-auto-method]" , menu ).forEach( ( group ) => {
+      Dom.show( group , group.getAttribute( "data-auto-method" ) === method );
+    } );
+    const running = Boolean( this.run );
+    Dom.all( "[data-auto-field=auto_review], [data-auto-field=auto_method]" , menu ).forEach( ( c ) => { c.disabled = running; } );
+    Dom.show( Dom.get( "ais-auto-menu-running" ) , running );
+    Dom.get( "ais-auto-menu-start" ).disabled = running || Dom.get( "ais-auto-start" ).disabled;
+    // Reset auto results: the image shown (anyone) or the whole batch
+    // (admins), when no run is on and there is something to delete; asked first.
+    const onImage = this.autoRows( true ).length;
+    const inBatch = this.autoRows( false ).length;
+    const admin = Boolean( Ais.me && Ais.me.role === "admin" );
+    Dom.show( Dom.get( "ais-auto-menu-reset-box" ) , Boolean( Ais.batch ) );
+    Dom.show( Dom.get( "ais-auto-menu-reset-batch" ) , admin );
+    const n = this.resetAsking === "image" ? onImage : inBatch;
+    const asking = Boolean( this.resetAsking ) && n > 0 && !running;
+    Dom.text( Dom.get( "ais-auto-menu-reset-image-text" ) , I18n.get( "ais.auto_reset_image" ).replace( "{n}" , onImage ) );
+    Dom.text( Dom.get( "ais-auto-menu-reset-batch-text" ) , I18n.get( "ais.auto_reset_batch" ).replace( "{n}" , inBatch ) );
+    Dom.get( "ais-auto-menu-reset-image" ).disabled = running || !onImage || Boolean( this.resetBusy );
+    Dom.get( "ais-auto-menu-reset-batch" ).disabled = running || !inBatch || Boolean( this.resetBusy );
+    Dom.show( Dom.get( "ais-auto-menu-reset-buttons" ) , !asking );
+    Dom.show( Dom.get( "ais-auto-menu-reset-confirm" ) , asking );
+    Dom.text( Dom.get( "ais-auto-menu-reset-question" ) ,
+      I18n.get( this.resetAsking === "image" ? "ais.auto_reset_image_question" : "ais.auto_reset_batch_question" ).replace( "{n}" , n ) );
+    Dom.text( Dom.get( "ais-auto-menu-reset-yes" ) , I18n.get( "ais.auto_reset_yes" ).replace( "{n}" , n ) );
+    Dom.get( "ais-auto-menu-reset-yes" ).disabled = Boolean( this.resetBusy );
   },
 
   // The panel's quick settings: control id -> Settings field, per method
@@ -86,6 +191,8 @@ const AisAuto = {
     if ( this.phase === "confirm" || this.phase === "review" ) this.render();
     const ready = Boolean( Ais.batch && Ais.included().length );
     Dom.get( "ais-auto-start" ).disabled = !ready || Boolean( this.run );
+    Dom.get( "ais-auto-menu" ).disabled = !ready;
+    this.renderMenu();
     const left = ready ? this.unreviewed() : [];
     Dom.show( Dom.get( "ais-auto-review" ) , !this.run && left.length > 0 );
     Dom.text( Dom.get( "ais-auto-review-count" ) , String( left.length ) );
@@ -296,6 +403,26 @@ const AisAuto = {
     return !( params.score && ( c.filter ? c.filter.score : 0 ) < params.score );
   },
 
+  // What a row auto saves records of how it was found (app/models/ais.py
+  // AUTO_NUMBERS / AUTO_TEXTS, AisExport.autoCols): the run's checking and
+  // method, the start end used on this image, and the filters as they are at
+  // the moment it is saved (the panel can change them mid-run), in Settings'
+  // units (µm, %, ratio). Only the method's own filters; 0 is off.
+  autoFields( run , entry ) {
+    const p = run.params;
+    const out = { auto_method: p.method , auto_review: run.mode , auto_start: this.startFor( entry , p.start ) };
+    const pct = ( v ) => Math.round( v * 10000 ) / 100;
+    out.auto_min_length = p.min || 0;
+    if ( "minShown" in p ) out.auto_min_length_shown = p.minShown || 0;
+    if ( "brightness" in p ) out.auto_min_brightness = pct( p.brightness || 0 );
+    if ( "contrast" in p ) out.auto_min_contrast = pct( p.contrast || 0 );
+    if ( "width" in p ) out.auto_min_width = p.width || 0;
+    if ( "somaGap" in p ) out.auto_max_soma_gap = p.somaGap || 0;
+    if ( "branchiness" in p ) out.auto_max_branchiness = p.branchiness || 0;
+    if ( "score" in p ) out.auto_min_score = pct( p.score || 0 );
+    return out;
+  },
+
   // Whether this run (else Settings) uses method "fitted" or "fitted2".
   fitted() {
     const params = this.run && this.run.params;
@@ -360,7 +487,7 @@ const AisAuto = {
         run.found += out.candidates.length;
         run.hidden += out.hidden;
         for ( const c of out.candidates ) {
-          await Ais.saveRow( entry , Ais.rowFor( entry , c , "auto" ) );
+          await Ais.saveRow( entry , Object.assign( Ais.rowFor( entry , c , "auto" ) , this.autoFields( run , entry ) ) );
           run.saved += 1;
         }
       } catch ( error ) {
@@ -425,7 +552,7 @@ const AisAuto = {
     try {
       if ( this.phase === "confirm" ) {
         for ( const c of this.candidates.filter( ( x ) => x.on ) ) {
-          await Ais.saveRow( entry , Ais.rowFor( entry , c.result , "auto" ) );
+          await Ais.saveRow( entry , Object.assign( Ais.rowFor( entry , c.result , "auto" ) , this.autoFields( run , entry ) ) );
           run.saved += 1;
           this.candidates = this.candidates.filter( ( x ) => x !== c );   // never saved twice
           this.pool = this.pool.filter( ( x ) => x !== c );

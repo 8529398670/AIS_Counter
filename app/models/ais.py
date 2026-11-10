@@ -117,6 +117,14 @@ MAX_TYPES = 50
 # from RESULT_NUMBERS so a row on an ordinary image stays exactly as it was:
 # these are written only when present. z_clipped is 0 or 1.
 Z_NUMBERS = ("length_3d_um", "length_xy_um", "z_start", "z_end", "z_span_um", "z_step_um", "z_confidence", "z_clipped")
+# The auto mode settings a row auto mode saved was found with (static/js/
+# ais_auto.js autoFields): its checking (each / end / all), method and start
+# end, then the method's filters in Settings' units (µm, %, ratio; 0 is off).
+# Like Z_NUMBERS, written only when present, so a clicked row is unchanged;
+# an edit keeps them, as it keeps origin.
+AUTO_TEXTS = ("auto_method", "auto_review", "auto_start")
+AUTO_NUMBERS = ("auto_min_length", "auto_min_length_shown", "auto_min_brightness", "auto_min_contrast",
+                "auto_min_width", "auto_max_soma_gap", "auto_max_branchiness", "auto_min_score")
 
 
 class BatchError(ValueError):
@@ -1375,7 +1383,23 @@ def clean_row(row: Any) -> dict[str, Any]:
                        for p in pixels)):
         raise BatchError("pixels must be [x, y] pairs")
     out["pixels"] = pixels
-    return out | _clean_z(row, len(pixels))
+    return out | _clean_z(row, len(pixels)) | _clean_auto(row)
+
+
+def _clean_auto(row: dict[str, Any]) -> dict[str, Any]:
+    """A row's auto mode settings, only those it has: nothing on a click."""
+    out: dict[str, Any] = {}
+    for k in AUTO_TEXTS:
+        v = row.get(k)
+        if v is not None and v != "":
+            out[k] = _text(v, k)
+    for k in AUTO_NUMBERS:
+        v = row.get(k)
+        if v is not None:
+            if not isinstance(v, (int, float)) or isinstance(v, bool) or not math.isfinite(v):
+                raise BatchError(f"{k} must be a number")
+            out[k] = v
+    return out
 
 
 def _clean_z(row: dict[str, Any], pixels: int) -> dict[str, Any]:
@@ -1495,6 +1519,9 @@ def update_result(store: Store, result_id: int, row: Any, user_id: int, expect: 
         kept = {k: record[k] for k in ("id", "batch_id", "batch_name", "image", "cell", "n", "created_by", "accepted_at")}
         if "client_id" in record:
             kept["client_id"] = record["client_id"]
+        # How auto mode found it stays with it: the edit is a new trace, not a new find.
+        clean = {k: v for k, v in clean.items() if k not in AUTO_TEXTS + AUTO_NUMBERS}
+        kept |= {k: record[k] for k in AUTO_TEXTS + AUTO_NUMBERS if k in record}
         record = clean | kept | {"origin": record.get("origin", ""), "edited_at": to_iso(utc_now()), "edited_by": user_id,
                                  "rev": record.get("rev", 0) + 1}
         tx.put(BUCKET_AIS_RESULTS, result_id, record)

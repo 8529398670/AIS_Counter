@@ -1127,6 +1127,31 @@ def test_a_bad_z_field_is_refused(change):
         ais.clean_row({"pixels": [[1, 2], [3, 4]]} | change)
 
 
+AUTO = {"auto_method": "fitted2", "auto_review": "each", "auto_start": "fitted2", "auto_min_length": 13,
+        "auto_min_length_shown": 0, "auto_min_contrast": 30, "auto_min_brightness": 0, "auto_max_branchiness": 1.02}
+
+
+def test_a_clicked_row_gets_no_auto_fields():
+    row = ais.clean_row({"length_um": 3.0, "pixels": [[1, 2]]})
+    assert not set(row) & {*ais.AUTO_NUMBERS, *ais.AUTO_TEXTS}
+
+
+def test_a_rows_auto_settings_are_kept_and_survive_an_edit(store):
+    batch = ais.create_batch(store, "f", "upload", files(("f/a" + P, "a")), 1)
+    found = ais.add_result(store, batch["id"], "a", row() | {"origin": "auto"} | AUTO, 1)
+    assert {k: found[k] for k in AUTO} == AUTO
+    assert ais.clean_row(ais.clean_row(row() | AUTO)) == ais.clean_row(row() | AUTO)
+    edited = ais.update_result(store, found["id"], row(2.0) | {"auto_method": "classic"}, 2)
+    assert {k: edited[k] for k in AUTO} == AUTO and edited["length_um"] == 2.0
+
+
+@pytest.mark.parametrize("change", [{"auto_min_score": "25"}, {"auto_min_length": True},
+                                    {"auto_max_soma_gap": float("nan")}, {"auto_method": 3}])
+def test_a_bad_auto_field_is_refused(change):
+    with pytest.raises(ais.BatchError):
+        ais.clean_row({"pixels": [[1, 2]]} | change)
+
+
 def test_the_same_client_id_twice_is_one_row(store):
     batch = ais.create_batch(store, "f", "upload", files(("f/a" + P, "a")), 1)
     first = ais.add_result(store, batch["id"], "a", row(), 1, client_id="row-0001-aaaa")
