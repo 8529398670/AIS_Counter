@@ -22,6 +22,10 @@ treatment, needing 2 cultures per treatment), image means (one per image)
 and individual values (every AIS or line) -- each a one-way ANOVA over every
 treatment followed by every pair compared three ways: Tukey HSD, Welch
 t-tests with Holm's correction, and Dunnett against the control (_control).
+Then a two-way ANOVA per unit (Type III, so unequal groups are fine), its
+factors picked per export: drug x add-on (from the names: the first drug,
+and what was added to it) or treatment x culture; each followed by its
+simple effects, Holm-corrected t-tests on the two-way error.
 The main block (rows flagged main) is culture means when it can be worked
 out, else image means, else individual values; image means and individual
 values are not independent cultures, so their p-values run low. After them
@@ -299,14 +303,209 @@ def _pairwise(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [r | {"p_holm": _p(a) if a is not None else None} for r, a in zip(rows, adjusted)]
 
 
+# --- the two-way ANOVA -----------------------------------------------------------
+
+DRUG_ADDON, TREATMENT_CULTURE = "drug x add-on", "treatment x culture"
+DESIGNS = (DRUG_ADDON, TREATMENT_CULTURE)
+
+
+def _effect_columns(level: np.ndarray, count: int) -> np.ndarray:
+    """Sum-to-zero (effect) coding: count - 1 columns, the last level -1 in each."""
+    cols = np.zeros((level.size, count - 1))
+    for i in range(count - 1):
+        cols[:, i] = (level == i).astype(float) - (level == count - 1).astype(float)
+    return cols
+
+
+def _design_matrix(a: np.ndarray, b: np.ndarray, na: int, nb: int,
+                   interaction: bool) -> tuple[np.ndarray, dict[str, slice]]:
+    """Intercept, A, B (and A x B) in effect coding, and each term's columns."""
+    ca, cb = _effect_columns(a, na), _effect_columns(b, nb)
+    parts = [np.ones((a.size, 1)), ca, cb]
+    if interaction:
+        parts.append(np.column_stack([ca[:, i] * cb[:, j] for i in range(na - 1) for j in range(nb - 1)])
+                     if na > 1 and nb > 1 else np.zeros((a.size, 0)))
+    X = np.hstack(parts)
+    terms = {"a": slice(1, na), "b": slice(na, na + nb - 1)}
+    if interaction:
+        terms["ab"] = slice(na + nb - 1, X.shape[1])
+    return X, terms
+
+
+def _rss(X: np.ndarray, y: np.ndarray) -> float:
+    beta = np.linalg.lstsq(X, y, rcond=None)[0]
+    return float(((y - X @ beta) ** 2).sum())
+
+
+def two_way_anova(y: Any, a: Any, b: Any, na: int, nb: int, interaction: bool = True) -> dict[str, Any] | str:
+    """Two-way ANOVA with Type III sums of squares (effect coding), so
+    unequal group sizes are fine. y: the values; a, b: each value's level
+    index (0..na-1, 0..nb-1). Returns {terms: {a, b, ab?: (SS, df, F, p)},
+    mse, df, beta, cov (the coefficients' covariance), interaction}, or a
+    reason it cannot be worked out: a level or (with interaction) a cell
+    with no values, or no residual degrees of freedom left."""
+    y, a, b = np.asarray(y, dtype=float), np.asarray(a, dtype=int), np.asarray(b, dtype=int)
+    if na < 2 or nb < 2:
+        return "needs 2 levels of each factor"
+    if interaction and any(not np.any((a == i) & (b == j)) for i in range(na) for j in range(nb)):
+        return "needs a value in every combination of the two factors"
+    if any(not np.any(a == i) for i in range(na)) or any(not np.any(b == j) for j in range(nb)):
+        return "needs a value at every level of each factor"
+    X, terms = _design_matrix(a, b, na, nb, interaction)
+    if np.linalg.matrix_rank(X) < X.shape[1]:
+        return "the groups do not make a full grid"
+    df_e = y.size - X.shape[1]
+    if df_e < 1:
+        return "no degrees of freedom left for the error"
+    beta = np.linalg.lstsq(X, y, rcond=None)[0]
+    rss = float(((y - X @ beta) ** 2).sum())
+    mse = rss / df_e
+    if mse <= 1e-12 * max(1.0, float(np.var(y))):
+        return "no variation within the groups"
+    out: dict[str, tuple[float, int, float, float]] = {}
+    for name, cols in terms.items():
+        keep = [c for c in range(X.shape[1]) if not (cols.start <= c < cols.stop)]
+        ss = max(_rss(X[:, keep], y) - rss, 0.0)
+        df = cols.stop - cols.start
+        f = (ss / df) / mse
+        out[name] = (ss, df, f, float(sps.f.sf(f, df, df_e)))
+    return {"terms": out, "mse": mse, "df": df_e, "beta": beta,
+            "cov": mse * np.linalg.inv(X.T @ X), "interaction": interaction, "na": na, "nb": nb}
+
+
+def _cell_row(fit: dict[str, Any], i: int, j: int) -> np.ndarray:
+    """The design row of level i of A and level j of B: its fitted mean is row @ beta."""
+    X, _ = _design_matrix(np.array([i]), np.array([j]), fit["na"], fit["nb"], fit["interaction"])
+    return X[0]
+
+
+def _contrast(fit: dict[str, Any], c: np.ndarray) -> tuple[float | None, float | None]:
+    """A t-test of c @ beta = 0 on the fit's error: (t, two-sided p)."""
+    se = math.sqrt(float(c @ fit["cov"] @ c))
+    if se <= 0:
+        return None, None
+    t = float(c @ fit["beta"]) / se
+    return t, float(2 * sps.t.sf(abs(t), fit["df"]))
+
+
+def _drug_addon(treatments: list[str]) -> tuple[dict[str, tuple[str, str]], list[str], list[str]] | str:
+    """Each treatment's (drug, add-on) from its name (drugs()): the first
+    drug and the ones added after it ("none" when bare), with the levels in
+    the plots' order (layout(): the control's drug first, then none, NaCl,
+    KCl). A reason instead when two treatments land in one cell."""
+    cell: dict[str, tuple[str, str]] = {}
+    seen: dict[tuple[str, str], str] = {}
+    spelled: dict[str, str] = {}
+    for t in layout(treatments)["order"]:
+        parsed = drugs(t) or [t]
+        drug = spelled.setdefault(parsed[0].casefold(), parsed[0])
+        addon = "+".join(parsed[1:])
+        addon = spelled.setdefault("+" + addon.casefold(), addon) if addon else "none"
+        if (drug.casefold(), addon.casefold()) in seen:
+            return f"{seen[(drug.casefold(), addon.casefold())]} and {t} are the same drug and add-on"
+        seen[(drug.casefold(), addon.casefold())] = t
+        cell[t] = (drug, addon)
+    drugs_ = list(dict.fromkeys(d for d, _ in cell.values()))
+    addons = list(dict.fromkeys(a for _, a in cell.values()))
+    addons.sort(key=lambda a: a != "none")
+    return cell, drugs_, addons
+
+
+def _two_way_block(measure: str, unit: str, data: list[tuple[str, int, float]], design: str,
+                   names: dict[int, str], main: bool) -> list[dict[str, Any]]:
+    """One unit's two-way ANOVA rows (family "twoway"): the two factors and
+    their interaction, then the simple effects, Holm-corrected together, as
+    t-tests on the model's error. data: (treatment, batch id, value).
+    drug x add-on: every add-on pair within each drug and every drug pair at
+    each add-on. treatment x culture: every treatment pair, adjusted for
+    culture; on culture means there is one value per cell, so no
+    interaction."""
+    unit_note = UNIT_NOTES[unit]
+    total = len(data)
+    treatments = sorted({t for t, _, _ in data}, key=str.casefold)
+
+    def refused(why: str) -> list[dict[str, Any]]:
+        return [_row(measure, unit, "two-way ANOVA", "all", total, note=why, main=main, family="twoway")]
+
+    if design == DRUG_ADDON:
+        split = _drug_addon(treatments)
+        if isinstance(split, str):
+            return refused(split)
+        cell, a_levels, b_levels = split
+        a_name, b_name = "drug", "add-on"
+        a_of = {t: a_levels.index(cell[t][0]) for t in treatments}
+        b_of = {t: b_levels.index(cell[t][1]) for t in treatments}
+        a = [a_of[t] for t, _, _ in data]
+        b = [b_of[t] for t, _, _ in data]
+        interaction = True
+    else:
+        lay = layout(treatments)["order"]
+        cultures = sorted({c for _, c, _ in data}, key=lambda c: _natural(names.get(c, str(c))))
+        a_levels, b_levels = lay, [names.get(c, str(c)) for c in cultures]
+        a_name, b_name = "treatment", "culture"
+        a = [lay.index(t) for t, _, _ in data]
+        b = [cultures.index(c) for _, c, _ in data]
+        # One culture mean per culture per treatment leaves nothing for an interaction.
+        interaction = unit != "culture means"
+    fit = two_way_anova([v for _, _, v in data], a, b, len(a_levels), len(b_levels), interaction)
+    if isinstance(fit, str):
+        return refused(fit)
+    rows = []
+    label = {"a": a_name, "b": b_name, "ab": f"{a_name} × {b_name}"}
+    for key, (_, df, f, p) in fit["terms"].items():
+        extra = "" if interaction else "; no interaction (one value per culture per treatment)"
+        rows.append(_row(measure, unit, f"two-way ANOVA: {label[key]}", "all", total, f, p,
+                         f"F({df}, {fit['df']}); Type III; {unit_note}{extra}", main, "twoway"))
+    sizes = {t: sum(1 for u, _, _ in data if u == t) for t in treatments}
+    simple = []
+    if design == DRUG_ADDON:
+        named = {(a_of[t], b_of[t]): t for t in treatments}
+        for i, drug in enumerate(a_levels):
+            for j, k in itertools.combinations(range(len(b_levels)), 2):
+                simple.append(((i, j), (i, k), f"within {drug}"))
+        for j, addon in enumerate(b_levels):
+            for i, k in itertools.combinations(range(len(a_levels)), 2):
+                simple.append(((i, j), (k, j), f"at {addon}"))
+        for one, two, where in simple:
+            t1, t2 = named[one], named[two]
+            stat, p = _contrast(fit, _cell_row(fit, *one) - _cell_row(fit, *two))
+            rows.append(_row(measure, unit, "simple effect (Holm)", f"{t1} vs {t2}", sizes[t1] + sizes[t2],
+                             stat, p, f"{where}; t on the two-way error, df {fit['df']}", main, "twoway"))
+    else:
+        nb = len(b_levels)
+        marginal = [sum(_cell_row(fit, i, j) for j in range(nb)) / nb for i in range(len(a_levels))]
+        for i, k in itertools.combinations(range(len(a_levels)), 2):
+            stat, p = _contrast(fit, marginal[i] - marginal[k])
+            rows.append(_row(measure, unit, "simple effect (Holm)", f"{a_levels[i]} vs {a_levels[k]}",
+                             sizes[a_levels[i]] + sizes[a_levels[k]], stat, p,
+                             f"adjusted for culture; t on the two-way error, df {fit['df']}", main, "twoway"))
+    terms = [r for r in rows if r["test"] != "simple effect (Holm)"]
+    return terms + _pairwise([r for r in rows if r["test"] == "simple effect (Holm)"])
+
+
+def _two_way_data(values: list[dict[str, Any]], measure: str, unit: str) -> list[tuple[str, int, float]]:
+    """(treatment, batch id, value) per culture mean, image mean or value of one measure."""
+    mine = [v for v in values if v["measure"] == measure and v["treatment"]]
+    if unit == "individual values":
+        return [(v["treatment"], v["batch_id"], v["value"]) for v in mine]
+    key = (lambda v: (v["treatment"], v["batch_id"])) if unit == "culture means" else \
+        (lambda v: (v["treatment"], v["batch_id"], v["image"]))
+    sums: dict[tuple, list[float]] = {}
+    for v in mine:
+        sums.setdefault(key(v), []).append(v["value"])
+    return [(k[0], k[1], float(np.mean(vs))) for k, vs in sums.items()]
+
+
 def tests_for(values: list[dict[str, Any]], measure: str, names: dict[int, str],
-              units: tuple[str, ...] | list[str] = ()) -> dict[str, Any]:
+              units: tuple[str, ...] | list[str] = (), design: str = DRUG_ADDON) -> dict[str, Any]:
     """Every test of one measure's treatments: {rows (the three ANOVA
     blocks, main first, then the others), dropped (the cultures left out of
     the paired tests: missing a treatment), brackets (the culture means'
     Tukey HSD p per pair, for the box plot)}. units: the ANOVA blocks to
     pick the main one from (every unit when empty); all three are worked
-    out regardless, for the box plot's brackets."""
+    out regardless, for the box plot's brackets. After the one-way blocks
+    come the two-way ANOVA blocks, one per unit, in the same order
+    (_two_way_block; design: DESIGNS)."""
     means = culture_means(values, measure)
     treatments = sorted({t for by in means.values() for t in by}, key=str.casefold)
     k = len(treatments)
@@ -320,6 +519,9 @@ def tests_for(values: list[dict[str, Any]], measure: str, names: dict[int, str],
     main = next((d for d, g in candidates if all(len(g[t]) >= 2 for t in treatments)), candidates[-1][0])
     blocks = {d: _anova_block(measure, d, g, d == main) for d, g in blocks_in}
     anova_rows = blocks[main] + [r for d, _ in blocks_in if d != main for r in blocks[d]]
+    two_way = {d: _two_way_block(measure, d, _two_way_data(values, measure, d), design, names, d == main)
+               for d, _ in blocks_in}
+    anova_rows += two_way[main] + [r for d, _ in blocks_in if d != main for r in two_way[d]]
     brackets: dict[tuple[str, str], float | None] = {}
     for r in blocks["culture means"]:
         if r["test"] == "Tukey HSD":
@@ -719,8 +921,8 @@ def cdf_plot(measure_name: str, each: dict[str, list[float]], lay: dict[str, Any
 # --- all of it -------------------------------------------------------------------
 
 
-TESTS = ("anova", "tukey", "welch", "dunnett", "paired", "unpaired", "ks")
-BLOCK_TESTS = ("anova", "tukey", "welch", "dunnett")   # the ANOVA blocks' tests, run per unit
+TESTS = ("anova", "tukey", "welch", "dunnett", "twoway", "paired", "unpaired", "ks")
+BLOCK_TESTS = ("anova", "tukey", "welch", "dunnett", "twoway")   # the ANOVA blocks' tests, run per unit
 UNITS = ("culture means", "image means", "individual values")
 
 
@@ -739,7 +941,8 @@ def _chosen(row: dict[str, Any], tests: tuple[str, ...], units: tuple[str, ...])
     return row["family"] not in BLOCK_TESTS or row["design"] in units
 
 
-def compare(store: Store, batch_ids: Any, labels: Any = None, tests: Any = None, units: Any = None) -> dict[str, Any]:
+def compare(store: Store, batch_ids: Any, labels: Any = None, tests: Any = None, units: Any = None,
+            design: Any = None) -> dict[str, Any]:
     """The batches' values grouped by treatment: {measures, treatments,
     images, values, groups, pooled, stats, dropped, plots}. With one batch
     the stats are the ANOVA blocks and the KS tests (the culture means'
@@ -748,12 +951,16 @@ def compare(store: Store, batch_ids: Any, labels: Any = None, tests: Any = None,
     name} for the plots' titles. tests (TESTS) and units (UNITS): which
     stats rows to keep, every one when None; units narrows the ANOVA
     blocks only (paired and unpaired are on culture means, KS on individual
-    values). The plots do not depend on them."""
+    values). design (DESIGNS): the two-way ANOVA's factors, drug x add-on
+    when None. The plots do not depend on them."""
     if not isinstance(batch_ids, list) or not batch_ids or len(batch_ids) > 200 or \
             not all(isinstance(b, int) and not isinstance(b, bool) for b in batch_ids):
         raise CompareError("batch_ids must be a list of batch ids")
     tests = _choice(tests, TESTS, "tests")
     units = _choice(units, UNITS, "units")
+    design = DRUG_ADDON if design is None else design
+    if design not in DESIGNS:
+        raise CompareError(f"design must be one of: {', '.join(DESIGNS)}")
     if not units and any(t in BLOCK_TESTS for t in tests):
         raise CompareError("the ANOVA tests need at least one unit")
     batch_ids = list(dict.fromkeys(batch_ids))
@@ -769,7 +976,7 @@ def compare(store: Store, batch_ids: Any, labels: Any = None, tests: Any = None,
         batch = batches.get_batch(store, b)
         batch_names[b] = batch["name"] if batch else str(b)
     for measure in out["measures"]:
-        tested = tests_for(values, measure, batch_names, units)
+        tested = tests_for(values, measure, batch_names, units, design)
         rows = [r for r in tested["rows"] if _chosen(r, tests, units)]
         if not several:
             # One culture: the paired and unpaired culture-mean tests have nothing to work on.

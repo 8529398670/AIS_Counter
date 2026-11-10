@@ -8404,7 +8404,7 @@
             "apiKey": []
           }
         ],
-        "description": "Body: {batch_ids, labels?, tests?, units?, sheets?, plots?}: the batches' measurements grouped by treatment, and with two or more, tested and plotted (admins: it has the original names and treatments). sheets: true adds comparison.xlsx's sheets as JSON ({columns, rows} each) and then keeps the SVG plots only with plots: true. See app/analysis/compare.py and report.py.",
+        "description": "Body: {batch_ids, labels?, tests?, units?, design?, sheets?, plots?}: the batches' measurements grouped by treatment, and with two or more, tested and plotted (admins: it has the original names and treatments). sheets: true adds comparison.xlsx's sheets as JSON ({columns, rows} each) and then keeps the SVG plots only with plots: true. See app/analysis/compare.py and report.py.",
         "x-required-role": "admin",
         "requestBody": {
           "required": false,

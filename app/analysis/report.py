@@ -219,10 +219,10 @@ def compare_sheets(out: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 
 def comparison(store: Any, batch_ids: Any, labels: Any = None, tests: Any = None, units: Any = None,
-               plots: bool = False) -> dict[str, Any]:
+               plots: bool = False, design: Any = None) -> dict[str, Any]:
     """compare.compare with its sheets, and the SVG plots only when asked
     (they are most of the answer's size)."""
-    out = compare.compare(store, batch_ids, labels, tests, units)
+    out = compare.compare(store, batch_ids, labels, tests, units, design)
     result = {k: v for k, v in out.items() if k != "plots"} | {"sheets": compare_sheets(out)}
     if plots:
         result["plots"] = out["plots"]

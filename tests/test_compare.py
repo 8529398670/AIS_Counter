@@ -156,7 +156,7 @@ def test_values_are_grouped_by_treatment_and_measures_never_mix(store):
     assert groups[("DMSO", "ais_length")] == (2, 15.0) and groups[("TTX", "ais_length")] == (1, 5.0)
     assert groups[("DMSO", "ais_soma")] == (1, 3.0) and groups[("DMSO", "type:Soma distance")] == (1, 7.0)
     # One batch, TTX with one value: every ANOVA block says why it could not run; no plots.
-    length = [r for r in out["stats"] if r["measure"] == "ais_length" and not r["test"].startswith("Kolmogorov")]
+    length = [r for r in out["stats"] if r["measure"] == "ais_length" and r["family"] not in ("ks", "twoway")]
     assert [(r["design"], r["test"]) for r in length] == [
         ("individual values", "one-way ANOVA"), ("culture means", "one-way ANOVA"), ("image means", "one-way ANOVA")]
     assert all(r["p"] is None for r in length) and out["plots"] == []
@@ -462,3 +462,116 @@ def test_everyone_reads_the_measure_types_and_admins_set_them(h):
         (200, {"types": ["Nodes", "Soma distance"]})
     assert call(h, "POST", "/api/ais/measure-types", admin, types=[])[0] == 400
     assert call(h, "GET", "/api/ais/measure-types", ann)[1]["types"] == ["Nodes", "Soma distance"]
+
+
+# --- the two-way ANOVA ----------------------------------------------------------------
+
+
+# An unbalanced 2 x 3 design (3/5/4 and 6/2/4 values per cell), checked against
+# statsmodels' anova_lm(ols("y ~ C(a, Sum) * C(b, Sum)"), typ=3).
+TWO_WAY_Y = [2.040919, -2.555665, 0.418099, -0.26777, -0.152649, 0.084403, -1.719986, 0.068068, -0.265213, 3.923,
+             0.825787, 0.247369, 0.418713, 0.031954, -0.355151, 0.309199, 1.181945, 0.461446, 1.957759, 0.800198,
+             2.52426, 4.045821, 3.045106, 1.994771]
+TWO_WAY_A = [0] * 12 + [1] * 12
+TWO_WAY_B = [0] * 3 + [1] * 5 + [2] * 4 + [0] * 6 + [1] * 2 + [2] * 4
+
+
+def test_two_way_anova_matches_type_iii_on_unequal_groups():
+    fit = compare.two_way_anova(TWO_WAY_Y, TWO_WAY_A, TWO_WAY_B, 2, 3)
+    assert fit["df"] == 18
+    for key, (ss, df, f, p) in {"a": (8.809421, 1, 5.658240, 0.028650), "b": (15.814791, 2, 5.078875, 0.017827),
+                                "ab": (2.373021, 2, 0.762089, 0.481169)}.items():
+        got = fit["terms"][key]
+        assert got[0] == pytest.approx(ss, abs=1e-5) and got[1] == df
+        assert got[2] == pytest.approx(f, abs=1e-5) and got[3] == pytest.approx(p, abs=1e-5)
+
+
+def test_two_way_anova_without_interaction_matches_the_additive_model():
+    fit = compare.two_way_anova(TWO_WAY_Y, TWO_WAY_A, TWO_WAY_B, 2, 3, interaction=False)
+    assert set(fit["terms"]) == {"a", "b"} and fit["df"] == 20
+    assert fit["terms"]["a"][2] == pytest.approx(5.480719, abs=1e-5)
+    assert fit["terms"]["b"][2] == pytest.approx(6.308151, abs=1e-5)
+
+
+def test_two_way_anova_balanced_matches_the_textbook_sums():
+    rng = np.random.default_rng(1)
+    a = np.repeat(np.arange(2), 12)
+    b = np.tile(np.repeat(np.arange(3), 4), 2)
+    y = rng.normal(size=24) + a + (b == 2)
+    fit = compare.two_way_anova(y, a, b, 2, 3)
+    g = y.mean()
+    ss_a = 12 * sum((y[a == i].mean() - g) ** 2 for i in range(2))
+    ss_b = 8 * sum((y[b == j].mean() - g) ** 2 for j in range(3))
+    assert fit["terms"]["a"][0] == pytest.approx(ss_a)
+    assert fit["terms"]["b"][0] == pytest.approx(ss_b)
+
+
+def test_two_way_anova_refuses_an_empty_cell():
+    assert compare.two_way_anova([1, 2, 3, 4], [0, 0, 1, 1], [0, 1, 0, 0], 2, 2) == \
+        "needs a value in every combination of the two factors"
+
+
+def test_drug_and_add_on_come_from_the_names_control_first():
+    cell, drugs, addons = compare._drug_addon(["TM 24Hr KCl 3Hr", "DMSO 24Hr", "TM 24Hr", "DMSO 24Hr NaCl 3Hr",
+                                               "DMSO 24Hr KCl 3Hr", "TM 24Hr NaCl 3Hr"])
+    assert drugs == ["DMSO", "TM"] and addons == ["none", "NaCl", "KCl"]
+    assert cell["TM 24Hr KCl 3Hr"] == ("TM", "KCl") and cell["DMSO 24Hr"] == ("DMSO", "none")
+    assert "same drug and add-on" in compare._drug_addon(["DMSO 24Hr", "DMSO 48Hr", "TM"])
+
+
+GRID = {"DMSO": 40.0, "DMSO+NaCl": 40.5, "DMSO+KCl": 36.0, "TM": 38.0, "TM+NaCl": 38.5, "TM+KCl": 30.0}
+
+
+def _grid_cultures(store, count=3):
+    # Each culture a little off in its own way per treatment, so the culture means are not purely additive.
+    jitter = lambda c, i: ((c * 7 + i * 3) % 5 - 2) * 0.3   # noqa: E731
+    return [culture(store, f"C{c}", {t: [m + c - 1 + jitter(c, i), m + c + 1 + jitter(c, i)]
+                                     for i, (t, m) in enumerate(GRID.items())})["id"] for c in range(count)]
+
+
+def test_drug_x_add_on_gives_the_factors_and_simple_effects(store):
+    ids = _grid_cultures(store)
+    out = compare.compare(store, ids, tests=["twoway"], units=["culture means"])
+    rows = [r for r in out["stats"] if r["measure"] == compare.AIS_LENGTH]
+    tests = [r["test"] for r in rows]
+    assert tests[:3] == ["two-way ANOVA: drug", "two-way ANOVA: add-on", "two-way ANOVA: drug × add-on"]
+    assert all(r["family"] == "twoway" and r["main"] for r in rows)
+    assert rows[2]["note"].startswith("F(2, 12); Type III")
+    simple = {r["groups"]: r for r in rows[3:]}
+    # 3 add-on pairs within each of 2 drugs, 1 drug pair at each of 3 add-ons.
+    assert len(simple) == 9 and all(r["p_holm"] is not None for r in simple.values())
+    assert simple["TM+NaCl vs TM+KCl"]["note"].startswith("within TM")
+    assert simple["DMSO+KCl vs TM+KCl"]["note"].startswith("at KCl")
+    assert simple["TM+NaCl vs TM+KCl"]["p_holm"] < 0.05
+
+
+def test_treatment_x_culture_has_no_interaction_on_culture_means(store):
+    ids = _grid_cultures(store)
+    out = compare.compare(store, ids, tests=["twoway"], design="treatment x culture")
+    by_unit = {}
+    for r in out["stats"]:
+        if r["measure"] == compare.AIS_LENGTH and not r["test"].startswith("simple"):
+            by_unit.setdefault(r["design"], []).append(r["test"])
+    assert by_unit["culture means"] == ["two-way ANOVA: treatment", "two-way ANOVA: culture"]
+    assert by_unit["individual values"][-1] == "two-way ANOVA: treatment × culture"
+    # Additive on culture means: the treatment F is the repeated-measures ANOVA's.
+    means = compare.culture_means(compare.collect(store, ids)["values"], compare.AIS_LENGTH)
+    order = compare.layout(sorted(GRID, key=str.casefold))["order"]
+    rm = compare.rm_anova(np.array([[means[b][t] for t in order] for b in ids]))
+    first = next(r for r in out["stats"] if r["design"] == "culture means" and r["test"] == "two-way ANOVA: treatment")
+    assert first["statistic"] == pytest.approx(rm[0], rel=1e-4)
+
+
+def test_twoway_says_why_when_the_names_do_not_make_a_grid(store):
+    ids = _three_cultures(store)   # DMSO, TTX, KCl: three drugs, no add-ons
+    out = compare.compare(store, ids, tests=["twoway"], units=["culture means"])
+    rows = [r for r in out["stats"] if r["measure"] == compare.AIS_LENGTH]
+    assert [(r["test"], r["note"]) for r in rows] == [("two-way ANOVA", "needs 2 levels of each factor")]
+
+
+def test_leaving_out_twoway_keeps_the_other_rows_and_a_bad_design_is_refused(store):
+    ids = _three_cultures(store)
+    without = compare.compare(store, ids, tests=[t for t in compare.TESTS if t != "twoway"])
+    assert [r for r in compare.compare(store, ids)["stats"] if r["family"] != "twoway"] == without["stats"]
+    with pytest.raises(compare.CompareError):
+        compare.compare(store, ids, design="drug")

@@ -30,7 +30,7 @@ const Compare = {
     return name || I18n.get( "treatments.none" );
   },
 
-  // choice: { tests, units } from choose(); without one the server runs
+  // choice: { tests, units, design } from choose(); without one the server runs
   // every test (a batch report's Statistics sheet).
   fetch( list , choice ) {
     return Api.post( "/api/ais/compare" , Object.assign( { batch_ids: list.map( ( b ) => b.id ) , labels: this.labels() } , choice || {} ) );
@@ -38,13 +38,15 @@ const Compare = {
 
   // --- the dialog: which stats to compute (app/analysis/compare.py TESTS, UNITS) ---
 
-  TESTS: [ "anova" , "tukey" , "welch" , "dunnett" , "paired" , "unpaired" , "ks" ],
-  BLOCK_TESTS: [ "anova" , "tukey" , "welch" , "dunnett" ],
+  TESTS: [ "anova" , "tukey" , "welch" , "dunnett" , "twoway" , "paired" , "unpaired" , "ks" ],
+  BLOCK_TESTS: [ "anova" , "tukey" , "welch" , "dunnett" , "twoway" ],
+  // The two-way ANOVA's factors (compare.py DESIGNS), the first picked when the dialog opens.
+  DESIGNS: [ "drug x add-on" , "treatment x culture" ],
   UNITS: [ "culture means" , "image means" , "individual values" ],
   // Ticked each time the dialog opens: the whole ANOVA blocks, on every unit.
-  DEFAULTS: [ "anova" , "tukey" , "welch" , "dunnett" , "culture means" , "image means" , "individual values" ],
+  DEFAULTS: [ "anova" , "tukey" , "welch" , "dunnett" , "twoway" , "culture means" , "image means" , "individual values" ],
   modal: null,
-  resolve: null,     // choose()'s promise: { tests, units }, or null when closed
+  resolve: null,     // choose()'s promise: { tests, units, design }, or null when closed
 
   init() {
     const element = Dom.get( "compare-modal" );
@@ -59,6 +61,12 @@ const Compare = {
     } ) );
     boxes( this.TESTS , "test" , "compare-tests" );
     boxes( this.UNITS , "unit" , "compare-units" );
+    Dom.get( "compare-designs" ).replaceChildren( ...this.DESIGNS.map( ( key ) => {
+      const id = "compare-design-" + key.replace( / /g , "-" );
+      return Dom.el( "div" , { class: "form-check" , children: [
+        Dom.el( "input" , { class: "form-check-input" , attrs: { type: "radio" , name: "compare-design" , id , "data-design": key } } ) ,
+        Dom.el( "label" , { class: "form-check-label" , attrs: { for: id } , text: I18n.get( "compare.twoway_" + key.replace( / /g , "_" ).replace( "-" , "" ) ) } ) ] } );
+    } ) );
     Dom.get( "compare-go" ).addEventListener( "click" , () => {
       const choice = this.picked();
       this.finish( choice );
@@ -68,7 +76,8 @@ const Compare = {
 
   picked() {
     const ticked = ( into ) => [ ...Dom.get( into ).querySelectorAll( "input:checked" ) ].map( ( b ) => b.dataset.key );
-    return { tests: ticked( "compare-tests" ) , units: ticked( "compare-units" ) };
+    const design = Dom.get( "compare-designs" ).querySelector( "input:checked" );
+    return { tests: ticked( "compare-tests" ) , units: ticked( "compare-units" ) , design: design ? design.dataset.design : this.DESIGNS[ 0 ] };
   },
 
   // The ANOVA tests need a unit; the units mean nothing without one of them.
@@ -79,10 +88,12 @@ const Compare = {
     Dom.get( "compare-go" ).disabled = stuck;
     Dom.show( Dom.get( "compare-need-unit" ) , stuck );
     Dom.get( "compare-units" ).querySelectorAll( "input" ).forEach( ( b ) => { b.disabled = !blocks; } );
+    Dom.get( "compare-designs" ).querySelectorAll( "input" ).forEach( ( b ) => { b.disabled = !tests.includes( "twoway" ); } );
   },
 
   choose() {
     Dom.get( "compare-modal" ).querySelectorAll( "input[data-key]" ).forEach( ( b ) => { b.checked = this.DEFAULTS.includes( b.dataset.key ); } );
+    Dom.get( "compare-designs" ).querySelectorAll( "input" ).forEach( ( b ) => { b.checked = b.dataset.design === this.DESIGNS[ 0 ]; } );
     this.check();
     this.modal.show();
     return new Promise( ( resolve ) => { this.resolve = resolve; } );

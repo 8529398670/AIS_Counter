@@ -732,10 +732,10 @@ async def batch_treatments_set(request: Request) -> Response:
 
 
 async def compare_batches(request: Request) -> Response:
-    """Body: {batch_ids, labels?, tests?, units?}: the batches' measurements
+    """Body: {batch_ids, labels?, tests?, units?, design?}: the batches' measurements
     grouped by treatment, and with two or more, tested and plotted (admins:
     it has the original names and treatments). tests/units pick the stats
-    rows (every one when left out). See app/analysis/compare.py."""
+    rows (every one when left out); design the two-way ANOVA's factors. See app/analysis/compare.py."""
     body, refused = await _body(request)
     if refused:
         return refused
@@ -748,10 +748,10 @@ async def compare_batches(request: Request) -> Response:
     try:
         if sheets:
             out = await run(report.comparison, get_store(request), body.get("batch_ids"), body.get("labels"),
-                            body.get("tests"), body.get("units"), plots)
+                            body.get("tests"), body.get("units"), plots, body.get("design"))
         else:
             out = await run(compare.compare, get_store(request), body.get("batch_ids"), body.get("labels"),
-                            body.get("tests"), body.get("units"))
+                            body.get("tests"), body.get("units"), body.get("design"))
     except compare.CompareError as exc:
         return bad_request(str(exc))
     return JSONResponse(out)
