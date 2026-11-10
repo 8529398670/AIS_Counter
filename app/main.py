@@ -21,6 +21,7 @@ from starlette.middleware import Middleware
 from starlette.middleware.body_limit import RequestBodyLimitMiddleware
 
 from app.analysis import matlab_jobs
+from app.analysis.auto_runner import AutoRuns
 from app.analysis.service import Library
 from app.models import ais as ais_batches
 from app.core import assets, bootstrap, config, config_live, db, graceful, housekeeping, jobs, language, logs, server_lock
@@ -129,6 +130,8 @@ def build_app(
     app.state.ais = Library(cfg.storage_dir, resolver, lambda sha: ais_batches.stack_for(store, sha))
     # Auto runs people report on each batch, for the Batches screen.
     app.state.ais_activity = ais_batches.Activity()
+    # Auto runs the server does itself, for agents and scripts (auto_runner.py).
+    app.state.ais_runs = AutoRuns(app.state.ais, store, app.state.ais_activity)
     # Runs on their way to someone's MATLAB helper.
     app.state.matlab_jobs = matlab_jobs.Jobs()
     # Reported to MCP clients as serverInfo.version.

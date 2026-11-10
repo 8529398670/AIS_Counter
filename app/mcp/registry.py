@@ -11,7 +11,9 @@ The defaults match the rest of the template:
   and those routes need a browser session (see RequireSession) so that
   revoking a leaked key really ends it, and so that a key can never erase what
   cannot be put back. A tool is a key-authenticated route; the same rule
-  applies.
+  applies. The one exception is the AIS app's own small deletes -- one
+  result, one recorded line, a batch's auto results -- which its REST routes
+  already let a key make (app/routes/mcp_tools_ais.py).
 - Mark the hints honestly. read_only and destructive become the spec's
   readOnlyHint / destructiveHint, which a client uses to decide whether to ask
   the person before calling. They are advice to the client, not protection --
@@ -33,8 +35,23 @@ class Refusal(Exception):
     """A tool saying no for a reason the caller should read -- "no such user",
     "the owner account cannot be disabled". It becomes a tool result with
     isError set, worded like the HTTP route's error, so the model sees why and
-    can try something else. Any other exception is logged and reported only as
-    "internal error"."""
+    can try something else. extra goes into that result beside the message,
+    as a 409's current state does in the HTTP answer. Any other exception is
+    logged and reported only as "internal error"."""
+
+    def __init__(self, message: str, extra: dict[str, Any] | None = None) -> None:
+        super().__init__(message)
+        self.extra = extra or {}
+
+
+@dataclass
+class Content:
+    """A tool result that is more than JSON: content is the spec's content
+    list as it stands (text, image), structured its structuredContent. A
+    tool returning a plain dict needs none of this."""
+
+    content: list[dict[str, Any]]
+    structured: dict[str, Any]
 
 
 class InvalidArguments(Exception):
@@ -81,12 +98,15 @@ class Call:
 class Tool:
     """One thing an agent can do through /mcp. call is synchronous -- it runs
     in a worker thread, so it may use the store directly -- and returns a
-    dict, which becomes both the text content and structuredContent."""
+    dict, which becomes both the text content and structuredContent. An
+    async call runs on the event loop instead, for a tool that awaits an
+    HTTP handler (app/routes/mcp_tools_ais.py), and must then keep to the
+    threadpool rule itself, as handlers do. Either may return Content."""
 
     name: str
     title: str
     description: str
-    call: Callable[[Call], dict[str, Any]]
+    call: Callable[[Call], Any]
     # The JSON Schema of the arguments object. None means it takes none.
     input_schema: dict[str, Any] | None = None
     read_only: bool = False

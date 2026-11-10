@@ -4,8 +4,11 @@ me_row, team_rows, set_disabled_checked, ... -- so the two doors answer the
 same way and refuse for the same reasons.
 
 What is deliberately missing: creating accounts, login links, invite links,
-PINs or keys, and deleting anything. Those routes need a browser session, and
-/mcp only takes API keys. See RequireSession for why.
+PINs or keys, and deleting accounts, batches or folders. Those routes need a
+browser session (or, for batches and folders, are kept to one on purpose),
+and /mcp only takes API keys. See RequireSession for why. The one kind of
+delete a tool may do is the AIS app's own: one result, one recorded line, a
+batch's auto results (mcp_tools_ais.py), each marked destructive.
 
 An app's own tools go in a new module in this package (mcp_tools_<feature>.py)
 with a register(registry) function called from build_registry below.
@@ -23,6 +26,7 @@ from app.routes.account import me_row
 from app.routes.admin import RuleRefusal, revoke_access_checked, set_disabled_checked, user_rows
 from app.routes.helpers import PAGE_DEFAULT, PAGE_LIMIT_MESSAGE, PAGE_MAX, PAGE_OFFSET_MESSAGE, page_body
 from app.routes.invite_links import invite_link_rows
+from app.routes import mcp_tools_ais
 from app.routes.team import team_rows
 
 USER_ID_SCHEMA = {"type": "integer", "minimum": 1, "description": "The account's id, from list_team or admin_list_users."}
@@ -165,4 +169,5 @@ def build_registry() -> Registry:
         admin_only=True,
         enabled=_invite_links_on,
     ))
+    mcp_tools_ais.register(registry)
     return registry

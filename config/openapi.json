@@ -8351,7 +8351,7 @@
             "apiKey": []
           }
         ],
-        "description": "Body: {batch_ids, labels?}: the batches' measurements grouped by treatment, and with two or more, tested and plotted (admins: it has the original names and treatments). See app/analysis/compare.py.",
+        "description": "Body: {batch_ids, labels?, tests?, units?, sheets?, plots?}: the batches' measurements grouped by treatment, and with two or more, tested and plotted (admins: it has the original names and treatments). sheets: true adds comparison.xlsx's sheets as JSON ({columns, rows} each) and then keeps the SVG plots only with plots: true. See app/analysis/compare.py and report.py.",
         "x-required-role": "admin",
         "requestBody": {
           "required": false,
@@ -8363,6 +8363,18 @@
                   "csrf_token": {
                     "type": "string",
                     "description": "From GET /api/me. Browser sessions only."
+                  },
+                  "batch_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "integer"
+                    }
+                  },
+                  "sheets": {
+                    "type": "boolean"
+                  },
+                  "plots": {
+                    "type": "boolean"
                   }
                 }
               }
@@ -8631,6 +8643,396 @@
             }
           }
         },
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "503": {
+            "$ref": "#/components/responses/E503"
+          }
+        }
+      }
+    },
+    "/api/ais/report": {
+      "get": {
+        "summary": "The batch report as JSON",
+        "operationId": "get_api_ais_report",
+        "tags": [
+          "AIS"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          }
+        ],
+        "description": "The Batches screen's report (report.xlsx) as JSON sheets, each {columns, rows}: summary, images, assignees, ais, measurements, measurement_types, and for admins original_names, by_treatment and statistics. Images left out are not in it unless everything=1; unblind=1 (admins only) puts blinded images under their original names. See app/analysis/report.py.",
+        "parameters": [
+          {
+            "name": "batch",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "all (default), a batch id, or ids separated by commas"
+          },
+          {
+            "name": "everything",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "0 or 1: also the images left out"
+          },
+          {
+            "name": "unblind",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "0 or 1 (admins): original names"
+          },
+          {
+            "name": "sheets",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "sheet names separated by commas: only those"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "503": {
+            "$ref": "#/components/responses/E503"
+          }
+        }
+      }
+    },
+    "/api/ais/auto": {
+      "get": {
+        "summary": "Auto runs on the server",
+        "operationId": "get_api_ais_auto",
+        "tags": [
+          "AIS"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          }
+        ],
+        "description": "The auto runs the server has done since it started, newest first. ?batch=<id> narrows them.",
+        "parameters": [
+          {
+            "name": "batch",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "a batch id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "503": {
+            "$ref": "#/components/responses/E503"
+          }
+        }
+      }
+    },
+    "/api/ais/auto/defaults": {
+      "get": {
+        "summary": "Auto mode defaults",
+        "operationId": "get_api_ais_auto_defaults",
+        "tags": [
+          "AIS"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          }
+        ],
+        "description": "What a run uses unless it says otherwise (static/js/settings.js defaults), and what it may set: general, ranges, methods, starts, threshold, settings, engines, z_methods.",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "503": {
+            "$ref": "#/components/responses/E503"
+          }
+        }
+      }
+    },
+    "/api/ais/auto/{run_id}": {
+      "get": {
+        "summary": "One auto run",
+        "operationId": "get_api_ais_auto_run_id",
+        "tags": [
+          "AIS"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          }
+        ],
+        "description": "How far the run has got: state (queued, running, finished, stopped, failed), done, total, found, hidden, saved, errors.",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "503": {
+            "$ref": "#/components/responses/E503"
+          }
+        }
+      }
+    },
+    "/api/ais/auto/{run_id}/cancel": {
+      "post": {
+        "summary": "Stop an auto run",
+        "operationId": "post_api_ais_auto_run_id_cancel",
+        "tags": [
+          "AIS"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          }
+        ],
+        "description": "Stops after the image it is on; what it saved stays. Whoever started it, or an admin.",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "csrf_token": {
+                    "type": "string",
+                    "description": "From GET /api/me. Browser sessions only."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "503": {
+            "$ref": "#/components/responses/E503"
+          }
+        }
+      }
+    },
+    "/api/ais/batches/{batch_id}/auto": {
+      "post": {
+        "summary": "Start an auto run",
+        "operationId": "post_api_ais_batches_batch_id_auto",
+        "tags": [
+          "AIS"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          }
+        ],
+        "description": "Body: {general?, settings?, threshold?, engine?, skip_done?, mark_done?, images?}: auto mode over the batch's included images, run by the server, each AIS the filters keep saved as the browser's review \"all\" saves it. Answers at once with the run (409 while one is going on the batch). See app/analysis/auto_runner.py.",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "csrf_token": {
+                    "type": "string",
+                    "description": "From GET /api/me. Browser sessions only."
+                  },
+                  "general": {
+                    "type": "object",
+                    "description": "Settings' general auto mode fields (GET /api/ais/auto/defaults)."
+                  },
+                  "settings": {
+                    "type": "object",
+                    "description": "The method's settings."
+                  },
+                  "threshold": {
+                    "type": "number"
+                  },
+                  "engine": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "enum": [
+                      "fast",
+                      null
+                    ]
+                  },
+                  "skip_done": {
+                    "type": "boolean"
+                  },
+                  "mark_done": {
+                    "type": "boolean"
+                  },
+                  "images": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "batch_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Success"

@@ -8,6 +8,8 @@ improved on once it matches the original.
 The web server is a Starlette app (link-based login, encrypted SQLite storage,
 API keys, an MCP endpoint) scaffolded from the `python-webserver` template. The
 Python side handles auth, storage and analysis; the UI lives in `static/`.
+Agents and scripts can drive all of it with an API key, over MCP or REST, and
+get the reports as JSON: see [docs/agents.md](docs/agents.md).
 
 ## Layout
 

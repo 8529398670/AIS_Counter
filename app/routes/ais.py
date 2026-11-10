@@ -20,7 +20,9 @@ from starlette.responses import JSONResponse, Response
 
 from app.analysis import ais_auto as aa
 from app.analysis import detect as auto
-from app.analysis import compare, local, matlab, matlab_bundle, zlength
+from app.analysis import auto_params as ap
+from app.analysis import auto_runner, compare, local, matlab, matlab_bundle, report, zlength
+from app.analysis.auto_runner import AutoRuns
 from app.analysis.images import ImageError
 from app.analysis.service import Library, NotStored
 from app.core.middleware import from_this_computer
@@ -417,8 +419,16 @@ def _activity(request: Request) -> batches.Activity:
 async def batch_list(request: Request) -> Response:
     """Every batch with its progress: uploads, completion, per assignee, and
     any auto run going on (the Batches screen polls this as its monitor)."""
-    rows = await run(batches.list_batches, get_store(request), _user_id(request), _has(request))
-    names = await run(_names, request)
+    rows = await run(_batch_rows, request)
+    folders = await run(batches.list_folders, get_store(request))
+    return JSONResponse({"batches": rows, "folders": folders})
+
+
+def _batch_rows(request: Request) -> list[dict[str, Any]]:
+    """list_batches as whoever asks may see it, with the names of the people
+    in it and the live activity (batch_list, report)."""
+    rows = batches.list_batches(get_store(request), _user_id(request), _has(request))
+    names = _names(request)
     live = _activity(request).current()
     blind = _blind(request)
     for row in rows:
@@ -432,8 +442,7 @@ async def batch_list(request: Request) -> Response:
             # A treatment gives away what blinding hides as much as a name does.
             row.pop("treatments", None)
             row.pop("untreated", None)
-    folders = await run(batches.list_folders, get_store(request))
-    return JSONResponse({"batches": rows, "folders": folders})
+    return rows
 
 
 async def batch_create(request: Request) -> Response:
@@ -632,14 +641,21 @@ async def batch_status(request: Request) -> Response:
     if batch is None:
         return not_found("no such batch")
     rows = await run(batches.list_results, store, batch_id)
-    images = await run(batches.image_status, batch, rows, _has(request))
-    names = await run(_names, request)
+    images = await run(_status_rows, request, batch, rows)
+    return JSONResponse({"id": batch["id"], "images": images})
+
+
+def _status_rows(request: Request, batch: dict[str, Any], rows: list[dict[str, Any]],
+                 names: dict[int, str] | None = None) -> list[dict[str, Any]]:
+    """image_status as whoever asks may see it (batch_status, report)."""
+    images = batches.image_status(batch, rows, _has(request))
+    names = _names(request) if names is None else names
     blind = _blind(request)
     for image in images:
         image["assignee_name"] = names.get(image["assignee"], "") if image["assignee"] else ""
         if blind:
             image.pop("original_key", None)
-    return JSONResponse({"id": batch["id"], "images": images})
+    return images
 
 
 async def batch_include(request: Request) -> Response:
@@ -723,12 +739,178 @@ async def compare_batches(request: Request) -> Response:
     body, refused = await _body(request)
     if refused:
         return refused
+    # sheets: true (agents, scripts) adds the comparison.xlsx sheets as JSON
+    # (app/analysis/report.py) and keeps the SVG plots only when plots is
+    # true too. Without it the answer is what the Batches screen has always had.
+    sheets, plots = body.get("sheets", False), body.get("plots", True)
+    if not isinstance(sheets, bool) or not isinstance(plots, bool):
+        return bad_request("sheets and plots must be true or false")
     try:
-        out = await run(compare.compare, get_store(request), body.get("batch_ids"), body.get("labels"),
-                        body.get("tests"), body.get("units"))
+        if sheets:
+            out = await run(report.comparison, get_store(request), body.get("batch_ids"), body.get("labels"),
+                            body.get("tests"), body.get("units"), plots)
+        else:
+            out = await run(compare.compare, get_store(request), body.get("batch_ids"), body.get("labels"),
+                            body.get("tests"), body.get("units"))
     except compare.CompareError as exc:
         return bad_request(str(exc))
     return JSONResponse(out)
+
+
+def _report_ids(raw: str) -> list[int] | None:
+    """?batch=: "all", or batch ids separated by commas. None when malformed;
+    [] means all."""
+    if raw == "all":
+        return []
+    ids = [parse_id(part.strip()) for part in raw.split(",")] if raw else []
+    return ids if ids and all(ids) else None
+
+
+def _flag(request: Request, name: str) -> bool | None:
+    raw = request.query_params.get(name, "")
+    return {"": False, "0": False, "false": False, "1": True, "true": True}.get(raw)
+
+
+def _report(request: Request, ids: list[int], everything: bool, unblind: bool) -> dict[str, Any] | None:
+    """The batch report's sheets as JSON (app/analysis/report.py), as the
+    Batches screen's export gathers them (static/js/batches.js gather). None
+    when a batch asked for does not exist."""
+    store = get_store(request)
+    listed = _batch_rows(request)
+    if ids:
+        by_id = {b["id"]: b for b in listed}
+        if any(i not in by_id for i in ids):
+            return None
+        chosen = [by_id[i] for i in dict.fromkeys(ids)]
+    else:
+        chosen = listed
+    one = len(chosen) == 1
+    results = batches.list_results(store, chosen[0]["id"] if one else None)
+    lines = batches.list_measurements(store, chosen[0]["id"] if one else None)
+    names = _names(request)
+    items, full = [], {}
+    for b in chosen:
+        batch = batches.get_batch(store, b["id"])
+        if batch is None:
+            continue
+        full[b["id"]] = batch
+        own = [r for r in results if r["batch_id"] == b["id"]]
+        status = _status_rows(request, batch, own, names)
+        out = {im["key"] for im in status if not im["included"] and not everything}
+        items.append({"batch": b, "images": [im for im in status if im["key"] not in out],
+                      "rows": [r for r in own if r["image"] not in out],
+                      "measurements": [m for m in lines if m["batch_id"] == b["id"] and m["image"] not in out]})
+    admin = not _blind(request)
+    if unblind and admin:
+        items = report.unrandomized(items, full)
+    sheets = report.sheets(items)
+    if admin:
+        sheets |= report.extra_sheets(store, [item["batch"]["id"] for item in items])
+    return {"batches": [{"id": item["batch"]["id"], "name": item["batch"]["name"]} for item in items],
+            "unblinded": bool(unblind and admin), "everything": everything, "sheets": sheets}
+
+
+async def batch_report(request: Request) -> Response:
+    """?batch=<id>[,<id>...] | all, everything=0|1, unblind=0|1 (admins),
+    sheets=<name>[,<name>...]: the Batches screen's report (report.xlsx) as
+    JSON, for agents and scripts. Images the team left out are not in it
+    unless everything; unblind puts blinded images under their original
+    names, for admins only (anyone else gets the blinded report)."""
+    ids = _report_ids(request.query_params.get("batch", "all"))
+    if ids is None:
+        return bad_request("batch must be all, or batch ids separated by commas")
+    everything, unblind = _flag(request, "everything"), _flag(request, "unblind")
+    if everything is None or unblind is None:
+        return bad_request("everything and unblind must be 0 or 1")
+    wanted = [s for s in request.query_params.get("sheets", "").split(",") if s]
+    if any(s not in report.SHEETS for s in wanted):
+        return bad_request("sheets must be some of " + ", ".join(report.SHEETS))
+    try:
+        out = await run(_report, request, ids, everything, unblind)
+    except compare.CompareError as exc:
+        return bad_request(str(exc))
+    if out is None:
+        return not_found("no such batch")
+    if wanted:
+        out["sheets"] = {k: v for k, v in out["sheets"].items() if k in wanted}
+    return JSONResponse(out)
+
+
+# --- auto runs on the server (app/analysis/auto_runner.py) ----------------------
+
+
+def _runs(request: Request) -> AutoRuns:
+    return request.app.state.ais_runs
+
+
+async def auto_defaults(request: Request) -> Response:
+    """What a run uses unless it says otherwise, and what it may say: the
+    browser's Settings defaults (static/js/settings.js)."""
+    return JSONResponse({"general": ap.DEFAULTS, "ranges": {k: list(v) for k, v in ap.RANGES.items()},
+                         "methods": list(ap.METHODS), "starts": list(ap.STARTS), "threshold": ap.THRESHOLD,
+                         "settings": ap.METHOD_SETTINGS, "engines": [None, "fast"],
+                         "z_methods": [m.id for m in zlength.METHODS if m.ready]})
+
+
+async def auto_start(request: Request) -> Response:
+    """Body: {general?, settings?, threshold?, engine?, skip_done?, mark_done?,
+    images?}: auto mode over the batch, run by the server and saved as the
+    browser's review "all" saves (each kept AIS straight to the batch).
+    general: Settings' general fields (auto_method, fitted_min_length, ...);
+    settings: the method's (pixconv, smooth, ...); images: only these keys.
+    Answers at once with the run; GET /api/ais/auto/{run_id} follows it."""
+    body, refused = await _body(request)
+    if refused:
+        return refused
+    batch_id = parse_id(request.path_params["batch_id"])
+    if not batch_id:
+        return not_found("no such batch")
+    general, settings = body.get("general"), body.get("settings")
+    if (general is not None and not isinstance(general, dict)) or (settings is not None and not isinstance(settings, dict)):
+        return bad_request("general and settings must be objects")
+    skip, mark = body.get("skip_done"), body.get("mark_done", False)
+    if (skip is not None and not isinstance(skip, bool)) or not isinstance(mark, bool):
+        return bad_request("skip_done and mark_done must be true or false")
+    try:
+        choices = auto_runner.plan(general, settings, body.get("threshold"), body.get("engine"))
+        out = await run(lambda: _runs(request).start(batch_id, _user_id(request), choices, skip_done=skip,
+                                                     mark_done=mark, images=body.get("images")))
+    except ap.ParamError as exc:
+        return bad_request(str(exc))
+    except auto_runner.RunError as exc:
+        if str(exc) == "no such batch":
+            return not_found(str(exc))
+        return conflict(str(exc)) if "already" in str(exc) else bad_request(str(exc))
+    return JSONResponse(out)
+
+
+async def auto_list(request: Request) -> Response:
+    """?batch=<id>: the runs on that batch (else every one), newest first."""
+    raw = request.query_params.get("batch", "")
+    batch_id = parse_id(raw) if raw else None
+    if raw and batch_id is None:
+        return bad_request("batch must be a batch id")
+    return JSONResponse({"runs": _runs(request).list(batch_id)})
+
+
+async def auto_get(request: Request) -> Response:
+    out = _runs(request).get(request.path_params["run_id"])
+    return JSONResponse(out) if out else not_found("no such run")
+
+
+async def auto_cancel(request: Request) -> Response:
+    """Stop a run after the image it is on: whoever started it, or an admin."""
+    body, refused = await _body(request)
+    if refused:
+        return refused
+    runs = _runs(request)
+    found = runs.get(request.path_params["run_id"])
+    if found is None:
+        return not_found("no such run")
+    actor = actor_from(request)
+    if found["user_id"] != actor.user.id and not actor.is_admin:
+        return forbidden("only whoever started the run, or an admin, can stop it")
+    return JSONResponse(runs.cancel(found["id"]))
 
 
 async def batch_translation_load(request: Request) -> Response:

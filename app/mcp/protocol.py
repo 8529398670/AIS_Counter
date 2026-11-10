@@ -14,6 +14,7 @@ half of the spec this server deliberately does not use.
 """
 from __future__ import annotations
 
+import inspect
 import json
 from typing import Any
 from urllib.parse import urlsplit
@@ -23,7 +24,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 from app.core.security import Actor, actor_from
-from app.mcp.registry import Call, InvalidArguments, Refusal, Registry
+from app.mcp.registry import Call, Content, InvalidArguments, Refusal, Registry
 
 # The protocol revisions this server can answer, newest first. Everything used
 # here (tools, JSON responses, annotations) means the same in each of them.
@@ -47,6 +48,10 @@ class RpcError(Exception):
 
 def _error(id_: Any, code: int, message: str, status: int = 200) -> JSONResponse:
     return JSONResponse({"jsonrpc": "2.0", "id": id_, "error": {"code": code, "message": message}}, status_code=status)
+
+
+def _content_result(value: Content) -> dict[str, Any]:
+    return {"content": value.content, "structuredContent": value.structured, "isError": False}
 
 
 def _tool_result(value: dict[str, Any], is_error: bool) -> dict[str, Any]:
@@ -157,13 +162,19 @@ class Server:
         state = request.app.state
         call = Call(actor=actor, store=state.store, config=state.settings.get(), request=request, args=args)
         try:
-            # Tools are synchronous and touch SQLite -- the threadpool rule.
-            value = await run_in_threadpool(tool.call, call)
+            if inspect.iscoroutinefunction(tool.call):
+                # An async tool awaits handlers, which keep the threadpool rule.
+                value = await tool.call(call)
+            else:
+                # Tools are synchronous and touch SQLite -- the threadpool rule.
+                value = await run_in_threadpool(tool.call, call)
         except InvalidArguments as error:
             raise RpcError(INVALID_PARAMS, str(error)) from None
         except Refusal as refusal:
-            return _tool_result({"error": str(refusal)}, True)
+            return _tool_result({"error": str(refusal), **refusal.extra}, True)
         except Exception as error:  # noqa: BLE001 -- the detail goes to the log, never to the caller
             print(f"[mcp] tool {name}: {error!r}", flush=True)
             return _tool_result({"error": "internal error"}, True)
+        if isinstance(value, Content):
+            return _content_result(value)
         return _tool_result(value, False)

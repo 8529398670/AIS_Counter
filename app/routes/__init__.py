@@ -251,6 +251,14 @@ def build_routes(static_server: StaticServer, cfg: Config) -> list[BaseRoute]:
         admins("/api/ais/batches/{batch_id}/treatments", ais.batch_treatments_set, ["POST"]),
         admins("/api/ais/batches/{batch_id}/translation", ais.batch_translation_load, ["POST"]),
         admins("/api/ais/batches/{batch_id}/adds/{add_id}/randomize", ais.batch_rerandomize, ["POST"]),
+        # The report and auto runs for agents and scripts (API keys): the
+        # Batches screen's export as JSON, and auto mode run by the server.
+        signed_in("/api/ais/report", ais.batch_report),
+        signed_in("/api/ais/auto", ais.auto_list),
+        signed_in("/api/ais/auto/defaults", ais.auto_defaults),
+        signed_in("/api/ais/auto/{run_id}", ais.auto_get),
+        signed_in("/api/ais/auto/{run_id}/cancel", ais.auto_cancel, ["POST"]),
+        signed_in("/api/ais/batches/{batch_id}/auto", ais.auto_start, ["POST"]),
         signed_in("/api/ais/results", ais.result_list),
         signed_in("/api/ais/results", ais.result_add, ["POST"]),
         signed_in("/api/ais/results/import", ais.result_import, ["POST"], max_body_size=ais.UPLOAD_LIMIT_BYTES),
