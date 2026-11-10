@@ -826,8 +826,7 @@ theme:
   preview_button: "Button"
   overlays_heading: "Drawn over the image"
   overlays_description: "Which stages of a trace the Process screen draws over the image. Kept in this browser; the details are under Instructions."
-  preset_light: "Light"
-  preset_dark: "Dark"
+  preset_default: "Default"
   preset_ocean: "Ocean"
   preset_forest: "Forest"
   preset_sepia: "Sepia"
@@ -837,7 +836,6 @@ theme:
   preset_midnight: "Midnight"
   preset_slate: "Slate"
   preset_cerise: "Cerise"
-  preset_wsu_dark: "WSU dark"
 
 # The Keyboard shortcuts screen (static/js/shortcuts.js): every key the app
 # answers to, rebindable, kept on the account. Anywhere else in this file,

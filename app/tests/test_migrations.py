@@ -78,13 +78,27 @@ class MigrationTest(unittest.TestCase):
         self.assertEqual(store.schema_version(), 1)
         self.assertEqual(self.kept(), [])
 
-    def test_no_migrations_changes_nothing_for_a_deployed_database(self) -> None:
-        """A database from before versions existed reads as 0, and with no
-        migrations shipped it must open exactly as it always did."""
+    def test_shipped_migrations_leave_other_records_alone(self) -> None:
+        """A database from before versions existed reads as 0. The shipped
+        steps only touch saved themes, so a record without any opens as it
+        always did. (The template's version of this test expects no steps.)"""
         self.old_database()
         store = db.open_store(self.path, self.key, True)
+        self.assertEqual(store.schema_version(), db.latest_schema_version())
         self.assertEqual(store.get(db.BUCKET_USERS, 1), {"name": "Ada Lovelace"})
-        self.assertEqual(self.kept(), [])
+
+    def test_saved_themes_are_reset_to_the_built_ins(self) -> None:
+        old = self.open([])
+        old.put(db.BUCKET_META, "theme_defaults", {"themes": [{"id": "light"}]})
+        old.put(db.BUCKET_USERS, 1, {"name": "Ada", "themes": [{"id": "wsu_dark"}], "theme_id": "wsu_dark"})
+        old.put(db.BUCKET_USERS, 2, {"name": "Bob", "theme_id": "dark"})
+        old.put(db.BUCKET_USERS, 3, {"name": "Cy", "theme_id": ""})
+        store = db.open_store(self.path, self.key, True)
+        self.assertIsNone(store.get(db.BUCKET_META, "theme_defaults"))
+        self.assertEqual(store.get(db.BUCKET_USERS, 1), {"name": "Ada", "theme_id": ""})
+        self.assertEqual(store.get(db.BUCKET_USERS, 2), {"name": "Bob", "theme_id": ""})
+        self.assertEqual(store.get(db.BUCKET_USERS, 3), {"name": "Cy", "theme_id": ""})
+        self.assertEqual(len(self.kept()), 1)
 
     def test_manage_does_not_migrate_under_a_running_server(self) -> None:
         self.old_database()

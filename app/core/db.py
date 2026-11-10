@@ -428,7 +428,23 @@ class Migration:
 # Every step this app has ever needed. Add to the end, and never edit, reorder
 # or remove one that has shipped: a database's version is a position in this
 # list. references/architecture.md has a worked example.
-MIGRATIONS: list[Migration] = []
+def _reset_themes(tx: "Transaction") -> None:
+    """python-webserver 2028ee4 (theme-mode-colors) merged the Light/Dark and
+    WSU/WSU dark built-ins and gave every theme colors for both modes. Saved
+    lists in the old shape were not mended: the owner chose to put everyone back
+    on the built-ins instead. Drops the admin's defaults and each account's own
+    list and pick; theme.js reads a browser's kept "light"/"dark" as Default."""
+    tx.delete(BUCKET_META, "theme_defaults")
+    for key, record in tx.all(BUCKET_USERS):
+        if "themes" in record or record.get("theme_id"):
+            record.pop("themes", None)
+            record["theme_id"] = ""
+            tx.put(BUCKET_USERS, key, record)
+
+
+MIGRATIONS: list[Migration] = [
+    Migration("reset saved themes to the built-ins", _reset_themes),
+]
 
 
 def latest_schema_version() -> int:
