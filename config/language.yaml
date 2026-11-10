@@ -1413,7 +1413,7 @@ api_keys:
 
 # The MCP card on Account (static/js/mcp.js): an API key set up for an agent.
 mcp:
-  heading: "MCP: Claude and other agents"
+  heading: "MCP"
   description: "Connect Claude Code, Claude Desktop or any other MCP client to this app. It signs in with an API key, so the agent can do what your account can and no more."
   # Under the description, with a link to the MCP reference: config/mcp.json
   # in app.repo, or this server's own copy.
