@@ -1,7 +1,7 @@
 # Written by the skill that scaffolded this app; `webserver-upgrade` reads and
 # updates it. Commit it: it is how an update knows where this app started.
 skill: python-webserver
-commit: 2028ee45b245c381499433bc19c501b99357b10e
+commit: d943458b9e066a26c1b14819dd513aeab5c05d23
 project_name: "AIS Counter"
 slug: ais-counter
 port: 24005
