@@ -26,8 +26,9 @@ const Ais = {
   processedSuffix: ".tif - Processed method 2.5.tif",
   concurrency: 4,        // files hashed, uploaded or exported at once
   imageCache: new Map(),   // view.png URL -> { promise, img, decoded, bitmap, gamma }: the last few previews, decoded
-  imageCacheSize: 6,
-  stepDelay: 120,        // ms an arrow-key step waits before downloading an image not in the cache
+  imageCacheSize: 12,    // the image on screen, the 6 preloaded around it, and a few just left
+  preloadAtOnce: 2,      // previews downloaded side by side ahead of the arrow keys
+  stepDelay: 60,        // ms an arrow-key step waits before downloading an image not in the cache
   direction: 1,          // the way the arrow keys last stepped, which preload looks first
   legacyResultsKey: "ais-results",
   viewKey: "ais-view",
@@ -867,23 +868,25 @@ const Ais = {
   },
 
   // The images either side of the one on screen, the way it is being stepped
-  // first, one at a time so they never hold it up; only ones on the server
+  // first, two at a time, only once it is in, so they never hold it up; only ones on the server
   // (uploadAll uploads the rest). Their bitmaps are built when idle.
   preload( index ) {
     const shown = this.included();
     const at = shown.indexOf( index );
     if ( at < 0 ) return;
     const d = this.direction;
-    const near = [ at + d , at + 2 * d , at - d ].filter( ( i ) => i >= 0 && i < shown.length )
-      .map( ( i ) => this.images[ shown[ i ] ] );
+    // Nearest first: 4 ahead and 2 behind.
+    const near = [ at + d , at + 2 * d , at - d , at + 3 * d , at + 4 * d , at - 2 * d ]
+      .filter( ( i ) => i >= 0 && i < shown.length ).map( ( i ) => this.images[ shown[ i ] ] );
     const token = {};
     this.preloadToken = token;
     const idle = () => new Promise( ( resolve ) => {
       if ( window.requestIdleCallback ) window.requestIdleCallback( resolve , { timeout: 500 } );
       else window.setTimeout( resolve , 50 );
     } );
-    ( async () => {
-      for ( const entry of near ) {
+    const worker = async () => {
+      while ( near.length ) {
+        const entry = near.shift();
         if ( this.preloadToken !== token ) return;
         if ( !this.parts( entry ).every( ( f ) => f.stored ) ) continue;
         let slot;
@@ -896,7 +899,8 @@ const Ais = {
         if ( this.preloadToken !== token ) return;
         this.bitmapOf( slot );
       }
-    } )();
+    };
+    for ( let n = 0; n < this.preloadAtOnce; n += 1 ) worker();
   },
 
   // Why a lone TIFF is handled the way it is -- until closed for this batch.
