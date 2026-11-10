@@ -13,11 +13,37 @@
 const About = {
   loaded: false,
 
-  init() {
+  init( me ) {
+    this.facts( me );
     Dom.get( "about" ).addEventListener( "click" , ( e ) => this.onLink( e ) );
     Dom.get( "instructions" ).addEventListener( "click" , ( e ) => this.onLink( e ) );
     window.addEventListener( "hashchange" , () => this.maybeLoad() );
     this.maybeLoad();
+  },
+
+  // The card at the top: app.description, the running version, app.repo and
+  // where to read the API reference, all from /api/me. Shown only while
+  // app.show_about is on; the rest of the screen is always there.
+  facts( me ) {
+    if ( me.show_about !== true ) return;
+    const description = Dom.get( "about-description" );
+    Dom.text( description , me.description || "" );
+    Dom.show( description , Boolean( me.description ) );
+    Dom.text( Dom.get( "about-version" ) , me.version || "" );
+    this.link( "about-source" , me.repo , me.repo );
+    this.link( "about-api" , me.openapi_url );
+    Dom.show( Dom.get( "about-facts-card" ) , true );
+  },
+
+  // A link and its row, shown only when there is somewhere to go. text, when
+  // given, replaces the link's label.
+  link( id , href , text ) {
+    const anchor = Dom.get( id );
+    const shown = typeof href === "string" && href !== "";
+    if ( shown ) anchor.setAttribute( "href" , href );
+    if ( shown && text ) Dom.text( anchor , text );
+    Dom.show( anchor.parentElement , shown );
+    Dom.show( anchor.parentElement.previousElementSibling , shown );
   },
 
   maybeLoad() {

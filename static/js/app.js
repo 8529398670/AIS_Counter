@@ -192,9 +192,10 @@ const App = {
     // Side by side: the wait is the slowest screen, not all of them added up.
     const loading = [];
     loading.push( Keys.init( me ) );
+    Mcp.init( me );
     loading.push( Sessions.init() );
     Settings.init();
-    About.init();
+    About.init( me );
     Ais.init( me );
     Batches.init( me );
 
