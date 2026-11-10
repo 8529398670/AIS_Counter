@@ -25,6 +25,10 @@ const SLICE_COLOUR = "rgba(255, 60, 255, 1)";
 const Ais = {
   processedSuffix: ".tif - Processed method 2.5.tif",
   concurrency: 4,        // files hashed, uploaded or exported at once
+  imageCache: new Map(),   // view.png URL -> { promise, img, decoded, bitmap, gamma }: the last few previews, decoded
+  imageCacheSize: 6,
+  stepDelay: 120,        // ms an arrow-key step waits before downloading an image not in the cache
+  direction: 1,          // the way the arrow keys last stepped, which preload looks first
   legacyResultsKey: "ais-results",
   viewKey: "ais-view",
   lastKey: "ais-last",   // the last batch and image, for a bare #ais or /
@@ -696,16 +700,32 @@ const Ais = {
     if ( at >= 0 ) next = shown[ Math.min( shown.length - 1 , Math.max( 0 , at + delta ) ) ];
     else if ( delta > 0 ) next = shown.find( ( i ) => i > this.index ) ?? shown[ shown.length - 1 ];
     else next = shown.slice().reverse().find( ( i ) => i < this.index ) ?? shown[ 0 ];
-    if ( next !== this.index ) this.show( next );
+    this.direction = delta < 0 ? -1 : 1;
+    if ( next !== this.index ) this.show( next , false , true );
   },
 
-  async show( index , push ) {
+  // stepped: by the arrow keys, which may be held down -- an image not in
+  // the cache waits a moment, so the ones flown past are not downloaded.
+  async show( index , push , stepped ) {
     this.index = index;
     this.result = null;
     this.lastBody = null;
     this.firstClick = null;
     this.editing = null;
     this.hover = null;
+    this.preloadToken = null;
+    this.views = null;
+    this.somata = null;
+    const entry = this.images[ index ];
+    // The image and its traces together, or neither: the last image's
+    // pixels must not be drawn under this one's traces while it loads.
+    const slot = entry ? this.cached( entry ) : null;
+    if ( slot && slot.img ) this.useImage( slot );
+    else {
+      this.source = null;
+      this.sourceSlot = null;
+      this.bitmap = null;
+    }
     AisAuto.shown( index );
     AisMeasure.imageShown( index );
     this.renderResult();
@@ -713,15 +733,18 @@ const Ais = {
     Dom.get( "ais-image" ).value = String( index );
     this.renderCurrent();
     this.setUrl( push );
-    const entry = this.images[ index ];
-    this.views = null;
-    this.somata = null;
     this.renderViews();
+    if ( this.source ) this.imageReady( entry , index );
+    else {
+      this.draw();
+      this.status( I18n.get( "ais.loading_image" ) );
+    }
     try {
       await this.upload( entry );
     } catch ( error ) {
       if ( this.index === index ) {
         this.source = null;
+        this.sourceSlot = null;
         this.bitmap = null;
         this.draw();
         this.status( error.message );
@@ -730,22 +753,101 @@ const Ais = {
     }
     if ( this.index !== index ) return;   // moved on while uploading
     this.loadViews( entry , index );
-    const img = new Image();
-    img.onload = () => {
+    if ( !this.source ) {
+      if ( stepped ) {
+        await new Promise( ( resolve ) => window.setTimeout( resolve , this.stepDelay ) );
+        if ( this.index !== index ) return;
+      }
+      let loaded;
+      try {
+        loaded = await this.fetchImage( entry , () => { if ( this.index === index ) this.status( I18n.get( "ais.busy_retrying" ) ); } );
+      } catch ( error ) {
+        if ( this.index === index ) this.status( error.message );
+        return;
+      }
       if ( this.index !== index ) return;
-      this.source = img;
-      this.buildBitmap();
-      if ( !this.locked ) this.fit();
-      Dom.show( Dom.get( "ais-empty" ) , false );
-      this.status( this.imageNote( entry ) , true );
-      this.draw();
-      AisMeasure.imageLoaded( index );
-    };
-    // An <img> does not say why it failed: ask again to tell a file that is
-    // not there yet from a refusal (too many requests), which is retried.
-    let tries = 0;
-    img.onerror = async () => {
-      if ( this.index !== index ) return;
+      this.useImage( loaded );
+      this.imageReady( entry , index );
+    }
+    this.preload( index );
+  },
+
+  // The cached image as the one on screen (its bitmap, at today's brightness).
+  useImage( slot ) {
+    this.source = slot.img;
+    this.sourceSlot = slot;
+    this.buildBitmap();
+  },
+
+  // The image is in: fit it, its note, drawn with its traces.
+  imageReady( entry , index ) {
+    if ( !this.locked ) this.fit();
+    Dom.show( Dom.get( "ais-empty" ) , false );
+    this.status( this.imageNote( entry ) , true );
+    this.draw();
+    AisMeasure.imageLoaded( index );
+  },
+
+  // --- the image previews, decoded and kept ---------------------------------
+
+  // A .czi's view.png used to be its raw AIS channel and is now the processed
+  // image: a URL of its own, so a copy cached under the old one is not reused.
+  // v=2: before 404s were sent uncached, Cloudflare had browsers keep the
+  // 404 of a .czi stained in other than 488 under the old URL for hours.
+  viewSrc( entry ) {
+    return "/api/ais/files/" + this.sha( entry ) + "/view.png" + ( this.kind( entry ) === "czi" ? "?processed=1&v=2" : "" );
+  },
+
+  // The cache's slot for entry's preview (most recently used last), or null.
+  cached( entry ) {
+    const key = this.viewSrc( entry );
+    const slot = this.imageCache.get( key );
+    if ( !slot ) return null;
+    this.imageCache.delete( key );
+    this.imageCache.set( key , slot );
+    return slot;
+  },
+
+  // Entry's preview, downloaded and decoded once however many ask for it:
+  // resolves with its cache slot { img, bitmap, gamma }. onBusy: told when
+  // the server refuses (too many requests) and it is asked again.
+  fetchImage( entry , onBusy ) {
+    const key = this.viewSrc( entry );
+    let slot = this.cached( entry );
+    if ( !slot ) {
+      slot = { img: null , decoded: null , bitmap: null , gamma: null , onBusy: null };
+      slot.promise = this.loadImage( key , slot ).then( ( img ) => {
+        slot.img = img;
+        return slot;
+      } , ( error ) => {
+        if ( this.imageCache.get( key ) === slot ) this.imageCache.delete( key );   // asked again next time
+        throw error;
+      } );
+      this.imageCache.set( key , slot );
+      while ( this.imageCache.size > this.imageCacheSize ) this.imageCache.delete( this.imageCache.keys().next().value );
+    }
+    if ( onBusy ) slot.onBusy = onBusy;
+    return slot.promise;
+  },
+
+  // An <img> does not say why it failed: ask again to tell a file that is
+  // not there yet from a refusal (too many requests), which is retried.
+  async loadImage( src , slot ) {
+    for ( let tries = 0; ; tries += 1 ) {
+      const img = new Image();
+      const loaded = await new Promise( ( resolve ) => {
+        img.onload = () => resolve( true );
+        img.onerror = () => resolve( false );
+        img.src = tries ? src + ( src.includes( "?" ) ? "&" : "?" ) + "retry=" + tries : src;
+      } );
+      if ( loaded ) {
+        // Decoded off the main thread now, not on the first draw. (img.decode()
+        // is not used: in some embedded browsers it never settles.)
+        try {
+          slot.decoded = await createImageBitmap( img );
+        } catch ( error ) { /* drawn from the <img> itself */ }
+        return img;
+      }
       let code = 0;
       let why = "";
       try {
@@ -754,24 +856,47 @@ const Ais = {
         // A file the server has but cannot read says why (a 422).
         if ( code === 422 ) why = ( await response.json() ).error || "";
       } catch ( error ) { /* offline: as before */ }
-      if ( this.index !== index ) return;
       if ( code === 429 && tries < 6 ) {
-        tries += 1;
-        this.status( I18n.get( "ais.busy_retrying" ) );
-        window.setTimeout( () => {
-          if ( this.index === index ) img.src = src + ( src.includes( "?" ) ? "&" : "?" ) + "retry=" + tries;
-        } , 5000 * tries );
-        return;
+        if ( slot.onBusy ) slot.onBusy();
+        await new Promise( ( resolve ) => window.setTimeout( resolve , 5000 * ( tries + 1 ) ) );
+        continue;
       }
-      if ( code === 404 || code === 0 ) this.status( I18n.get( "ais.not_uploaded" ) );
-      else this.status( I18n.get( "ais.view_failed" ) + ( why ? " (" + why + ")" : "" ) );
-    };
-    // A .czi's view.png used to be its raw AIS channel and is now the processed
-    // image: a URL of its own, so a copy cached under the old one is not reused.
-    // v=2: before 404s were sent uncached, Cloudflare had browsers keep the
-    // 404 of a .czi stained in other than 488 under the old URL for hours.
-    const src = "/api/ais/files/" + this.sha( entry ) + "/view.png" + ( this.kind( entry ) === "czi" ? "?processed=1&v=2" : "" );
-    img.src = src;
+      if ( code === 404 || code === 0 ) throw new Error( I18n.get( "ais.not_uploaded" ) );
+      throw new Error( I18n.get( "ais.view_failed" ) + ( why ? " (" + why + ")" : "" ) );
+    }
+  },
+
+  // The images either side of the one on screen, the way it is being stepped
+  // first, one at a time so they never hold it up; only ones on the server
+  // (uploadAll uploads the rest). Their bitmaps are built when idle.
+  preload( index ) {
+    const shown = this.included();
+    const at = shown.indexOf( index );
+    if ( at < 0 ) return;
+    const d = this.direction;
+    const near = [ at + d , at + 2 * d , at - d ].filter( ( i ) => i >= 0 && i < shown.length )
+      .map( ( i ) => this.images[ shown[ i ] ] );
+    const token = {};
+    this.preloadToken = token;
+    const idle = () => new Promise( ( resolve ) => {
+      if ( window.requestIdleCallback ) window.requestIdleCallback( resolve , { timeout: 500 } );
+      else window.setTimeout( resolve , 50 );
+    } );
+    ( async () => {
+      for ( const entry of near ) {
+        if ( this.preloadToken !== token ) return;
+        if ( !this.parts( entry ).every( ( f ) => f.stored ) ) continue;
+        let slot;
+        try {
+          slot = await this.fetchImage( entry );
+        } catch ( error ) {
+          continue;
+        }
+        await idle();
+        if ( this.preloadToken !== token ) return;
+        this.bitmapOf( slot );
+      }
+    } )();
   },
 
   // Why a lone TIFF is handled the way it is -- until closed for this batch.
@@ -1052,25 +1177,41 @@ const Ais = {
       return;
     }
     if ( !this.source ) return;
-    const w = this.source.naturalWidth;
-    const h = this.source.naturalHeight;
+    this.bitmap = this.sourceSlot && this.sourceSlot.img === this.source
+      ? this.bitmapOf( this.sourceSlot ) : this.brightened( this.source );
+  },
+
+  // A cached image's bitmap at the brightness set, kept with it: built again
+  // only when the brightness has moved since.
+  bitmapOf( slot ) {
+    const gamma = Number( Dom.get( "ais-gamma" ).value );
+    if ( !slot.bitmap || slot.gamma !== gamma ) {
+      slot.bitmap = gamma === 1 && slot.decoded ? slot.decoded : this.brightened( slot.img , gamma );
+      slot.gamma = gamma;
+    }
+    return slot.bitmap;
+  },
+
+  // The image with the brightness gamma on it; at 1, the image itself.
+  brightened( img , gamma ) {
+    if ( gamma == null ) gamma = Number( Dom.get( "ais-gamma" ).value );
+    if ( gamma === 1 ) return img;
+    const w = img.naturalWidth;
+    const h = img.naturalHeight;
     const off = document.createElement( "canvas" );
     off.width = w;
     off.height = h;
     const octx = off.getContext( "2d" );
-    octx.drawImage( this.source , 0 , 0 );
-    const gamma = Number( Dom.get( "ais-gamma" ).value );
-    if ( gamma !== 1 ) {
-      const lut = new Uint8ClampedArray( 256 );
-      for ( let v = 0; v < 256; v += 1 ) lut[ v ] = 255 * Math.pow( v / 255 , gamma );
-      const data = octx.getImageData( 0 , 0 , w , h );
-      const px = data.data;
-      for ( let i = 0; i < px.length; i += 4 ) {
-        px[ i ] = px[ i + 1 ] = px[ i + 2 ] = lut[ px[ i ] ];
-      }
-      octx.putImageData( data , 0 , 0 );
+    octx.drawImage( img , 0 , 0 );
+    const lut = new Uint8ClampedArray( 256 );
+    for ( let v = 0; v < 256; v += 1 ) lut[ v ] = 255 * Math.pow( v / 255 , gamma );
+    const data = octx.getImageData( 0 , 0 , w , h );
+    const px = data.data;
+    for ( let i = 0; i < px.length; i += 4 ) {
+      px[ i ] = px[ i + 1 ] = px[ i + 2 ] = lut[ px[ i ] ];
     }
-    this.bitmap = off;
+    octx.putImageData( data , 0 , 0 );
+    return off;
   },
 
   // --- channels: the processed image, or channels blended -------------------

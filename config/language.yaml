@@ -88,6 +88,7 @@ ais:
   m_z_step: "Z step"
   m_z_clarity: "Depth contrast"
   m_pixel_length: "Pixel-count length"
+  loading_image: "Loading the image…"
   busy_retrying: "The server is busy (too many requests); trying the image again…"
   view_failed: "The server could not show this image."
   duplicate_of: "duplicate of #{n}"
