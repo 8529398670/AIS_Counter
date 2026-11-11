@@ -63,7 +63,8 @@ const Ais = {
   // once per image; switched on, it stays on for the next image.
   showSomata: false,
   somata: null,
-  viewsOpen: false,      // the view buttons spread out along the top, or folded into one
+  viewsOpen: false,      // the view buttons spread out below the corner button, or folded into one
+  viewsCloseTimer: null, // folds them shortly after the mouse leaves
   view: { scale: 1 , ox: 0 , oy: 0 },
   locked: false,         // pan and zoom frozen, the same view on every image
   focus: false,          // focus mode: only the image, navigation and result
@@ -106,8 +107,10 @@ const Ais = {
       gamma.value = "1";
       gamma.dispatchEvent( new Event( "input" ) );
     } );
-    Dom.get( "ais-channels" ).addEventListener( "click" , ( e ) => {
+    const channels = Dom.get( "ais-channels" );
+    channels.addEventListener( "click" , ( e ) => {
       if ( e.target.closest( "#ais-channels-toggle" ) ) {
+        this.cancelViewsClose();
         this.viewsOpen = !this.viewsOpen;
         this.renderViews();
         return;
@@ -115,11 +118,17 @@ const Ais = {
       const button = e.target.closest( "[data-view]" );
       if ( button ) this.toggleView( button.dataset.view );
     } );
-    // Leaving the corner folds the row away again.
-    Dom.get( "ais-channels" ).addEventListener( "mouseleave" , () => {
+    // Leaving the corner folds the list away again, after a moment, so a
+    // small overshoot past the buttons doesn't close it.
+    channels.addEventListener( "mouseenter" , () => this.cancelViewsClose() );
+    channels.addEventListener( "mouseleave" , () => {
       if ( !this.viewsOpen ) return;
-      this.viewsOpen = false;
-      this.renderViews();
+      this.cancelViewsClose();
+      this.viewsCloseTimer = setTimeout( () => this.closeViews() , 500 );
+    } );
+    // A click anywhere else folds it at once.
+    document.addEventListener( "pointerdown" , ( e ) => {
+      if ( this.viewsOpen && !channels.contains( e.target ) ) this.closeViews();
     } );
     this.loadLayers();
     Dom.all( "[data-layer]" ).forEach( ( box ) => box.addEventListener( "change" , () => { this.saveLayers(); this.draw(); } ) );
@@ -757,6 +766,7 @@ const Ais = {
     this.hover = null;
     this.preloadToken = null;
     this.views = null;
+    this.cancelViewsClose();
     this.somata = null;
     const entry = this.images[ index ];
     // The image and its traces together, or neither: the last image's
@@ -1391,9 +1401,22 @@ const Ais = {
     this.draw();
   },
 
+  cancelViewsClose() {
+    clearTimeout( this.viewsCloseTimer );
+    this.viewsCloseTimer = null;
+  },
+
+  closeViews() {
+    this.cancelViewsClose();
+    if ( !this.viewsOpen ) return;
+    this.viewsOpen = false;
+    this.renderViews();
+  },
+
   renderViews() {
     this.renderZ();
     const bar = Dom.get( "ais-channels" );
+    bar.classList.toggle( "is-open" , this.viewsOpen );
     const list = this.views ? this.views.list.filter( ( v ) => !v.slice ) : [];
     Dom.show( bar , list.length > 0 );
     if ( !list.length ) {
