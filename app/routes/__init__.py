@@ -208,6 +208,7 @@ def build_routes(static_server: StaticServer, cfg: Config) -> list[BaseRoute]:
         signed_in("/api/ais/files/{sha}/slice/{index}.png", ais.slice_view),
         signed_in("/api/ais/files/{sha}/composite.png", ais.composite),
         signed_in("/api/ais/files/{sha}/somata", ais.somata),
+        signed_in("/api/ais/files/{sha}/pair", ais.pair, ["POST"]),
         signed_in("/api/ais/files/{sha}/file", ais.file_bytes),
         signed_in("/api/ais/files/{sha}/processed.tif", ais.processed_tif),
         signed_in("/api/ais/files/{sha}/channel/{index}.tif", ais.channel_tif),

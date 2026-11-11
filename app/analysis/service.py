@@ -51,6 +51,7 @@ from app.analysis import ais_auto as aa
 from app.analysis import detect as auto
 from app.analysis import fast
 from app.analysis import mlcompat as ml
+from app.analysis import pairing
 from app.analysis import preprocess
 from app.analysis import soma as somata
 from app.analysis import channels as views
@@ -350,6 +351,17 @@ class Library:
             while len(self._somata) > CACHE_SIZE:
                 self._somata.popitem(last=False)
         return found
+
+    def pair(self, sha: str, traces: list[list[list[int]]], pixel_um: float, split: bool = True,
+             shape: pairing.SomaShape | None = None) -> dict[str, Any]:
+        """The Measure tool's guesses for the traces on the image and its
+        soma ellipses (pairing.pair_image): each trace's start end (the
+        thicker) and the soma in front of it, from the image's AIS plane and
+        its somata, if it has a soma channel; split: one soma per hotspot;
+        shape: the soma size and roundness allowed."""
+        smooth = pairing.smoothed(self.array(sha))
+        found = self.soma(sha)
+        return pairing.pair_image(smooth, found.bodies(split) if found else None, traces, pixel_um, shape)
 
     def bright_ref(self, sha: str) -> float:
         """The image's bright level (see bright_level), kept per image."""

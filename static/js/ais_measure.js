@@ -8,13 +8,22 @@
 // zooms to its start site (the trace's first pixel, the end at its click),
 // and its two ends are placed:
 //
-// - AIS end "preset": A starts on the trace's start; a click places the soma
-//   end B. S (Other end) puts A on the trace's other end instead, for a trace
-//   whose start is not the end nearer the soma.
+// - AIS end "preset": A starts on the trace's thicker end (an AIS tapers
+//   away from its soma); a click places the soma end B. S (Other end) puts A
+//   on the trace's other end instead.
 // - AIS end "click": a click places A, the next B.
 //
-// With "soma hint" on, a .czi's soma outlines (app/analysis/soma.py) put B on
-// the nearest outline point to A, for Enter to take or a click to move.
+// With "soma hint" on, the image's somata (a .czi's, or a TIFF's soma
+// channel) put B on the soma in front of A: along the way the AIS points out
+// of that end, not merely the nearest, which may sit beside it. Each soma is
+// the largest ellipse inside it that its size and roundness settings allow,
+// and B is where the line from the ellipse's centre toward A meets it
+// (ais_somata.js, app/analysis/pairing.py; Split there makes touching cells
+// one soma each).
+// Enter takes it, a click moves it. Both guesses come from the server for
+// every saved AIS on the image at once, for both ends; suggest() scores the
+// same way here for clicks. A guess pairing.py is not sure of says so in the
+// panel, and the soma measured to is drawn dashed.
 // One end is selected (ringed): a press on an end selects it and drags it,
 // a click elsewhere moves it there, arrow keys nudge it (Shift: 5 px), Tab
 // switches ends and Esc lets go (then arrows switch images again).
@@ -42,6 +51,10 @@ const MEASURE_SAVED = "rgba(255, 80, 220, 0.6)";
 const NUDGE_SAVE_MS = 400;  // how long after the last arrow key a recorded line saves
 const LOUPE_PIXELS = 15;    // image pixels across the loupe
 const LOUPE_SIZE = 160;     // its CSS size, px
+// As app/analysis/pairing.py's DIR_UM, K_ANGLE and TOUCH_UM: keep in step.
+const PAIR_DIR_UM = 3.0;
+const PAIR_K_ANGLE = 2.0;
+const PAIR_TOUCH_UM = 1.0;
 
 const AisMeasure = {
   storageKey: "measure-options",
@@ -65,10 +78,13 @@ const AisMeasure = {
   nudged: null,       // the recorded line an arrow key moved, its save waiting
   nudgeTimer: null,
   listKey: null,      // what the panel's list of recorded lines shows now
+  guess: null,        // the guess this AIS's ends were placed from, or null
+  touched: false,     // an end of this AIS was moved by hand: a late guess leaves it be
 
   init() {
     this.options = this.load();
     this.loupe = Dom.get( "ais-loupe" );
+    AisSomata.listeners.push( () => this.guessArrived() );
     Dom.all( "[data-measure-option]" ).forEach( ( control ) => {
       const field = control.dataset.measureOption;
       if ( control.type === "checkbox" ) control.checked = this.options[ field ];
@@ -199,6 +215,7 @@ const AisMeasure = {
     this.dragging = false;
     this.cursor = null;
     this.want = null;
+    this.guess = null;
     Ais.canvas.classList.remove( "ais-measure-grab" , "ais-measure-dragging" );
     this.renderLoupe();
     this.render();
@@ -222,6 +239,7 @@ const AisMeasure = {
     if ( !this.on ) return;
     if ( this.row ) this.focus();
     this.hint();
+    this.loadPairs();
   },
 
   // A saved AIS of the table (its Soma cell): measure it, on its image.
@@ -252,6 +270,8 @@ const AisMeasure = {
     this.a = null;
     this.b = null;
     this.end = "first";
+    this.guess = null;
+    this.touched = false;
     if ( row && row.soma_um != null ) {
       this.a = [ row.soma_ais_x , row.soma_ais_y ];
       this.b = [ row.soma_x , row.soma_y ];
@@ -259,11 +279,13 @@ const AisMeasure = {
       if ( row.pixels && row.pixels.length > 1 && last[ 0 ] === this.a[ 0 ] && last[ 1 ] === this.a[ 1 ] ) this.end = "last";
     } else if ( row && this.options.ais_end === "preset" ) {
       this.a = this.startOf( row );
-      this.b = this.suggest( this.a );
+      this.b = this.suggestB();
+      this.useGuess();
     }
     this.sel = this.b ? { line: null , end: "b" } : null;
     if ( focus ) this.focus();
     this.hint();
+    this.loadPairs();
     Ais.draw();
     this.render();
   },
@@ -281,8 +303,9 @@ const AisMeasure = {
   swapEnd() {
     if ( !this.row ) return;
     this.end = this.end === "last" ? "first" : "last";
+    this.touched = true;
     this.a = this.startOf( this.row );
-    const b = this.suggest( this.a );
+    const b = this.guessB( this.end ) || this.suggestB();
     if ( b ) this.b = b;
     this.sel = this.b ? { line: null , end: "b" } : null;
     this.focus();
@@ -308,30 +331,122 @@ const AisMeasure = {
   // B on the nearest.
   hint() {
     const entry = Ais.images[ Ais.index ];
-    if ( !this.on || !this.options.soma_hint || !entry || Ais.kind( entry ) !== "czi" ) return;
+    if ( !this.on || !this.options.soma_hint || !entry || ( Ais.kind( entry ) !== "czi" && !AisAuto.hasSoma( entry ) ) ) return;
     const index = Ais.index;
     Ais.loadSomata( entry , index ).then( () => {
       if ( Ais.index !== index || !this.row || !this.a || this.b ) return;
-      this.b = this.suggest( this.a );
+      this.b = this.suggestB();
       if ( this.b && !this.sel ) this.sel = { line: null , end: "b" };
       Ais.draw();
       this.render();
     } );
   },
 
-  // The soma outline point nearest p, when the hint is on and there are any.
-  suggest( p ) {
-    if ( !p || !this.options.soma_hint || !Ais.somata || !Ais.somata.length ) return null;
+  // B for an AIS starting at p and pointing along dir (a unit [x, y], or
+  // none: the nearest), when the hint is on and there are somata. As
+  // pairing.best_soma: a point costs its distance times 1 + K (1 - cos) of its
+  // angle off dir, so the soma in front beats a nearer one beside. On the
+  // ellipses (AisSomata) once they are in: each one's point facing p, and
+  // nothing from inside one; else on the outlines.
+  suggest( p , dir ) {
+    if ( !p || !this.options.soma_hint ) return null;
+    const um = Ais.pixconvFor( Ais.images[ Ais.index ] );
     let best = null;
-    let bestD = Infinity;
-    Ais.somata.forEach( ( outline ) => outline.forEach( ( q ) => {
-      const d = ( q[ 0 ] - p[ 0 ] ) ** 2 + ( q[ 1 ] - p[ 1 ] ) ** 2;
-      if ( d < bestD ) {
-        bestD = d;
+    let bestScore = Infinity;
+    const cost = ( q , inside ) => {
+      const vx = q[ 0 ] - p[ 0 ];
+      const vy = q[ 1 ] - p[ 1 ];
+      const span = Math.hypot( vx , vy );
+      const d = inside ? 0 : span * um;
+      const cos = dir && span && d >= PAIR_TOUCH_UM ? ( vx * dir[ 0 ] + vy * dir[ 1 ] ) / span : 1;
+      const score = d * ( 1 + PAIR_K_ANGLE * ( 1 - cos ) );
+      if ( score < bestScore ) {
+        bestScore = score;
         best = [ q[ 0 ] , q[ 1 ] ];
       }
-    } ) );
+    };
+    const bodies = AisSomata.bodies();
+    if ( bodies && bodies.length ) {
+      bodies.forEach( ( e ) => {
+        const hit = AisSomata.rayHit( e , p );
+        cost( hit.b , hit.inside );
+      } );
+      return best;
+    }
+    if ( !Ais.somata || !Ais.somata.length ) return null;
+    Ais.somata.forEach( ( outline ) => outline.forEach( ( q ) => cost( q , false ) ) );
     return best;
+  },
+
+  // B for the AIS measured: the soma in front of A when A is on an end of the
+  // trace, else the nearest.
+  suggestB() {
+    if ( !this.a ) return null;
+    const on = this.row && this.startOf( this.row )[ 0 ] === this.a[ 0 ] && this.startOf( this.row )[ 1 ] === this.a[ 1 ];
+    return this.suggest( this.a , on ? this.outward( this.row , this.end ) : null );
+  },
+
+  // As pairing.outward: the unit [x, y] way the AIS points out of its end
+  // ("first" | "last"), from the trace point PAIR_DIR_UM in; null for a dot.
+  outward( row , end ) {
+    let pixels = ( row && row.pixels ) || [];
+    if ( pixels.length < 2 ) return null;
+    if ( end === "last" ) pixels = pixels.slice().reverse();
+    const um = Ais.pixconvFor( Ais.images[ Ais.index ] );
+    const k = Math.min( pixels.length - 1 , Math.max( 1 , Math.round( PAIR_DIR_UM / um ) ) );
+    const v = [ pixels[ 0 ][ 0 ] - pixels[ k ][ 0 ] , pixels[ 0 ][ 1 ] - pixels[ k ][ 1 ] ];
+    const n = Math.hypot( v[ 0 ] , v[ 1 ] );
+    return n ? [ v[ 0 ] / n , v[ 1 ] / n ] : null;
+  },
+
+  // --- pairing.py's guesses (AisSomata) -----------------------------------
+
+  // Ask for the image's guesses (AisSomata keeps them; guessArrived places
+  // them). A failure leaves the trace's start and suggest().
+  loadPairs() {
+    if ( this.on && !this.manual() ) AisSomata.ensure();
+  },
+
+  // New guesses (an image, a change to its AIS, Split): place this AIS's ends
+  // from its own, unless they were moved by hand.
+  guessArrived() {
+    if ( !this.on || !this.row || this.touched ) return;
+    const end = this.end;
+    if ( !this.useGuess() ) return;
+    this.sel = this.b ? { line: null , end: "b" } : null;
+    if ( this.end !== end ) this.focus();
+    Ais.draw();
+    this.render();
+  },
+
+  // The guess's B for an end ("first" | "last"), or null.
+  guessB( end ) {
+    const g = this.guess;
+    if ( !g || !this.options.soma_hint ) return null;
+    const at = g.end === end ? g : g.other && g.other.end === end ? g.other : null;
+    return at && at.b ? [ at.b[ 0 ] , at.b[ 1 ] ] : null;
+  },
+
+  // The soma ellipse the AIS is measured to, by its guess, or null.
+  guessBody() {
+    const g = this.guess;
+    const bodies = AisSomata.bodies();
+    if ( !g || !bodies ) return null;
+    const at = g.end === this.end ? g : g.other;
+    return at && at.body != null ? bodies[ at.body ] || null : null;
+  },
+
+  // Place this AIS's ends from its guess, when it has one and nothing is
+  // saved or moved: A on the end it picked, B on its soma (else suggest()).
+  useGuess() {
+    const row = this.row;
+    const pair = AisSomata.pair( row );
+    if ( !pair || row.soma_um != null || this.options.ais_end !== "preset" || this.touched ) return false;
+    this.guess = pair;
+    this.end = pair.end;
+    this.a = this.startOf( row );
+    this.b = this.guessB( pair.end ) || this.suggestB();
+    return true;
   },
 
   // --- stepping and saving -------------------------------------------------
@@ -626,6 +741,7 @@ const AisMeasure = {
       Object.assign( sel.line , this.placed( sel.line ) , { dirty: true } );
     } else {
       this[ sel.end ] = p;
+      this.touched = true;
     }
   },
 
@@ -700,6 +816,7 @@ const AisMeasure = {
   onClick( point ) {
     const p = this.point( point );
     if ( this.row ) {
+      this.touched = true;
       if ( this.sel ) {
         this.setEnd( this.sel , p );
       } else if ( !this.a ) {
@@ -792,6 +909,7 @@ const AisMeasure = {
       if ( this.row ) {
         this.b = null;
         this.sel = null;
+        this.touched = true;
       } else {
         const lines = this.recorded();
         this.deleteLine( this.sel ? this.sel.line : lines[ lines.length - 1 ] );
@@ -849,6 +967,8 @@ const AisMeasure = {
       return;
     }
     if ( this.row ) Ais.polyline( this.row.pixels , "rgba(255, 190, 0, 1)" , lw * 3 );
+    const body = this.row && this.options.soma_hint ? this.guessBody() : null;
+    if ( body ) AisSomata.drawOne( ctx , body , s , lw , true );
     const shapes = this.shapes();
     shapes.forEach( ( shape ) => this.paint( ctx , shape , lw , s ) );
     this.ends( ctx , s , lw );
@@ -1012,10 +1132,15 @@ const AisMeasure = {
     if ( !r ) help = this.a ? I18n.get( "ais.measure_ruler_second" ) : !this.sel && !manual ? I18n.get( "ais.measure_no_ais" ) : "";
     else if ( !this.a ) help = I18n.get( "ais.measure_click_start" );
     else if ( !this.b ) help = I18n.get( "ais.measure_click_soma" );
+    else if ( this.guess && !this.guess.confident && !this.touched && r.soma_um == null ) help = I18n.get( "ais.measure_check" );
     Dom.text( Dom.get( "ais-measure-help" ) , help );
     Dom.show( Dom.get( "ais-measure-help" ) , Boolean( help ) );
-    Dom.text( Dom.get( "ais-measure-end" ) , r ? I18n.get( this.end === "last" ? "ais.measure_end_last" : "ais.measure_end_first" ) : "" );
-    Dom.get( "ais-measure-end" ).classList.toggle( "text-warning" , this.end === "last" );
+    // Swapped: not the end the guess (else the trace's start) picked.
+    const swapped = this.guess ? this.end !== this.guess.end : this.end === "last";
+    let endText = r ? I18n.get( this.end === "last" ? "ais.measure_end_last" : "ais.measure_end_first" ) : "";
+    if ( r && this.guess && !swapped && this.guess.by !== "default" ) endText += " · " + I18n.get( "ais.measure_by_" + this.guess.by );
+    Dom.text( Dom.get( "ais-measure-end" ) , endText );
+    Dom.get( "ais-measure-end" ).classList.toggle( "text-warning" , Boolean( r ) && swapped );
     let value = "";
     if ( r && this.a && this.b ) value = this.label( this.a , this.b );
     Dom.text( Dom.get( "ais-measure-value" ) , value );

@@ -6863,6 +6863,125 @@
         "x-mcp-http": "Viewer overlay for the Process screen; detect_image and trace_click give an agent the results."
       }
     },
+    "/api/ais/files/{sha}/pair": {
+      "post": {
+        "summary": "Guess each AIS's soma end and soma, and the soma ellipses",
+        "operationId": "post_api_ais_files_sha_pair",
+        "tags": [
+          "AIS"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          }
+        ],
+        "description": "Body {pixel_um, traces: [{id, pixels}], split?, soma?: {min_um, max_um, roundness}}: for each accepted AIS on the image, the Measure tool's guess (app/analysis/pairing.py): which end starts at the soma (the thicker), the soma in front of it, and B on that soma's ellipse (the largest inside it the soma size and roundness allow); and the image's soma ellipses (split, the default: one per hotspot, else one per outline). {pairs: [{id, end, by, widths, a, b, body, gap_um, angle_deg, confident, other}], bodies: [{cx, cy, a, b, angle_deg, ais}]}.",
+        "parameters": [
+          {
+            "name": "sha",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "pixel_um",
+                  "traces"
+                ],
+                "properties": {
+                  "csrf_token": {
+                    "type": "string",
+                    "description": "From GET /api/me. Browser sessions only."
+                  },
+                  "pixel_um": {
+                    "type": "number",
+                    "description": "Microns per pixel."
+                  },
+                  "traces": {
+                    "type": "array",
+                    "maxItems": 500,
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "id": {},
+                        "pixels": {
+                          "type": "array",
+                          "items": {
+                            "type": "array",
+                            "items": {
+                              "type": "integer"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "split": {
+                    "type": "boolean",
+                    "description": "One soma per hotspot (true, the default) or per outline."
+                  },
+                  "soma": {
+                    "type": "object",
+                    "description": "What counts as a soma: its longest diameter from min_um to max_um, and roundness (narrowest width over that, 1 a circle).",
+                    "properties": {
+                      "min_um": {
+                        "type": "number"
+                      },
+                      "max_um": {
+                        "type": "number"
+                      },
+                      "roundness": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 1
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "503": {
+            "$ref": "#/components/responses/E503"
+          },
+          "422": {
+            "description": "The server has the file but cannot read it."
+          }
+        },
+        "x-mcp-http": "A first guess for the Measure tool on the Process screen; it stores nothing."
+      }
+    },
     "/api/ais/files/{sha}/file": {
       "get": {
         "summary": "The stored file itself (a .czi or TIFF as it was added), for exports",

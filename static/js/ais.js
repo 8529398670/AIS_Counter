@@ -115,14 +115,16 @@ const Ais = {
         this.renderViews();
         return;
       }
+      // Only this bar's own buttons: the page section around it has a data-view too.
       const button = e.target.closest( "[data-view]" );
-      if ( button ) this.toggleView( button.dataset.view );
+      if ( button && channels.contains( button ) ) this.toggleView( button.dataset.view );
     } );
     // Leaving the corner folds the list away again, after a moment, so a
     // small overshoot past the buttons doesn't close it.
     channels.addEventListener( "mouseenter" , () => this.cancelViewsClose() );
     channels.addEventListener( "mouseleave" , () => {
-      if ( !this.viewsOpen ) return;
+      // Not while a soma size field is being typed in.
+      if ( !this.viewsOpen || ( channels.contains( document.activeElement ) && document.activeElement.tagName === "INPUT" ) ) return;
       this.cancelViewsClose();
       this.viewsCloseTimer = setTimeout( () => this.closeViews() , 500 );
     } );
@@ -192,6 +194,7 @@ const Ais = {
     AisAssign.init();
     AisExport.init();
     AisAuto.init();
+    AisSomata.init();
     AisMeasure.init();
     this.renderPicker();
     this.renderTable();
@@ -1370,6 +1373,17 @@ const Ais = {
   // on, the processed image is back.
   toggleView( key ) {
     if ( !this.views ) return;
+    if ( key === "soma-shape" ) {
+      this.somaShapeOpen = !this.somaShapeOpen;
+      this.renderViews();
+      return;
+    }
+    if ( key === "soma-split" ) {
+      AisSomata.setSplit( !AisSomata.split );
+      this.renderViews();
+      this.draw();
+      return;
+    }
     if ( key === "soma" ) {
       this.showSomata = !this.showSomata;
       if ( this.showSomata ) this.loadSomata( this.images[ this.index ] , this.index );
@@ -1444,8 +1458,16 @@ const Ais = {
     if ( this.kind( this.images[ this.index ] ) === "czi" || AisAuto.hasSoma( this.images[ this.index ] ) ) {
       const soma = button( "soma" , this.showSomata , I18n.get( "ais.view_soma_help" ) ,
         [ dot( SOMA_COLOUR ) , Dom.el( "span" , { text: I18n.get( "ais.view_soma" ) } ) ] );
-      soma.classList.add( "ais-view-soma" , "btn-sm" );
-      somaButton = soma;
+      soma.classList.add( "ais-view-soma" );
+      // Split: one soma per hotspot in an outline of touching cells (AisSomata).
+      const split = button( "soma-split" , AisSomata.split , I18n.get( "ais.view_soma_split_help" ) ,
+        [ Dom.el( "i" , { class: "bi bi-scissors" , attrs: { "aria-hidden": "true" } } ) ] );
+      split.setAttribute( "aria-label" , I18n.get( "ais.view_soma_split_help" ) );
+      // What counts as a soma: its size range and roundness (AisSomata.shape).
+      const sizes = button( "soma-shape" , Boolean( this.somaShapeOpen ) , I18n.get( "ais.view_soma_shape_help" ) ,
+        [ Dom.el( "i" , { class: "bi bi-sliders" , attrs: { "aria-hidden": "true" } } ) ] );
+      sizes.setAttribute( "aria-label" , I18n.get( "ais.view_soma_shape_help" ) );
+      somaButton = Dom.el( "div" , { class: "btn-group btn-group-sm" , attrs: { role: "group" } , children: [ soma , split , sizes ] } );
     }
     // Folded, one button names what is shown; open, the rest run along the top.
     const shown = on.size ? list.filter( ( v ) => on.has( v.key ) ).map( ( v ) => v.label ) : [ I18n.get( "ais.view_processed" ) ];
@@ -1462,7 +1484,31 @@ const Ais = {
     const group = Dom.el( "div" , { class: "btn-group btn-group-sm" , attrs: { role: "group" } , children: buttons } );
     const row = Dom.el( "div" , { class: "ais-channels-list" , children: somaButton ? [ group , somaButton ] : [ group ] } );
     Dom.show( row , this.viewsOpen );
-    bar.replaceChildren( toggle , row );
+    const parts = [ toggle , row ];
+    if ( somaButton && this.viewsOpen && this.somaShapeOpen ) parts.push( this.somaShapeFields() );
+    bar.replaceChildren( ...parts );
+  },
+
+  // The soma size fields: longest diameter from min to max µm, and roundness
+  // (1: a circle). A change asks again (AisSomata) and shows what was kept.
+  somaShapeFields() {
+    const shape = AisSomata.shape;
+    const field = ( key , label , step , max ) => {
+      const input = Dom.el( "input" , { class: "form-control form-control-sm" ,
+        attrs: { type: "number" , min: "0" , max: String( max ) , step: String( step ) , value: String( shape[ key ] ) , "aria-label": label } } );
+      input.addEventListener( "change" , () => {
+        const kept = AisSomata.setShape( { [ key ]: Number( input.value ) } );
+        Dom.all( "[data-soma-shape]" ).forEach( ( box ) => { box.value = String( kept[ box.dataset.somaShape ] ); } );
+        this.draw();
+      } );
+      input.dataset.somaShape = key;
+      return Dom.el( "label" , { class: "ais-soma-shape-field" , children: [ Dom.el( "span" , { text: label } ) , input ] } );
+    };
+    return Dom.el( "div" , { class: "ais-soma-shape" , attrs: { role: "group" , "aria-label": I18n.get( "ais.view_soma_shape_help" ) } , children: [
+      field( "min_um" , I18n.get( "ais.soma_min" ) , 1 , 200 ),
+      field( "max_um" , I18n.get( "ais.soma_max" ) , 1 , 200 ),
+      field( "roundness" , I18n.get( "ais.soma_roundness" ) , 0.05 , 1 ),
+    ] } );
   },
 
   // The channels switched on, each brightened like the processed image,
@@ -2616,7 +2662,9 @@ const Ais = {
       } );
     }
 
-    if ( this.showSomata && this.somata ) this.somata.forEach( ( outline ) => this.dots( outline , SOMA_COLOUR ) );
+    // The outlines faint once the ellipses (AisSomata) are in, to judge them by.
+    if ( this.showSomata && this.somata ) this.somata.forEach( ( outline ) => this.dots( outline , AisSomata.bodies() ? SOMA_FAINT : SOMA_COLOUR ) );
+    AisSomata.draw( ctx , s , lw );
 
     AisAuto.draw( ctx , s , lw );
     AisMeasure.draw( ctx , s , lw );

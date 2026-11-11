@@ -43,3 +43,47 @@ def test_outlines_are_on_the_mask_edge():
 def test_an_image_without_somata_has_none():
     found = soma.find(np.full((200, 200), 1000, np.uint16), PX)
     assert found.outlines == [] and not found.mask.any() and np.isinf(found.gap_um).all()
+
+
+def touching():
+    """Two soma-sized blobs about 14 um apart, run together into one outline."""
+    H, W = 400, 500
+    yy, xx = np.mgrid[0:H, 0:W]
+    img = np.full((H, W), 800.0)
+    centres = [(200, 200), (200, 290)]
+    for r, c in centres:
+        img += 1200 * np.exp(-((yy - r) ** 2 + (xx - c) ** 2) / (2 * 35.0 ** 2))
+    return img.astype(np.uint16), centres
+
+
+def test_touching_somata_are_one_body_whole_and_two_split():
+    img, centres = touching()
+    found = soma.find(img, PX)
+    assert len(found.outlines) == 1
+    assert len(found.bodies(False).hotspots) == 1
+    split = found.bodies(True)
+    assert len(split.hotspots) == 2
+    for (r, c), (x, y) in zip(centres, sorted(split.hotspots)):
+        assert abs(x - (c + 1)) <= 12 and abs(y - (r + 1)) <= 6   # the blobs pull each peak inward a little
+    labels = split.labels
+    assert set(np.unique(labels)) == {0, 1, 2}
+
+
+def test_a_lone_soma_is_one_body_either_way():
+    img, centres = amca()
+    found = soma.find(img, PX)
+    for split in (False, True):
+        bodies = found.bodies(split)
+        assert len(bodies.hotspots) == len(centres)
+
+
+def test_a_dendrite_trunk_is_not_a_soma_of_its_own():
+    """A soma with a thick, bright trunk leaving it: one body, split or not."""
+    H, W = 400, 600
+    yy, xx = np.mgrid[0:H, 0:W]
+    img = np.full((H, W), 800.0)
+    img += 1200 * np.exp(-((yy - 200) ** 2 + (xx - 200) ** 2) / (2 * 35.0 ** 2))
+    img[185:215, 230:520] += 1100      # ~5 um wide, ~47 um long
+    found = soma.find(img.astype(np.uint16), PX)
+    assert len(found.outlines) == 1
+    assert len(found.bodies(True).hotspots) == 1

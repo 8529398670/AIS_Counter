@@ -48,3 +48,7 @@ exports/
 gitPushUpdate.sh
 # The MATLAB helper, built by helper/build.sh.
 helper/dist/
+
+# scripts/test_server.sh: its venv, and its config, key and data snapshot
+.test-venv/
+.test-server/

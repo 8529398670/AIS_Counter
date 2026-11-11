@@ -391,7 +391,7 @@
                   </div>
                   <button id="ais-focus" class="btn btn-dark" type="button" data-i18n-attr="title:ais.focus,aria-label:ais.focus" aria-pressed="false"><i class="bi bi-arrows-fullscreen" aria-hidden="true"></i></button>
                 </div>
-                <!-- What the image shows (Ais.toggleView): the processed image, or a .czi's channels / a pair's raw file blended; on a .czi, Soma outlines the cell bodies over it. Hidden until hovered at the top left, folded into one button; open, they drop below it (above the other stage tools) and fold again shortly after the mouse leaves, or at once on a click elsewhere. -->
+                <!-- What the image shows (Ais.toggleView): the processed image, or a .czi's channels / a pair's raw file blended; on a .czi, Soma outlines the cell bodies over it, with the largest ellipse inside each soma; its scissors split touching somata at their hotspots, its sliders set what size and roundness a soma may be (ais_somata.js). Hidden until hovered at the top left, folded into one button; open, they drop below it (above the other stage tools) and fold again shortly after the mouse leaves, or at once on a click elsewhere. -->
                 <div id="ais-channels" class="ais-channels" role="group" data-i18n-attr="aria-label:ais.views" hidden></div>
                 <!-- A Z-stack's slices (Ais.setSlice): the projection, or one slice with the part of each trace at that depth picked out. -->
                 <div id="ais-z" class="ais-z" hidden>
@@ -2407,6 +2407,7 @@
   <script src="/js/ais_assign.js"></script>
   <script src="/js/ais_export.js"></script>
   <script src="/js/ais_auto.js"></script>
+  <script src="/js/ais_somata.js"></script>
   <script src="/js/ais_measure.js"></script>
   <script src="/js/treatments.js"></script>
   <script src="/js/compare.js"></script>

@@ -21,7 +21,7 @@ from starlette.responses import JSONResponse, Response
 from app.analysis import ais_auto as aa
 from app.analysis import detect as auto
 from app.analysis import auto_params as ap
-from app.analysis import auto_runner, compare, local, matlab, matlab_bundle, report, zlength
+from app.analysis import auto_runner, compare, local, matlab, matlab_bundle, pairing, report, zlength
 from app.analysis import channels as views
 from app.analysis.auto_runner import AutoRuns
 from app.analysis.images import ImageError
@@ -127,6 +127,80 @@ async def somata(request: Request) -> Response:
     except ImageError as exc:
         return _unshown(exc)
     return JSONResponse({"somata": found.outlines if found else []}, headers={"Cache-Control": "private, max-age=86400"})
+
+
+MAX_PAIR_TRACES = 500
+
+
+def _trace_pixels(value: Any) -> list[list[int]] | None:
+    """A trace's pixels as 1-based [x, y] whole numbers, else None."""
+    if not isinstance(value, list) or not value:
+        return None
+    out = []
+    for p in value:
+        if (not isinstance(p, list) or len(p) != 2
+                or not all(isinstance(v, int) and not isinstance(v, bool) and v >= 1 for v in p)):
+            return None
+        out.append([p[0], p[1]])
+    return out
+
+
+def _soma_shape(value: Any) -> tuple[pairing.SomaShape | None, Response | None]:
+    """The soma size and roundness a pair asks for (the defaults when none):
+    0 <= min_um < max_um <= 200, 0 <= roundness <= 1."""
+    if value is None:
+        return pairing.SomaShape(), None
+    if not isinstance(value, dict):
+        return None, bad_request("soma must be {min_um, max_um, roundness}")
+    out = pairing.SomaShape()
+    for key in ("min_um", "max_um", "roundness"):
+        v = value.get(key, getattr(out, key))
+        if not isinstance(v, (int, float)) or isinstance(v, bool) or not math.isfinite(v):
+            return None, bad_request(f"soma.{key} must be a number")
+        setattr(out, key, float(v))
+    if not (0 <= out.min_um < out.max_um <= 200 and 0 <= out.roundness <= 1):
+        return None, bad_request("soma needs 0 <= min_um < max_um <= 200 and 0 <= roundness <= 1")
+    return out, None
+
+
+async def pair(request: Request) -> Response:
+    """Body {pixel_um, traces: [{id, pixels}], split?, soma?: {min_um, max_um,
+    roundness}}: for each accepted AIS
+    on the image, the Measure tool's guess (app/analysis/pairing.py): which
+    end starts at the soma (the thicker), the soma in front of it, and B on
+    that soma's ellipse; and the image's soma ellipses (split, the default:
+    one per hotspot, else one per outline). {pairs: [{id, end, by, widths,
+    a, b, body, gap_um, angle_deg, confident, other}], bodies: [{cx, cy, a,
+    b, angle_deg, ais (the id it faces) | null}]}."""
+    body, refused = await _body(request)
+    if refused:
+        return refused
+    pixel_um = body.get("pixel_um")
+    if (not isinstance(pixel_um, (int, float)) or isinstance(pixel_um, bool) or not math.isfinite(pixel_um)
+            or pixel_um <= 0):
+        return bad_request("pixel_um must be a positive number")
+    split = body.get("split", True)
+    if not isinstance(split, bool):
+        return bad_request("split must be true or false")
+    shape, bad = _soma_shape(body.get("soma"))
+    if bad:
+        return bad
+    traces = body.get("traces")
+    if not isinstance(traces, list) or len(traces) > MAX_PAIR_TRACES:
+        return bad_request(f"traces must be a list of at most {MAX_PAIR_TRACES}")
+    ids, pixels = [], []
+    for t in traces:
+        found = _trace_pixels(t.get("pixels")) if isinstance(t, dict) else None
+        if found is None:
+            return bad_request("each trace needs pixels, a list of 1-based [x, y] whole numbers")
+        ids.append(t.get("id"))
+        pixels.append(found)
+    try:
+        found = await run(_library(request).pair, request.path_params["sha"], pixels, float(pixel_um), split, shape)
+    except ImageError as exc:
+        return _unshown(exc)
+    bodies = [b | {"ais": None if b["ais"] is None else ids[b["ais"]]} for b in found["bodies"]]
+    return JSONResponse({"pairs": [{"id": i} | p for i, p in zip(ids, found["pairs"])], "bodies": bodies})
 
 
 async def channel(request: Request) -> Response:

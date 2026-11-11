@@ -768,6 +768,10 @@ th[aria-sort="descending"] .th-sort::after { content: " \2193"; }
 .ais-channels-list { display: flex; flex-wrap: wrap; gap: 0.35rem; max-width: 100%; }
 .ais-channels-list > .btn-group { flex-wrap: wrap; }
 .ais-channels .btn.active { background: var(--bs-secondary-bg); color: var(--bs-body-color); border-color: var(--bs-secondary-bg); }
+/* The soma size fields under the Soma buttons (Ais.somaShapeFields). */
+.ais-soma-shape { display: flex; flex-wrap: wrap; gap: 0.35rem 0.75rem; margin-top: 0.35rem; padding: 0.35rem 0.5rem; border-radius: var(--bs-border-radius); background: rgba(33, 37, 41, 0.9); color: #fff; font-size: 0.8rem; }
+.ais-soma-shape-field { display: flex; align-items: center; gap: 0.35rem; margin: 0; }
+.ais-soma-shape-field input { width: 4.5rem; }
 .ais-channel-dot { display: inline-block; width: 0.6rem; height: 0.6rem; border-radius: 50%; vertical-align: baseline; box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.5); }
 /* Trace / Edit / Delete (Ais.setTool), a row left of the view tools; invisible
    until the mouse is over it, like the channels (the T / E / D keys still work). */
