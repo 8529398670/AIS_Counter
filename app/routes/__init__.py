@@ -118,13 +118,18 @@ def build_routes(static_server: StaticServer, cfg: Config) -> list[BaseRoute]:
     my_keys = group(RequireAPIKeys, RequireLogin, RequireSession)
     # Admin only: deciding who gets in.
     admins = group(RequireAdmin)
-    # The two admin routes that hand out a login link also require a browser
-    # session. A login link becomes a session, and a session can mint API
-    # keys -- so if an admin-scoped key could create accounts or reissue
-    # links, a leaked key could turn itself into a fresh session and a fresh
-    # key, and revoking the leaked one would not end the compromise. The rule
-    # is: an API key may use what an account can do, but it never creates
-    # credentials. See RequireSession.
+    # Creating an account requires a browser session. A login link becomes a
+    # session, and a session can mint API keys -- so if an admin-scoped key
+    # could create accounts, a leaked key could turn itself into a fresh
+    # session and a fresh key, and revoking the leaked one would not end the
+    # compromise. The rule is: an API key may use what an account can do, but
+    # it never creates credentials. See RequireSession.
+    #
+    # The one exception is a login link for an existing account (your own,
+    # or anyone's for an admin): a key may make one, so an agent can hand a
+    # person a way in, but only one that works once and expires within a day
+    # (admin.checked_link_options). A leaked key can still do that much --
+    # which is why revoke_access voids live links as well as keys.
     #
     # Deleting an account requires a session too, for a different reason: it
     # cannot be undone. A leaked admin key can disable accounts, which an
@@ -179,9 +184,8 @@ def build_routes(static_server: StaticServer, cfg: Config) -> list[BaseRoute]:
         pin_sessions("/api/account/pin", account.set_pin, ["POST"]),
         # A session only: this path decides what this person's zips execute.
         sessions_only("/api/account/matlab", account.set_matlab_path, ["POST"]),
-        # A session only, for the same reason as every route that hands out
-        # a login link: the link becomes a session. See admin_sessions above.
-        sessions_only("/api/account/login-link", account.create_my_login_link, ["POST"]),
+        # A key may make one, held to once and a day. See admin_sessions above.
+        signed_in("/api/account/login-link", account.create_my_login_link, ["POST"]),
         signed_in("/api/account/login-link/cancel", account.cancel_my_login_link, ["POST"]),
         # The account's own sessions. A session only: a key has none, and
         # signing devices out is a person's decision.
@@ -306,7 +310,7 @@ def build_routes(static_server: StaticServer, cfg: Config) -> list[BaseRoute]:
         my_keys("/api/keys/{key_id}/restore", api_keys.restore_my_key, ["POST"]),
         admins("/api/admin/users", admin.list_users),
         admin_sessions("/api/admin/users", admin.create_user, ["POST"]),
-        admin_sessions("/api/admin/users/{user_id}/reissue-login", admin.reissue_login, ["POST"]),
+        admins("/api/admin/users/{user_id}/reissue-login", admin.reissue_login, ["POST"]),
         admins("/api/admin/users/{user_id}/cancel-login-link", admin.cancel_login_link, ["POST"]),
         admins("/api/admin/users/{user_id}/disabled", admin.set_user_disabled, ["POST"]),
         admins("/api/admin/users/{user_id}/revoke-access", admin.revoke_access, ["POST"]),

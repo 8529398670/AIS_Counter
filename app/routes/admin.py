@@ -12,7 +12,7 @@ user".
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from starlette.requests import Request
@@ -24,7 +24,7 @@ from app.core.security import actor_from, check_csrf
 from app.models import credentials, from_iso, login_tokens, to_iso, users, utc_now
 from app.models import passwords
 from app.models import two_factor
-from app.routes.helpers import bad_request, conflict, error, forbidden, get_config, get_store, not_found, parse_id, read_json, run, send_page
+from app.routes.helpers import Refused, bad_request, conflict, error, forbidden, get_config, get_store, not_found, parse_id, read_json, run, send_page
 from app.routes.logs import audit
 
 
@@ -61,28 +61,65 @@ def user_rows(store: Store, query: str = "") -> list[dict[str, Any]]:
     ]
 
 
+# A login link becomes a session, so one made with an API key is held short:
+# it works once and dies within a day. A leaked key can still make one, but
+# not a reusable or long-lived way in that outlasts revoking the key.
+# Browser sessions keep every choice (see routes/__init__.py).
+KEY_LINK_MAX_MINUTES = 1440
+KEY_LINK_MESSAGE = f"a login link made with an API key works once and expires within {KEY_LINK_MAX_MINUTES} minutes"
+
+
 def link_options(request: Request, body: dict) -> login_tokens.LinkOptions | None:
     """What the body asked a new login link to allow, with the configured
     defaults filling the gaps (see login_tokens.resolve_link). None when it is
-    out of range."""
-    cfg = get_config(request)
+    out of range. For create_user, which only a browser session reaches."""
     try:
-        return login_tokens.resolve_link(
-            body.get("max_uses"), body.get("expires_in_minutes"),
-            cfg.login_token_ttl_seconds, cfg.multi_use_login_token_ttl_seconds,
-        )
-    except login_tokens.BadLoginLinkError:
+        return checked_link_options(request, body.get("max_uses"), body.get("expires_in_minutes"))
+    except Refused:
         return None
 
 
-def link_response(credential: str, info: dict) -> dict[str, Any]:
-    """What every route that mints a link answers. The link is a path, not a
-    full URL (see create_user)."""
+def checked_link_options(request: Request, max_uses: object, expires_in_minutes: object) -> login_tokens.LinkOptions:
+    """link_options for the routes and MCP tools that mint a link, with the
+    API key limit applied: refused (400) rather than quietly narrowed, so a
+    caller never holds a link that does less than it asked for."""
+    cfg = get_config(request)
+    try:
+        options = login_tokens.resolve_link(
+            max_uses, expires_in_minutes,
+            cfg.login_token_ttl_seconds, cfg.multi_use_login_token_ttl_seconds,
+        )
+    except login_tokens.BadLoginLinkError as bad:
+        raise Refused(400, str(bad)) from None
+    actor = actor_from(request)
+    if actor is None or not actor.via_api_key:
+        return options
+    limit = KEY_LINK_MAX_MINUTES * 60
+    if expires_in_minutes is None:
+        options = replace(options, ttl_seconds=min(options.ttl_seconds, limit))
+    if options.unlimited or options.max_uses != 1 or not 0 < options.ttl_seconds <= limit:
+        raise Refused(400, KEY_LINK_MESSAGE)
+    return options
+
+
+def _via(request: Request) -> dict[str, Any]:
+    """Audit detail marking a link an API key made."""
+    actor = actor_from(request)
+    return {"via": "api_key"} if actor is not None and actor.via_api_key else {}
+
+
+def link_response(credential: str, info: dict, url: str) -> dict[str, Any]:
+    """What every route that mints a link answers. login_path is what the
+    browser uses (see create_user); login_url is the same link on the address
+    the server is configured to be reached at (server.public_url, or a guess
+    from the listen address), for an API or MCP caller that has no origin of
+    its own to put in front."""
     expires_in = 0
     if info["expires_at"] is not None:
         expires_in = max(0, round((from_iso(info["expires_at"]) - utc_now()).total_seconds()))
     return {
         "login_path": f"/login/{credential}",
+        "login_url": f"{url}/login/{credential}",
         "expires_in_seconds": expires_in,
         "expires_at": info["expires_at"],
         "max_uses": info["max_uses"],
@@ -115,7 +152,7 @@ async def create_user(request: Request) -> Response:
     user = await run(users.create_user, store, display_name, role)
     credential, info = await run(login_tokens.issue_login_link, store, user.id, options)
     audit(request, KIND_ADMIN, "user created", {"user_id": user.id, "name": user.display_name, "role": user.role})
-    return JSONResponse({"user_id": user.id, **link_response(credential, info)}, status_code=201)
+    return JSONResponse({"user_id": user.id, **link_response(credential, info, get_config(request).url)}, status_code=201)
 
 
 async def reissue_login(request: Request) -> Response:
@@ -126,7 +163,10 @@ async def reissue_login(request: Request) -> Response:
 
     It is not a reset: sessions the account already has stay signed in. When
     the worry is that someone else holds the account's credentials, use
-    revoke_access first, then reissue."""
+    revoke_access first, then reissue.
+
+    An admin key may call this too (and the MCP admin_reissue_login_link
+    tool), held to KEY_LINK_MESSAGE."""
     body = await read_json(request)
     if body is None:
         return bad_request("malformed request body")
@@ -135,16 +175,22 @@ async def reissue_login(request: Request) -> Response:
     user_id = parse_id(request.path_params["user_id"])
     if user_id is None:
         return bad_request("invalid user id")
+    try:
+        return JSONResponse(await run(reissue_login_checked, request, user_id, body.get("max_uses"), body.get("expires_in_minutes")))
+    except Refused as refused:
+        return refused.response(request)
 
+
+def reissue_login_checked(request: Request, user_id: int, max_uses: object, expires_in_minutes: object) -> dict[str, Any]:
+    """reissue_login after the request is read, for it and the MCP tool.
+    Synchronous: it runs in a worker thread."""
     store = get_store(request)
-    if await run(users.get_user, store, user_id) is None:
-        return not_found("no such user")
-    options = link_options(request, body)
-    if options is None:
-        return bad_request(str(login_tokens.BadLoginLinkError()))
-    credential, info = await run(login_tokens.issue_login_link, store, user_id, options)
-    audit(request, KIND_ADMIN, "login link reissued", {"user_id": user_id, "max_uses": info["max_uses"], "expires_at": info["expires_at"]})
-    return JSONResponse(link_response(credential, info))
+    if users.get_user(store, user_id) is None:
+        raise Refused(404, "no such user")
+    options = checked_link_options(request, max_uses, expires_in_minutes)
+    credential, info = login_tokens.issue_login_link(store, user_id, options)
+    audit(request, KIND_ADMIN, "login link reissued", {"user_id": user_id, "max_uses": info["max_uses"], "expires_at": info["expires_at"], **_via(request)})
+    return link_response(credential, info, get_config(request).url)
 
 
 async def cancel_login_link(request: Request) -> Response:
@@ -161,12 +207,20 @@ async def cancel_login_link(request: Request) -> Response:
     user_id = parse_id(request.path_params["user_id"])
     if user_id is None:
         return bad_request("invalid user id")
+    try:
+        return JSONResponse(await run(cancel_login_link_checked, request, user_id))
+    except Refused as refused:
+        return refused.response(request)
+
+
+def cancel_login_link_checked(request: Request, user_id: int) -> dict[str, Any]:
+    """cancel_login_link after the request is read, for it and the MCP tool."""
     store = get_store(request)
-    if await run(users.get_user, store, user_id) is None:
-        return not_found("no such user")
-    removed = await run(login_tokens.cancel_login_link, store, user_id)
+    if users.get_user(store, user_id) is None:
+        raise Refused(404, "no such user")
+    removed = login_tokens.cancel_login_link(store, user_id)
     audit(request, KIND_ADMIN, "login link cancelled", {"user_id": user_id, "removed": removed})
-    return JSONResponse({"ok": True, "removed": removed})
+    return {"ok": True, "removed": removed}
 
 
 async def set_user_disabled(request: Request) -> Response:

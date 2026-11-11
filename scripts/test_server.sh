@@ -32,6 +32,8 @@ make_venv() {
   [ -x "$VENV/bin/python" ] || "$python" -m venv "$VENV"
   "$VENV/bin/python" -m pip install -q --upgrade pip
   "$VENV/bin/python" -m pip install -q -r "$ROOT/requirements-dev.txt"
+  # The route tests' client (starlette.testclient) needs this; the requirements don't list it.
+  "$VENV/bin/python" -m pip install -q httpx2
 }
 
 make_config() {

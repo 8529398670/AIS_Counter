@@ -8,7 +8,9 @@ mcp_tools_<feature>.py module), named in its route, or an "x-mcp-http" reason
 in config/openapi.json for staying HTTP only. app/tests/test_mcp_parity.py
 fails until that holds. What a key may not call -- managing users, keys and
 sign-in, and deleting accounts, batches or folders -- needs a browser session
-(see RequireSession), so it has no tool either. The one kind of delete a tool
+(see RequireSession), so it has no tool either -- except a login link for an
+existing account, which a key may make if it works once and dies within a day
+(admin.checked_link_options). The one kind of delete a tool
 may do is the AIS app's own: one result, one recorded line, a batch's auto
 results (mcp_tools_ais.py), each marked destructive.
 
@@ -30,7 +32,7 @@ from app.models import invite_links
 from app.routes import account
 from app.routes import themes
 from app.routes.account import me_row, rename_checked
-from app.routes.admin import RuleRefusal, revoke_access_checked, set_disabled_checked, user_rows
+from app.routes.admin import KEY_LINK_MAX_MINUTES, RuleRefusal, cancel_login_link_checked, reissue_login_checked, revoke_access_checked, set_disabled_checked, user_rows
 from app.routes.helpers import PAGE_DEFAULT, PAGE_LIMIT_MESSAGE, PAGE_MAX, PAGE_OFFSET_MESSAGE, Refused, page_body
 from app.routes.invite_links import invite_link_rows
 from app.routes import mcp_tools_ais
@@ -138,6 +140,39 @@ def admin_set_theme_defaults(call: Call) -> dict[str, Any]:
     return _shared(themes.set_theme_defaults_checked, call.request, args["themes"])
 
 
+EXPIRES_SCHEMA = {
+    "type": "integer", "minimum": 1, "maximum": KEY_LINK_MAX_MINUTES,
+    "description": f"Minutes until the link stops working, 1-{KEY_LINK_MAX_MINUTES}. Default: the server's one-time link default, at most a day.",
+}
+
+LINK_NOTE = (
+    "The link works once and expires within a day (links made with an API key are held to that; "
+    "a browser can make longer or reusable ones). It replaces any live login link the account had; "
+    "sessions already signed in stay signed in. Hand login_url to the person: opening it signs them in. "
+    "It is shown only now and cannot be recovered."
+)
+
+
+def create_my_login_link(call: Call) -> dict[str, Any]:
+    args = call.bind({}, optional={"expires_in_minutes": int})
+    return _shared(account.create_my_login_link_checked, call.request, None, args.get("expires_in_minutes"))
+
+
+def cancel_my_login_link(call: Call) -> dict[str, Any]:
+    _no_args(call)
+    return _shared(account.cancel_my_login_link_checked, call.request)
+
+
+def admin_reissue_login_link(call: Call) -> dict[str, Any]:
+    args = call.bind({"user_id": int}, optional={"expires_in_minutes": int})
+    return _shared(reissue_login_checked, call.request, args["user_id"], None, args.get("expires_in_minutes"))
+
+
+def admin_cancel_login_link(call: Call) -> dict[str, Any]:
+    args = call.bind({"user_id": int})
+    return _shared(cancel_login_link_checked, call.request, args["user_id"])
+
+
 def _invite_links_on(cfg: Config) -> bool:
     return cfg.invite_links_enabled
 
@@ -195,8 +230,43 @@ def build_registry() -> Registry:
         name="admin_revoke_access",
         route="POST /api/admin/users/{user_id}/revoke-access",
         title="Revoke a user's access (admin)",
-        description="For an account that may be compromised: ends every session and voids its live login link and every API key it holds, at once. The account stays enabled; someone with a browser session must issue a new login link to let its owner back in. The owner and your own account cannot be revoked.",
+        description="For an account that may be compromised: ends every session and voids its live login link and every API key it holds, at once. The account stays enabled; give its owner a new one with admin_reissue_login_link to let them back in. The owner and your own account cannot be revoked.",
         call=admin_revoke_access,
+        input_schema=_schema({"user_id": USER_ID_SCHEMA}),
+        destructive=True,
+        admin_only=True,
+    ))
+    registry.register(Tool(
+        name="create_my_login_link",
+        route="POST /api/account/login-link",
+        title="Make a login link for yourself",
+        description="A link that signs in as your own account, for another device or browser. " + LINK_NOTE,
+        call=create_my_login_link,
+        input_schema={"type": "object", "properties": {"expires_in_minutes": EXPIRES_SCHEMA}, "additionalProperties": False},
+    ))
+    registry.register(Tool(
+        name="cancel_my_login_link",
+        route="POST /api/account/login-link/cancel",
+        title="Stop your own login link working",
+        description="Void your account's live login link, if it has one. Sessions it already made stay signed in. removed says whether there was one.",
+        call=cancel_my_login_link,
+        destructive=True,
+    ))
+    registry.register(Tool(
+        name="admin_reissue_login_link",
+        route="POST /api/admin/users/{user_id}/reissue-login",
+        title="Make a login link for a user (admin)",
+        description="A new login link for an existing account, for someone who lost their device or was never signed in. " + LINK_NOTE,
+        call=admin_reissue_login_link,
+        input_schema={"type": "object", "properties": {"user_id": USER_ID_SCHEMA, "expires_in_minutes": EXPIRES_SCHEMA}, "required": ["user_id"], "additionalProperties": False},
+        admin_only=True,
+    ))
+    registry.register(Tool(
+        name="admin_cancel_login_link",
+        route="POST /api/admin/users/{user_id}/cancel-login-link",
+        title="Stop a user's login link working (admin)",
+        description="Void an account's live login link without making a new one, e.g. one sent to the wrong place. Sessions it already made stay signed in; admin_revoke_access ends those too. removed says whether there was one.",
+        call=admin_cancel_login_link,
         input_schema=_schema({"user_id": USER_ID_SCHEMA}),
         destructive=True,
         admin_only=True,

@@ -72,14 +72,6 @@
       "route": "GET /api/openapi.json"
     },
     {
-      "reason": "Sign-in: managed from a browser, not by agents.",
-      "route": "POST /api/account/login-link/cancel"
-    },
-    {
-      "reason": "Sign-in: managed from a browser, not by agents.",
-      "route": "POST /api/admin/users/{user_id}/cancel-login-link"
-    },
-    {
       "reason": "A backup zip: MCP messages are JSON, and clients cap their size. Send it over HTTP with the same key.",
       "route": "POST /api/ais/batches/import"
     },
@@ -94,6 +86,10 @@
     {
       "reason": "Deleting a whole batch is kept out of agents' reach on purpose.",
       "route": "POST /api/ais/batches/{batch_id}/delete"
+    },
+    {
+      "reason": "A first guess for the Measure tool on the Process screen; it stores nothing.",
+      "route": "POST /api/ais/files/{sha}/pair"
     },
     {
       "reason": "Deleting a folder is kept out of agents' reach on purpose.",
@@ -255,7 +251,7 @@
         "readOnlyHint": false,
         "title": "Revoke a user's access (admin)"
       },
-      "description": "For an account that may be compromised: ends every session and voids its live login link and every API key it holds, at once. The account stays enabled; someone with a browser session must issue a new login link to let its owner back in. The owner and your own account cannot be revoked.",
+      "description": "For an account that may be compromised: ends every session and voids its live login link and every API key it holds, at once. The account stays enabled; give its owner a new one with admin_reissue_login_link to let them back in. The owner and your own account cannot be revoked.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
@@ -273,6 +269,109 @@
       "name": "admin_revoke_access",
       "route": "POST /api/admin/users/{user_id}/revoke-access",
       "title": "Revoke a user's access (admin)"
+    },
+    {
+      "adminOnly": false,
+      "annotations": {
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false,
+        "title": "Make a login link for yourself"
+      },
+      "description": "A link that signs in as your own account, for another device or browser. The link works once and expires within a day (links made with an API key are held to that; a browser can make longer or reusable ones). It replaces any live login link the account had; sessions already signed in stay signed in. Hand login_url to the person: opening it signs them in. It is shown only now and cannot be recovered.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "expires_in_minutes": {
+            "description": "Minutes until the link stops working, 1-1440. Default: the server's one-time link default, at most a day.",
+            "maximum": 1440,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "name": "create_my_login_link",
+      "route": "POST /api/account/login-link",
+      "title": "Make a login link for yourself"
+    },
+    {
+      "adminOnly": false,
+      "annotations": {
+        "destructiveHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false,
+        "title": "Stop your own login link working"
+      },
+      "description": "Void your account's live login link, if it has one. Sessions it already made stay signed in. removed says whether there was one.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      },
+      "name": "cancel_my_login_link",
+      "route": "POST /api/account/login-link/cancel",
+      "title": "Stop your own login link working"
+    },
+    {
+      "adminOnly": true,
+      "annotations": {
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false,
+        "title": "Make a login link for a user (admin)"
+      },
+      "description": "A new login link for an existing account, for someone who lost their device or was never signed in. The link works once and expires within a day (links made with an API key are held to that; a browser can make longer or reusable ones). It replaces any live login link the account had; sessions already signed in stay signed in. Hand login_url to the person: opening it signs them in. It is shown only now and cannot be recovered.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "expires_in_minutes": {
+            "description": "Minutes until the link stops working, 1-1440. Default: the server's one-time link default, at most a day.",
+            "maximum": 1440,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "user_id": {
+            "description": "The account's id, from list_team or admin_list_users.",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "user_id"
+        ],
+        "type": "object"
+      },
+      "name": "admin_reissue_login_link",
+      "route": "POST /api/admin/users/{user_id}/reissue-login",
+      "title": "Make a login link for a user (admin)"
+    },
+    {
+      "adminOnly": true,
+      "annotations": {
+        "destructiveHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false,
+        "title": "Stop a user's login link working (admin)"
+      },
+      "description": "Void an account's live login link without making a new one, e.g. one sent to the wrong place. Sessions it already made stay signed in; admin_revoke_access ends those too. removed says whether there was one.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "user_id": {
+            "description": "The account's id, from list_team or admin_list_users.",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "user_id"
+        ],
+        "type": "object"
+      },
+      "name": "admin_cancel_login_link",
+      "route": "POST /api/admin/users/{user_id}/cancel-login-link",
+      "title": "Stop a user's login link working (admin)"
     },
     {
       "adminOnly": false,

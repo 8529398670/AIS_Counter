@@ -353,15 +353,17 @@ class Library:
         return found
 
     def pair(self, sha: str, traces: list[list[list[int]]], pixel_um: float, split: bool = True,
-             shape: pairing.SomaShape | None = None) -> dict[str, Any]:
+             shape: pairing.SomaShape | None = None,
+             sections: list[tuple[int, int] | None] | None = None) -> dict[str, Any]:
         """The Measure tool's guesses for the traces on the image and its
         soma ellipses (pairing.pair_image): each trace's start end (the
         thicker) and the soma in front of it, from the image's AIS plane and
         its somata, if it has a soma channel; split: one soma per hotspot;
-        shape: the soma size and roundness allowed."""
+        shape: the soma size and roundness allowed; sections: each trace's
+        measured AIS (pairing.pair_image)."""
         smooth = pairing.smoothed(self.array(sha))
         found = self.soma(sha)
-        return pairing.pair_image(smooth, found.bodies(split) if found else None, traces, pixel_um, shape)
+        return pairing.pair_image(smooth, found.bodies(split) if found else None, traces, pixel_um, shape, sections)
 
     def bright_ref(self, sha: str) -> float:
         """The image's bright level (see bright_level), kept per image."""

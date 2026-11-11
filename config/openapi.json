@@ -40,6 +40,7 @@
     "/api/account/login-link": {
       "post": {
         "summary": "A login link for yourself",
+        "description": "With an API key the link works once and expires within 1440 minutes (a day): a login link becomes a session, so a key may not make a lasting one. A browser session may make reusable and longer-lived links.",
         "operationId": "post_api_account_login_link",
         "tags": [
           "Account"
@@ -47,6 +48,9 @@
         "security": [
           {
             "sessionCookie": []
+          },
+          {
+            "apiKey": []
           }
         ],
         "requestBody": {
@@ -60,13 +64,13 @@
                     "type": "integer",
                     "minimum": 0,
                     "maximum": 1000,
-                    "description": "Sign-ins the link allows: 1-1000, or 0 for unlimited. Default 1."
+                    "description": "Sign-ins the link allows: 1-1000, or 0 for unlimited. Default 1. With an API key: 1 only (the link works once)."
                   },
                   "expires_in_minutes": {
                     "type": "integer",
                     "minimum": 0,
                     "maximum": 525600,
-                    "description": "0 never expires. Default auth.login_token_ttl_seconds for a link that works once, auth.multi_use_login_token_ttl_seconds otherwise."
+                    "description": "0 never expires. Default auth.login_token_ttl_seconds for a link that works once, auth.multi_use_login_token_ttl_seconds otherwise. With an API key: 1-1440, and the default is held to a day."
                   },
                   "csrf_token": {
                     "type": "string",
@@ -88,6 +92,10 @@
                     "login_path": {
                       "type": "string",
                       "description": "Path of the login link. A credential: treat it like a password."
+                    },
+                    "login_url": {
+                      "type": "string",
+                      "description": "The same link on server.public_url (or the listen address when that is unset), for a caller with no origin of its own. A credential: treat it like a password."
                     },
                     "expires_in_seconds": {
                       "type": "integer",
@@ -111,6 +119,7 @@
                   },
                   "required": [
                     "login_path",
+                    "login_url",
                     "expires_in_seconds",
                     "expires_at",
                     "max_uses",
@@ -208,8 +217,7 @@
           "503": {
             "$ref": "#/components/responses/E503"
           }
-        },
-        "x-mcp-http": "Sign-in: managed from a browser, not by agents."
+        }
       }
     },
     "/api/account/password": {
@@ -2742,6 +2750,10 @@
                       "type": "string",
                       "description": "Path of the login link. A credential: treat it like a password."
                     },
+                    "login_url": {
+                      "type": "string",
+                      "description": "The same link on server.public_url (or the listen address when that is unset), for a caller with no origin of its own. A credential: treat it like a password."
+                    },
                     "expires_in_seconds": {
                       "type": "integer",
                       "description": "0 when it never expires."
@@ -2765,6 +2777,7 @@
                   "required": [
                     "user_id",
                     "login_path",
+                    "login_url",
                     "expires_in_seconds",
                     "expires_at",
                     "max_uses",
@@ -3158,6 +3171,7 @@
     "/api/admin/users/{user_id}/reissue-login": {
       "post": {
         "summary": "A new login link for an account",
+        "description": "With an API key the link works once and expires within 1440 minutes (a day): a login link becomes a session, so a key may not make a lasting one. A browser session may make reusable and longer-lived links.",
         "operationId": "post_api_admin_users_user_id_reissue_login",
         "tags": [
           "Admin"
@@ -3165,6 +3179,9 @@
         "security": [
           {
             "sessionCookie": []
+          },
+          {
+            "apiKey": []
           }
         ],
         "x-required-role": "admin",
@@ -3189,13 +3206,13 @@
                     "type": "integer",
                     "minimum": 0,
                     "maximum": 1000,
-                    "description": "Sign-ins the link allows: 1-1000, or 0 for unlimited. Default 1."
+                    "description": "Sign-ins the link allows: 1-1000, or 0 for unlimited. Default 1. With an API key: 1 only (the link works once)."
                   },
                   "expires_in_minutes": {
                     "type": "integer",
                     "minimum": 0,
                     "maximum": 525600,
-                    "description": "0 never expires. Default auth.login_token_ttl_seconds for a link that works once, auth.multi_use_login_token_ttl_seconds otherwise."
+                    "description": "0 never expires. Default auth.login_token_ttl_seconds for a link that works once, auth.multi_use_login_token_ttl_seconds otherwise. With an API key: 1-1440, and the default is held to a day."
                   },
                   "csrf_token": {
                     "type": "string",
@@ -3217,6 +3234,10 @@
                     "login_path": {
                       "type": "string",
                       "description": "Path of the login link. A credential: treat it like a password."
+                    },
+                    "login_url": {
+                      "type": "string",
+                      "description": "The same link on server.public_url (or the listen address when that is unset), for a caller with no origin of its own. A credential: treat it like a password."
                     },
                     "expires_in_seconds": {
                       "type": "integer",
@@ -3240,6 +3261,7 @@
                   },
                   "required": [
                     "login_path",
+                    "login_url",
                     "expires_in_seconds",
                     "expires_at",
                     "max_uses",
@@ -3354,8 +3376,7 @@
           "503": {
             "$ref": "#/components/responses/E503"
           }
-        },
-        "x-mcp-http": "Sign-in: managed from a browser, not by agents."
+        }
       }
     },
     "/api/admin/users/{user_id}/reset-two-factor": {
@@ -6878,7 +6899,7 @@
             "apiKey": []
           }
         ],
-        "description": "Body {pixel_um, traces: [{id, pixels}], split?, soma?: {min_um, max_um, roundness}}: for each accepted AIS on the image, the Measure tool's guess (app/analysis/pairing.py): which end starts at the soma (the thicker), the soma in front of it, and B on that soma's ellipse (the largest inside it the soma size and roundness allow); and the image's soma ellipses (split, the default: one per hotspot, else one per outline). {pairs: [{id, end, by, widths, a, b, body, gap_um, angle_deg, confident, other}], bodies: [{cx, cy, a, b, angle_deg, ais}]}.",
+        "description": "Body {pixel_um, traces: [{id, pixels, section?: [first, last] (the measured AIS's trace points, 1-based; A is on its end)}], split?, soma?: {min_um, max_um, roundness}}: for each accepted AIS on the image, the Measure tool's guess (app/analysis/pairing.py): which end starts at the soma (the thicker), the soma in front of it, and B on that soma's ellipse (the largest inside it the soma size and roundness allow); and the image's soma ellipses (split, the default: one per hotspot, else one per outline). {pairs: [{id, end, by, widths, a, b, body, gap_um, angle_deg, confident, other}], bodies: [{cx, cy, a, b, angle_deg, ais}]}.",
         "parameters": [
           {
             "name": "sha",
@@ -6923,6 +6944,15 @@
                               "type": "integer"
                             }
                           }
+                        },
+                        "section": {
+                          "type": "array",
+                          "items": {
+                            "type": "integer"
+                          },
+                          "minItems": 2,
+                          "maxItems": 2,
+                          "description": "The measured AIS's first and last trace points, 1-based: A, its start, is on the soma's side of these."
                         }
                       }
                     }

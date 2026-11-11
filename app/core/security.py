@@ -276,8 +276,10 @@ class RequireAdmin(Guard):
 class RequireSession(Guard):
     """Refuses a request that authenticated with an API key, even a correctly
     scoped one. It guards every route that creates a credential: minting and
-    revoking API keys, creating an account, and reissuing a login link (see
-    app/routes/__init__.py).
+    revoking API keys and creating an account (see app/routes/__init__.py).
+    A login link for an existing account is the one credential a key may
+    make, and only a short one: it works once and expires within a day
+    (admin.checked_link_options), so it cannot outlast the key by much.
 
     The reasoning is containment rather than privilege. A key is a bearer
     credential that lives in a config file or a CI secret; if a leaked key

@@ -164,8 +164,9 @@ def _soma_shape(value: Any) -> tuple[pairing.SomaShape | None, Response | None]:
 
 
 async def pair(request: Request) -> Response:
-    """Body {pixel_um, traces: [{id, pixels}], split?, soma?: {min_um, max_um,
-    roundness}}: for each accepted AIS
+    """Body {pixel_um, traces: [{id, pixels, section?: [first, last] (the
+    measured AIS's trace points, 1-based; A is on its end)}], split?, soma?:
+    {min_um, max_um, roundness}}: for each accepted AIS
     on the image, the Measure tool's guess (app/analysis/pairing.py): which
     end starts at the soma (the thicker), the soma in front of it, and B on
     that soma's ellipse; and the image's soma ellipses (split, the default:
@@ -188,15 +189,24 @@ async def pair(request: Request) -> Response:
     traces = body.get("traces")
     if not isinstance(traces, list) or len(traces) > MAX_PAIR_TRACES:
         return bad_request(f"traces must be a list of at most {MAX_PAIR_TRACES}")
-    ids, pixels = [], []
+    ids, pixels, sections = [], [], []
     for t in traces:
         found = _trace_pixels(t.get("pixels")) if isinstance(t, dict) else None
         if found is None:
             return bad_request("each trace needs pixels, a list of 1-based [x, y] whole numbers")
+        section = t.get("section")
+        if section is not None:
+            if (not isinstance(section, list) or len(section) != 2
+                    or not all(isinstance(v, int) and not isinstance(v, bool) for v in section)
+                    or not 1 <= section[0] <= section[1] <= len(found)):
+                return bad_request("a trace's section must be [first, last] trace points, 1-based, in order")
+            section = (section[0], section[1])
         ids.append(t.get("id"))
         pixels.append(found)
+        sections.append(section)
     try:
-        found = await run(_library(request).pair, request.path_params["sha"], pixels, float(pixel_um), split, shape)
+        found = await run(_library(request).pair, request.path_params["sha"], pixels, float(pixel_um), split, shape,
+                          sections)
     except ImageError as exc:
         return _unshown(exc)
     bodies = [b | {"ais": None if b["ais"] is None else ids[b["ais"]]} for b in found["bodies"]]
