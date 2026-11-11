@@ -22,6 +22,7 @@ from app.analysis import ais_auto as aa
 from app.analysis import detect as auto
 from app.analysis import auto_params as ap
 from app.analysis import auto_runner, compare, local, matlab, matlab_bundle, report, zlength
+from app.analysis import channels as views
 from app.analysis.auto_runner import AutoRuns
 from app.analysis.images import ImageError
 from app.analysis.service import Library, NotStored
@@ -625,7 +626,8 @@ async def batch_add(request: Request) -> Response:
     try:
         batch = await run(batches.add_files, get_store(request), batch_id, "upload", body.get("files"),
                           randomize_names=_randomize(body), user_id=_user_id(request), name=_add_name(body),
-                          translations=body.get("translations"), stack=body.get("stack"))
+                          translations=body.get("translations"), stack=body.get("stack"),
+                          channel_roles=body.get("channels"))
     except batches.BatchError as exc:
         return bad_request(str(exc))
     if batch is None:
@@ -990,6 +992,103 @@ async def batch_channels(request: Request) -> Response:
     return JSONResponse(await run(_batch_channels, _library(request), batch))
 
 
+def _image_layouts(library: Library, images: list[dict[str, Any]]) -> dict[str, tuple[str, dict[str, Any]]]:
+    """key -> (role, layout) for images with no channel roles yet, read from
+    their stored files (batches.channel_file); those not stored are left out."""
+    out = {}
+    for image in images:
+        if image.get("channels"):
+            continue
+        found = batches.channel_file(image)
+        if not found:
+            continue
+        role, sha = found
+        try:
+            if library.has(sha):
+                out[image["key"]] = (role, library.layout(sha))
+        except ImageError:
+            continue
+    return out
+
+
+def _add_param(request: Request) -> tuple[int | None, bool]:
+    """(add id or None for the whole batch, whether it was well formed)."""
+    raw = request.query_params.get("add", "")
+    if not raw:
+        return None, True
+    add_id = parse_id(raw)
+    return add_id, bool(add_id)
+
+
+def _batch_layouts(library: Library, store: Any, batch: dict[str, Any], add_id: int | None) -> dict[str, Any]:
+    """The channel layouts of a batch's (or an add's) images for the Channels
+    dialog: channels.summarize's entries, each with how many of its images
+    already have results; unread counts images whose file isn't stored yet."""
+    images = batches.channel_scope(batch, add_id)
+    read = _image_layouts(library, images)
+    with_results = {r["image"] for r in batches.list_results(store, batch["id"])}
+    found, roles, keys = [], [], []
+    for image in images:
+        chosen = image.get("channels")
+        layout = chosen["layout"] if chosen else read.get(image["key"], (None, None))[1]
+        if layout is None:
+            continue
+        colors = None
+        if layout["kind"] == "czi":
+            role, sha = batches.channel_file(image)
+            try:
+                colors = [c["color"] for c in library.channels(sha)] if library.has(sha) else None
+            except ImageError:
+                colors = None
+        found.append((layout, colors))
+        roles.append(chosen["roles"] if chosen else None)
+        keys.append(image["key"])
+    out = views.summarize(found, roles)
+    for entry in out:
+        entry["results"] = sum(1 for (layout, _), key in zip(found, keys)
+                               if views.same(layout, entry["layout"]) and key in with_results)
+    return {"layouts": out, "images": len(images), "unread": len(images) - len(found)}
+
+
+async def batch_layouts(request: Request) -> Response:
+    """?add=<id>: the channel layouts of a batch's images, or one add's."""
+    batch_id = parse_id(request.path_params["batch_id"])
+    add_id, ok = _add_param(request)
+    if not ok:
+        return bad_request("add must be an add's id")
+    store = get_store(request)
+    batch = await run(batches.get_batch, store, batch_id) if batch_id else None
+    if batch is None:
+        return not_found("no such batch")
+    return JSONResponse(await run(_batch_layouts, _library(request), store, batch, add_id))
+
+
+async def batch_layouts_set(request: Request) -> Response:
+    """Body: {add?, channels: [{layout, roles}]}: new channel roles for the
+    images of a batch (or one add) with those layouts. Answers with the batch
+    and the keys of the images now traced from other channels."""
+    body, refused = await _body(request)
+    if refused:
+        return refused
+    batch_id = parse_id(request.path_params["batch_id"])
+    store = get_store(request)
+    batch = await run(batches.get_batch, store, batch_id) if batch_id else None
+    if batch is None:
+        return not_found("no such batch")
+    add_id = body.get("add")
+    if add_id is not None and (not isinstance(add_id, int) or isinstance(add_id, bool)):
+        return bad_request("add must be an add's id")
+    layouts = await run(_image_layouts, _library(request), batches.channel_scope(batch, add_id))
+    try:
+        found = await run(batches.set_channels, store, batch_id, add_id, body.get("channels"), layouts)
+    except batches.BatchError as exc:
+        return bad_request(str(exc))
+    if found is None:
+        return not_found("no such batch")
+    record, changed = found
+    return JSONResponse({"batch": await run(_batch_json, request, record), "changed": changed})
+
+
 async def batch_upload(request: Request) -> Response:
     """Body: {name, files: [{name, rel, sha, size}], translations?: [{dir,
     text}]} -- a folder picked in the browser, hashed there. Upload the files afterwards with POST /api/ais/files."""
@@ -999,7 +1098,8 @@ async def batch_upload(request: Request) -> Response:
     try:
         batch = await run(batches.create_batch, get_store(request), body.get("name"), "upload",
                           body.get("files"), _user_id(request), randomize_names=_randomize(body),
-                          translations=body.get("translations"), stack=body.get("stack"))
+                          translations=body.get("translations"), stack=body.get("stack"),
+                          channel_roles=body.get("channels"))
     except batches.BatchError as exc:
         return bad_request(str(exc))
     return JSONResponse(await run(_batch_json, request, batch))
@@ -1391,6 +1491,18 @@ async def local_stacks(request: Request) -> Response:
         return bad_request(str(exc))
 
 
+async def local_channels(request: Request) -> Response:
+    """Body: {path}. The channel layouts of a folder's images, for the Add
+    dialog to ask about before the server hashes anything."""
+    body, refused = await _local_body(request)
+    if refused:
+        return refused
+    try:
+        return JSONResponse({"layouts": await run(local.layouts_under, body.get("path"))})
+    except ImageError as exc:
+        return bad_request(str(exc))
+
+
 def _hashed(body: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
     """An Open-path folder's files. With stacks, refused if the file limit
     would leave one short."""
@@ -1417,7 +1529,8 @@ async def batch_path(request: Request) -> Response:
         name = _path_name(folder, body)
         translations = await run(local.translations_under, folder)
         batch = await run(batches.create_batch, get_store(request), name, "path", files, _user_id(request), folder,
-                          randomize_names=_randomize(body), translations=translations, stack=body.get("stack"))
+                          randomize_names=_randomize(body), translations=translations, stack=body.get("stack"),
+                                  channel_roles=body.get("channels"))
     except (ImageError, batches.BatchError) as exc:
         return bad_request(str(exc))
     return JSONResponse(await run(_batch_json, request, batch))
@@ -1437,7 +1550,8 @@ async def batch_add_path(request: Request) -> Response:
         translations = await run(local.translations_under, folder)
         batch = await run(batches.add_files, get_store(request), batch_id, "path", files, folder,
                           randomize_names=_randomize(body), user_id=_user_id(request), name=name,
-                          translations=translations, stack=body.get("stack"))
+                          translations=translations, stack=body.get("stack"),
+                          channel_roles=body.get("channels"))
     except (ImageError, batches.BatchError) as exc:
         return bad_request(str(exc))
     if batch is None:

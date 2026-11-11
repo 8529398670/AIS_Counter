@@ -10,10 +10,13 @@ from __future__ import annotations
 import io
 import struct
 import zlib
+from typing import Any
 
 import numpy as np
 import tifffile
 from PIL import Image
+
+from app.analysis import channels
 
 PROCESSED_SUFFIX = ".tif - Processed method 2.5.tif"
 # The most a compressed page may decode to through Pillow: ample for a camera
@@ -84,6 +87,20 @@ def read_planes(data: bytes) -> np.ndarray:
     if min(arr.shape[:2]) < 3:
         raise ImageError("image too small")
     return np.ascontiguousarray(arr)
+
+
+def tiff_names(data: Any) -> list[str]:
+    """What the planes read_planes gives are called (channels.tiff_names),
+    from the first page's tags alone: no pixels are read, so data can be a
+    mmap. One name for a greyscale TIFF."""
+    try:
+        with tifffile.TiffFile(io.BytesIO(data) if isinstance(data, (bytes, bytearray)) else data) as tif:
+            page = tif.pages[0]
+            count = int(page.samplesperpixel or 1)
+            rgb = page.photometric == tifffile.PHOTOMETRIC.RGB
+    except Exception as exc:  # tifffile raises many types for bad input
+        raise ImageError("not a readable TIFF") from exc
+    return channels.tiff_names(min(count, 4), rgb)
 
 
 def tiff_bytes(arr: np.ndarray) -> bytes:

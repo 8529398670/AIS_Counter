@@ -42,6 +42,30 @@ const Tiff = {
     return canvas;
   },
 
+  // { samples , rgb } of the first IFD (samples per pixel, photometric RGB),
+  // for the channels a TIFF has (Channels.readTiff); null if not a TIFF.
+  samples( view ) {
+    if ( view.byteLength < 8 ) return null;
+    const order = view.getUint16( 0 );
+    if ( order !== 0x4949 && order !== 0x4d4d ) return null;
+    const le = order === 0x4949;
+    if ( view.getUint16( 2 , le ) !== 42 ) return null;
+    const ifd = view.getUint32( 4 , le );
+    const count = view.getUint16( ifd , le );
+    let samples = 1;
+    let photometric = null;
+    for ( let i = 0; i < count; i += 1 ) {
+      const at = ifd + 2 + i * 12;
+      const tag = view.getUint16( at , le );
+      if ( tag !== 262 && tag !== 277 ) continue;
+      const type = view.getUint16( at + 2 , le );
+      const value = type === 3 ? view.getUint16( at + 8 , le ) : view.getUint32( at + 8 , le );
+      if ( tag === 277 ) samples = value;
+      else photometric = value;
+    }
+    return { samples: samples || 1 , rgb: photometric === 2 };
+  },
+
   // { width, height, at( x, y ) } for the first IFD, or null if unsupported.
   decode( buffer ) {
     try {

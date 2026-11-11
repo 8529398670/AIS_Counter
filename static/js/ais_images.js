@@ -31,6 +31,7 @@ const AisImages = {
     } catch ( error ) { /* storage blocked: cards */ }
 
     Dom.get( "ais-images-open" ).addEventListener( "click" , () => this.open() );
+    Dom.get( "ais-images-channels" ).addEventListener( "click" , () => this.editChannels() );
     Dom.get( "ais-images-all" ).addEventListener( "click" , () => this.setVisible( true ) );
     Dom.get( "ais-images-none" ).addEventListener( "click" , () => this.setVisible( false ) );
     Dom.get( "ais-images-use" ).addEventListener( "click" , () => this.confirm() );
@@ -89,7 +90,7 @@ const AisImages = {
     this.ctx = {
       batch: batch,
       entries: batch.images.map( ( image ) => ( { key: image.key , cell: image.cell , dir: image.dir , dup_of: image.dup_of ,
-        add_id: image.add_id , original_key: image.original_key , files: image.files } ) ),
+        add_id: image.add_id , original_key: image.original_key , channels: image.channels , files: image.files } ) ),
       process: false,
       count: ( entry ) => of( entry ).ais || 0,
       complete: ( entry ) => Boolean( of( entry ).ais || of( entry ).done ),
@@ -147,6 +148,20 @@ const AisImages = {
     adds.forEach( ( a ) => chip( a.id , a.source === "path" ? "bi-hdd" : "bi-folder2" , a.name ,
       entries.filter( ( entry ) => entry.add_id === a.id ).length ,
       [ a.path || a.name , a.added_by_name , new Date( a.added_at ).toLocaleString() ].filter( Boolean ).join( " · " ) ) );
+  },
+
+  // Channel roles for the add shown (or the whole batch), saved at once;
+  // the dialog then shows the batch as it is now.
+  async editChannels() {
+    const batch = this.ctx && this.ctx.batch;
+    if ( !batch || !batch.id ) return;
+    const addId = typeof this.folder === "number" ? this.folder : null;
+    try {
+      const saved = await Channels.edit( batch.id , addId );
+      if ( saved && !this.ctx.process ) this.openBatch( batch , this.folder );
+    } catch ( error ) {
+      App.showError( error.message );
+    }
   },
 
   addOf( entry ) {
@@ -421,7 +436,9 @@ const AisImages = {
     const f = entry.files[ Ais.traced( entry ) ];
     // Picked on the Batches screen and still waiting to upload: read here too.
     const picked = Ais.parts( entry ).some( ( part ) => part.file || Batches.fileFor( part.sha ) );
-    const serverOnly = Ais.kind( entry ) === "czi" || Ais.kind( entry ) === "stack";
+    // A view of another channel (channel roles) is drawn by the server too.
+    const viewed = Ais.sha( entry ) !== f.sha;
+    const serverOnly = Ais.kind( entry ) === "czi" || Ais.kind( entry ) === "stack" || viewed;
     // A .czi or Z-stack only the server can draw: picked here and not up yet
     // (a new batch's still queued), so upload it now rather than say nobody has.
     if ( !entry.thumb && picked && !f.stored && serverOnly ) {
@@ -439,7 +456,7 @@ const AisImages = {
           entry.thumb = null;
         }
       } else if ( f.stored ) {
-        entry.thumb = Dom.el( "img" , { attrs: { alt: "" , src: "/api/ais/files/" + f.sha + "/thumb.png?v=2" } } );   // v=2: see Ais.show
+        entry.thumb = Dom.el( "img" , { attrs: { alt: "" , src: "/api/ais/files/" + Ais.sha( entry ) + "/thumb.png?v=2" } } );   // v=2: see Ais.show
       }
       if ( !entry.thumb ) {
         holder.replaceChildren( Dom.el( "span" , { class: "small text-body-tertiary px-2 text-center" , text: I18n.get( "ais.not_uploaded" ) } ) );

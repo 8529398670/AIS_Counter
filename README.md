@@ -206,15 +206,23 @@ the start of an AIS gives the original's trace and length. **Enter** accepts,
   at the end nearer a soma and filters by that distance. Manual clicking
   works as on a TIFF pair; lengths still come from the unchanged
   `ais_auto.m` port. The reader (`app/analysis/czi.py`) is pure numpy and
-  takes uncompressed single-plane files. Channel names are set in that file.
+  takes uncompressed single-plane files.
+- **Channel roles.** Adding files with more than one colour channel (a `.czi`,
+  a colour TIFF, Z-stack slices) asks, for each channel layout found, which
+  channel is the *AIS*, which the *Soma/dendrite* stain (where auto mode starts
+  from somata, a TIFF's too) and what to call the others. It starts from the
+  usual guess: a `.czi`'s Alexa Fluor 488 and its AMCA/DAPI/Hoechst channel, a
+  TIFF's first plane. *Channels…* (a batch's ⋯ menu, or the Images dialog for
+  the add shown) changes them later; images traced from another channel are no
+  longer marked done, and their results stay. See `app/analysis/channels.py`.
 - **Channels.** The buttons at the bottom left of the image switch what it
   shows: *Processed* (what is traced), or a `.czi`'s channels in ZEN's
   colors, each on or off and blended (a TIFF pair: *Raw*). The last
   channel off brings *Processed* back; the choice carries to the next
   image. Clicks always trace the processed image.
 - **Z-stacks.** A folder of per-slice TIFFs named `<cell>_z01c1+2.tif` is one
-  image. Adding it asks for the AIS channel (red or green, every time), the
-  z step and the pixel size, none of which the files carry. Clicks trace the
+  image. Adding it asks for the AIS channel (its channel roles, every time:
+  no guess for slices), the z step and the pixel size, none of which the files carry. Clicks trace the
   stack's max projection as on any image, and the trace is then followed
   through the slices for a 3D length beside an XY length. The slider along the
   bottom of the image shows one slice at a time, with the part of each trace at

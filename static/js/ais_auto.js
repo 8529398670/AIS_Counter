@@ -361,9 +361,17 @@ const AisAuto = {
     return run.pending.get( index );
   },
 
-  // "soma" needs a .czi's somata: a TIFF is traced from both ends instead.
+  // "soma" needs a .czi's somata, or a TIFF's soma channel (chosen with
+  // its channel roles): any other TIFF is traced from both ends instead.
   startFor( entry , start ) {
-    return start === "soma" && Ais.kind( entry ) !== "czi" ? "both" : start;
+    return start === "soma" && Ais.kind( entry ) !== "czi" && !this.hasSoma( entry ) ? "both" : start;
+  },
+
+  // As app/analysis/auto_params.has_soma.
+  hasSoma( entry ) {
+    const chosen = entry.channels;
+    return Boolean( chosen && ( chosen.role === "raw" || chosen.role === "processed" )
+      && chosen.roles.some( ( r ) => r.role === "soma" ) );
   },
 
   // Settings > Auto mode's filters: long, bright and wide enough, and (a

@@ -70,7 +70,7 @@ const Batches = {
     window.addEventListener( "hashchange" , () => { if ( this.showing() ) this.render(); this.onView(); } );
     document.addEventListener( "visibilitychange" , () => this.onView() );
     this.initReset();
-    this.initStack();
+    Channels.init();
     Treatments.init();
     Compare.init();
     BatchFolders.init();
@@ -625,19 +625,7 @@ const Batches = {
     await this.refresh( true );
   },
 
-  // --- Z-stacks -----------------------------------------------------------------
-
-  initStack() {
-    const element = Dom.get( "batches-stack-modal" );
-    // Open path can ask from the Process screen, with this one hidden.
-    document.body.appendChild( element );
-    this.stackModal = bootstrap.Modal.getOrCreateInstance( element );
-    Dom.get( "batches-stack-form" ).addEventListener( "submit" , ( e ) => { e.preventDefault(); this.answerStack(); } );
-    element.addEventListener( "hidden.bs.modal" , () => {
-      if ( this.stackAnswer ) this.stackAnswer( null );
-      this.stackAnswer = null;
-    } );
-  },
+  // --- channels and Z-stacks ---------------------------------------------------------
 
   // The Z-stacks among picked files, by name alone, as the server will find
   // them (app/models/ais.py _take_stacks): [{ cell , slices }].
@@ -653,42 +641,31 @@ const Batches = {
     return Array.from( found.values() ).filter( ( s ) => s.slices >= 2 );
   },
 
-  // What the files can't say about these stacks, asked each time: the
-  // channel differs from batch to batch, so none is remembered. null when
-  // the person backs out.
-  askStack( stacks ) {
-    Dom.text( Dom.get( "batches-stack-found" ) , I18n.get( "batches.stack_found" )
-      .replace( "{count}" , stacks.length ).replace( "{slices}" , stacks.map( ( s ) => s.slices ).join( ", " ) ) );
-    Dom.get( "batches-stack-form" ).reset();
-    Dom.get( "batches-stack-pixel" ).value = Settings.methods[ 0 ].defaults.pixconv;
-    return new Promise( ( resolve ) => {
-      this.stackAnswer = resolve;
-      this.stackModal.show();
-    } );
+  // A folder on this machine: its channels and Z-stacks, asked about before
+  // the server hashes anything (Channels.ask). null when the person backs out.
+  async askAt( path ) {
+    const [ { stacks } , { layouts } ] = await Promise.all( [ Api.post( "/api/ais/local/stacks" , { path: path } ) ,
+      Api.post( "/api/ais/local/channels" , { path: path } ) ] );
+    return Channels.ask( layouts , stacks );
   },
 
-  answerStack() {
-    const plane = Dom.get( "batches-stack-form" ).querySelector( "input[name=batches-stack-plane]:checked" );
-    const answer = this.stackAnswer;
-    this.stackAnswer = null;
-    answer( { plane: Number( plane.value ) , z_step_um: Number( Dom.get( "batches-stack-z" ).value ) ,
-      pixel_um: Number( Dom.get( "batches-stack-pixel" ).value ) } );
-    this.stackModal.hide();
+  // What an answer of Channels.ask adds to an add's body.
+  addBody( asked ) {
+    return Object.assign( {} , asked.channels.length ? { channels: asked.channels } : {} , asked.stack ? { stack: asked.stack } : {} );
   },
 
-  // The same for a folder on this machine, by asking the server what is in
-  // it: the answer, null with no stacks there, false if the person backs out.
-  async askStackAt( path ) {
-    const { stacks } = await Api.post( "/api/ais/local/stacks" , { path: path } );
-    return stacks.length ? ( await this.askStack( stacks ) ) || false : null;
+  async editChannels( b ) {
+    try {
+      if ( await Channels.edit( b.id , null ) ) await this.refresh( true );
+    } catch ( error ) {
+      App.showError( error.message );
+    }
   },
 
   // Files picked in this browser: hash them, add them to the batch, then
   // upload them in the background.
   async addPicked( b , fileList ) {
     const stacks = this.stacksIn( fileList );
-    const stack = stacks.length ? await this.askStack( stacks ) : null;
-    if ( stacks.length && !stack ) return;
     const progress = { reading: true , done: 0 , total: 0 };
     this.local.set( b.id , progress );
     let picked;
@@ -704,8 +681,16 @@ const Batches = {
         this.render();
         return;
       }
+      // Which channel is the AIS (and the stacks' spacing), now the files
+      // have been read; backing out adds nothing.
+      const asked = await Channels.ask( picked.layouts , stacks );
+      if ( !asked ) {
+        this.local.delete( b.id );
+        this.render();
+        return;
+      }
       const batch = await Api.post( "/api/ais/batches/" + b.id + "/upload" , Object.assign( { files: picked.files ,
-        randomize: this.randomize() , add_name: picked.name , translations: picked.translations } , stack ? { stack: stack } : {} ) );
+        randomize: this.randomize() , add_name: picked.name , translations: picked.translations } , this.addBody( asked ) ) );
       Ais.batchChanged( batch , true );
       Dom.toast( I18n.get( "batches.added" ).replace( "{n}" , picked.files.length ).replace( "{name}" , batch.name ) );
       // Only what the server does not have yet, each sha once.
@@ -733,18 +718,18 @@ const Batches = {
 
   // A folder on this machine (the Open path dialog), read by the server.
   async addPath( b , path ) {
-    let stack;
+    let asked;
     try {
-      stack = await this.askStackAt( path );
+      asked = await this.askAt( path );
     } catch ( error ) {
       App.showError( error.message );
       return;
     }
-    if ( stack === false ) return;
+    if ( !asked ) return;
     this.local.set( b.id , { reading: true , done: 0 , total: 0 } );
     this.render();
     try {
-      const batch = await Api.post( "/api/ais/batches/" + b.id + "/path" , Object.assign( { path: path , randomize: this.randomize() } , stack ? { stack: stack } : {} ) );
+      const batch = await Api.post( "/api/ais/batches/" + b.id + "/path" , Object.assign( { path: path , randomize: this.randomize() } , this.addBody( asked ) ) );
       Ais.batchChanged( batch , true );
       Dom.toast( I18n.get( "batches.added_path" ).replace( "{name}" , batch.name ) );
       AisImages.openBatch( batch , this.lastAdd( batch ) );
@@ -958,6 +943,11 @@ const Batches = {
         items.push( divider() );
         items.push( this.menuItem( "bi-arrow-counterclockwise" , I18n.get( "batches.reset" ) , () => this.openReset( b ) , "text-danger" ) );
       }
+    }
+    // Which channel is the AIS: whoever can add images to it.
+    if ( ( canChange || this.admin() ) && b.images ) {
+      if ( items.length ) items.push( divider() );
+      items.push( this.menuItem( "bi-palette" , I18n.get( "channels.edit" ) , () => this.editChannels( b ) ) );
     }
     if ( canChange ) {
       items.push( divider() );

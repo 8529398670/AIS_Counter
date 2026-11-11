@@ -17,8 +17,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from app.analysis import zstack
-from app.analysis.images import ImageError
+from app.analysis import channels, zstack
+from app.analysis.czi import is_czi, read_channels
+from app.analysis.images import ImageError, tiff_names
 
 TIFF_SUFFIXES = (".tif", ".tiff", ".czi")   # the images: TIFFs and CZI mode's .czi
 CHOOSE_TIMEOUT_SECONDS = 600
@@ -155,6 +156,40 @@ def _dates(path: Path) -> dict[str, str]:
     return out
 
 
+def layout_of(data: bytes) -> tuple[dict[str, Any], list[str] | None] | None:
+    """(layout, colors) of a file's bytes (channels.py), colors for a .czi
+    alone; None when it can't be read."""
+    try:
+        if is_czi(data):
+            found = read_channels(data)
+            layout, colors = {"kind": "czi", "names": list(found)}, list(found.values())
+        else:
+            layout, colors = {"kind": "tiff", "names": tiff_names(data)}, None
+        return channels.clean_layout(layout), colors
+    except (ImageError, channels.ChannelError):
+        return None
+
+
+def layouts_under(raw: Any) -> list[dict[str, Any]]:
+    """The channel layouts of a folder's images (subfolders too), for the Add
+    dialog: channels.summarize's [{layout, colors, count, roles}], each with
+    stacks, how many of its files are Z-stack slices (by name)."""
+    found, slices = [], []
+    for path in images_under(folder(raw)):
+        try:
+            data = path.read_bytes()
+        except OSError:
+            continue
+        layout = layout_of(data)
+        if layout:
+            found.append(layout)
+            slices.append(zstack.parse(path.name) is not None)
+    out = channels.summarize(found)
+    for o in out:
+        o["stacks"] = sum(1 for (layout, _), s in zip(found, slices) if s and channels.same(layout, o["layout"]))
+    return out
+
+
 def hashed_files(raw: Any) -> tuple[str, list[dict[str, Any]]]:
     """The folder's images, subfolders too, with the sha-256 of each, for an
     Open-path batch: (folder, [{name, rel, sha, size, path}]). rel starts with
@@ -170,6 +205,9 @@ def hashed_files(raw: Any) -> tuple[str, list[dict[str, Any]]]:
         rel = "/".join((base.name or str(base), *path.relative_to(base).parts))
         item = {"name": path.name, "rel": rel, "sha": hashlib.sha256(data).hexdigest(),
                 "size": len(data), "path": str(path)}
+        layout = layout_of(data)
+        if layout:
+            item["layout"] = layout[0]
         item.update(_dates(path))
         files.append(item)
     return str(base), files

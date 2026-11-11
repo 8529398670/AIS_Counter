@@ -71,7 +71,10 @@ and sending a run to a MATLAB helper.
      statistics.
    - `compare_batches {batch_ids: [12, 13]}` (admins) gives the comparison as
      JSON: culture_means, treatment_summary, statistics with Holm-corrected
-     p and stars, all_values and original_names.
+     p and stars, all_values and original_names. The statistics include a
+     two-way ANOVA (test `twoway`) with its simple effects; `design` picks
+     its factors: `"drug x add-on"` (default, read from the treatment names)
+     or `"treatment x culture"`.
 
 ## The JSON exports
 
@@ -92,7 +95,7 @@ The REST routes behind them:
 | What | Route |
 |---|---|
 | Report | `GET /api/ais/report?batch=<id>[,<id>...]\|all&everything=0\|1&unblind=0\|1&sheets=summary,ais` |
-| Comparison (admins) | `POST /api/ais/compare` with `{batch_ids, tests?, units?, sheets: true, plots?: false}` |
+| Comparison (admins) | `POST /api/ais/compare` with `{batch_ids, tests?, units?, design?, sheets: true, plots?: false}` |
 | Auto run | `POST /api/ais/batches/{id}/auto`; `GET /api/ais/auto/{run_id}`; `POST /api/ais/auto/{run_id}/cancel`; `GET /api/ais/auto?batch=<id>`; `GET /api/ais/auto/defaults` |
 
 ## Notes

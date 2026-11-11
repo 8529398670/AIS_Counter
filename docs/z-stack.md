@@ -14,8 +14,10 @@ real AIS with ZEN or ImageJ, treat 3D lengths as unvalidated.
   96 dpi tag is a placeholder. Both are entered when stacks are added and are
   kept with the stack. A wrong z step scales every 3D length.
 - **Two real channels.** Red and green are separate stains. Blue is green's
-  display tint. Which one marks the AIS varies by batch, so the dialog asks
-  every time and remembers nothing.
+  display tint. Which one marks the AIS varies by batch, so the Channels
+  dialog asks every time (no guess for slices) and remembers nothing. The AIS
+  channel picked there is the stack's plane; *Channels…* changes it later,
+  which gives the stack a new sha (`app/analysis/channels.py`).
 - **8-bit display exports.** These are rendered through ZEN's display settings,
   not raw camera data. Bright areas can clip at 254.
 - **LZW compression.** `imagecodecs` has no Alpine wheel, so Pillow decodes these

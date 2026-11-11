@@ -615,47 +615,42 @@
           <input id="batches-translation" type="file" accept=".txt,text/plain" hidden />
           <input id="batches-import-file" type="file" accept=".zip,application/zip" hidden />
 
-          <!-- What the files can't say about Z-stacks being added (Batches.askStack). -->
-          <div class="modal fade" id="batches-stack-modal" tabindex="-1" aria-labelledby="batches-stack-title" aria-hidden="true">
-            <div class="modal-dialog">
-              <form class="modal-content" id="batches-stack-form" autocomplete="off">
+          <!-- Which channel is the AIS, and what the files can't say about Z-stacks (Channels.open). -->
+          <div class="modal fade" id="channels-modal" tabindex="-1" aria-labelledby="channels-title" aria-hidden="true">
+            <div class="modal-dialog modal-lg modal-dialog-scrollable modal-fullscreen-sm-down">
+              <form class="modal-content" id="channels-form" autocomplete="off" novalidate>
                 <div class="modal-header">
-                  <h2 class="modal-title h5 mb-0" id="batches-stack-title" data-i18n="batches.stack_title"></h2>
+                  <h2 class="modal-title h5 mb-0" id="channels-title" data-i18n="channels.title"></h2>
                   <button type="button" class="btn-close" data-bs-dismiss="modal" data-i18n-attr="aria-label:nav.close"></button>
                 </div>
                 <div class="modal-body">
-                  <p id="batches-stack-found" class="small"></p>
-                  <fieldset class="mb-3">
-                    <legend class="form-label fs-6" data-i18n="batches.stack_channel"></legend>
-                    <div class="form-check form-check-inline">
-                      <input class="form-check-input" type="radio" name="batches-stack-plane" id="batches-stack-red" value="0" required />
-                      <label class="form-check-label" for="batches-stack-red" data-i18n="batches.stack_red"></label>
+                  <p id="channels-found" class="small"></p>
+                  <p class="small text-body-secondary" data-i18n="channels.help"></p>
+                  <div id="channels-layouts"></div>
+                  <div id="channels-stack" hidden>
+                    <div class="mb-3">
+                      <label for="batches-stack-z" class="form-label" data-i18n="batches.stack_z_step"></label>
+                      <div class="input-group">
+                        <input id="batches-stack-z" class="form-control" type="number" min="0.001" max="100" step="any" required aria-describedby="batches-stack-z-help" />
+                        <span class="input-group-text">µm</span>
+                      </div>
+                      <div id="batches-stack-z-help" class="form-text" data-i18n="batches.stack_z_step_help"></div>
                     </div>
-                    <div class="form-check form-check-inline">
-                      <input class="form-check-input" type="radio" name="batches-stack-plane" id="batches-stack-green" value="1" required />
-                      <label class="form-check-label" for="batches-stack-green" data-i18n="batches.stack_green"></label>
+                    <div class="mb-1">
+                      <label for="batches-stack-pixel" class="form-label" data-i18n="batches.stack_pixel"></label>
+                      <div class="input-group">
+                        <input id="batches-stack-pixel" class="form-control" type="number" min="0.0001" max="100" step="any" required aria-describedby="batches-stack-pixel-help" />
+                        <span class="input-group-text">µm/px</span>
+                      </div>
+                      <div id="batches-stack-pixel-help" class="form-text" data-i18n="batches.stack_pixel_help"></div>
                     </div>
-                  </fieldset>
-                  <div class="mb-3">
-                    <label for="batches-stack-z" class="form-label" data-i18n="batches.stack_z_step"></label>
-                    <div class="input-group">
-                      <input id="batches-stack-z" class="form-control" type="number" min="0.001" max="100" step="any" required aria-describedby="batches-stack-z-help" />
-                      <span class="input-group-text">µm</span>
-                    </div>
-                    <div id="batches-stack-z-help" class="form-text" data-i18n="batches.stack_z_step_help"></div>
                   </div>
-                  <div class="mb-1">
-                    <label for="batches-stack-pixel" class="form-label" data-i18n="batches.stack_pixel"></label>
-                    <div class="input-group">
-                      <input id="batches-stack-pixel" class="form-control" type="number" min="0.0001" max="100" step="any" required aria-describedby="batches-stack-pixel-help" />
-                      <span class="input-group-text">µm/px</span>
-                    </div>
-                    <div id="batches-stack-pixel-help" class="form-text" data-i18n="batches.stack_pixel_help"></div>
-                  </div>
+                  <div id="channels-warning" class="alert alert-warning small mt-3 mb-0" role="status" hidden></div>
+                  <div id="channels-error" class="alert alert-danger small mt-3 mb-0" role="alert" hidden></div>
                 </div>
                 <div class="modal-footer">
                   <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal" data-i18n="ais.cancel"></button>
-                  <button type="submit" class="btn btn-primary" data-i18n="batches.stack_add"></button>
+                  <button type="submit" class="btn btn-primary" id="channels-submit" data-i18n="batches.stack_add"></button>
                 </div>
               </form>
             </div>
@@ -936,6 +931,7 @@
                     <button class="btn btn-outline-secondary" type="button" data-images-mode="grid" data-i18n-attr="title:ais.view_grid,aria-label:ais.view_grid"><i class="bi bi-grid-3x2-gap"></i></button>
                     <button class="btn btn-outline-secondary" type="button" data-images-mode="list" data-i18n-attr="title:ais.view_list,aria-label:ais.view_list"><i class="bi bi-list-ul"></i></button>
                   </div>
+                  <button id="ais-images-channels" class="btn btn-outline-secondary btn-sm" type="button" data-i18n-attr="title:channels.edit_hint"><i class="bi bi-palette me-1"></i><span data-i18n="channels.edit"></span></button>
                   <button id="ais-images-all" class="btn btn-outline-secondary btn-sm" type="button" data-i18n="ais.select_all"></button>
                   <button id="ais-images-none" class="btn btn-outline-secondary btn-sm" type="button" data-i18n="ais.select_none"></button>
                   <button type="button" class="btn-close" data-bs-dismiss="modal" data-i18n-attr="aria-label:nav.close"></button>
@@ -2368,6 +2364,7 @@
   <script src="/js/about.js"></script>
   <script src="/js/matlab_account.js"></script>
   <script src="/js/outbox.js"></script>
+  <script src="/js/channels.js"></script>
   <script src="/js/ais.js"></script>
   <script src="/js/ais_images.js"></script>
   <script src="/js/ais_assign.js"></script>

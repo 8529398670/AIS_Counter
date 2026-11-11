@@ -7731,6 +7731,130 @@
         }
       }
     },
+    "/api/ais/batches/{batch_id}/layouts": {
+      "get": {
+        "summary": "A batch's channel layouts",
+        "operationId": "get_api_ais_batches_batch_id_layouts",
+        "tags": [
+          "AIS"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "batch_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "add",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "503": {
+            "$ref": "#/components/responses/E503"
+          }
+        },
+        "description": "?add=<id>: the channel layouts of a batch's images, or one add's: each with its channel names, colours, how many images, the roles in use and how many already have results."
+      },
+      "post": {
+        "summary": "Set a batch's channel roles",
+        "operationId": "post_api_ais_batches_batch_id_layouts",
+        "tags": [
+          "AIS"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          }
+        ],
+        "description": "Body: {add?, channels: [{layout, roles}]}: which channel is the AIS, soma/dendrite or other, for the images of a batch (or one add) with those layouts. Answers with the batch and the keys of the images now traced from other channels.",
+        "parameters": [
+          {
+            "name": "batch_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "csrf_token": {
+                    "type": "string",
+                    "description": "From GET /api/me. Browser sessions only."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "503": {
+            "$ref": "#/components/responses/E503"
+          }
+        }
+      }
+    },
     "/api/ais/batches/{batch_id}/upload": {
       "post": {
         "summary": "Add images to a batch",
@@ -10379,6 +10503,61 @@
           }
         ],
         "description": "Body: {path}. The Z-stacks under a folder, by name, for the Add dialog to ask about before the server hashes anything.",
+        "x-required-role": "admin",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "csrf_token": {
+                    "type": "string",
+                    "description": "From GET /api/me. Browser sessions only."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "503": {
+            "$ref": "#/components/responses/E503"
+          }
+        }
+      }
+    },
+    "/api/ais/local/channels": {
+      "post": {
+        "summary": "Find channel layouts in a folder on this computer",
+        "operationId": "post_api_ais_local_channels",
+        "tags": [
+          "AIS"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "description": "Body: {path}. The channel layouts of a folder's images, for the Add dialog to ask about before the server hashes anything.",
         "x-required-role": "admin",
         "requestBody": {
           "required": false,

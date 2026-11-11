@@ -64,7 +64,7 @@ import time
 from collections import Counter
 from typing import Any, Callable
 
-from app.analysis import zstack
+from app.analysis import channels, zstack
 from app.core.db import (BUCKET_AIS_BATCHES, BUCKET_AIS_FOLDERS, BUCKET_AIS_MEASUREMENTS, BUCKET_AIS_RESULTS,
                          BUCKET_META, Record, Store)
 from app.models import to_iso, utc_now
@@ -162,6 +162,13 @@ def clean_files(files: Any) -> list[dict[str, Any]]:
         item = {"name": name, "rel": rel, "sha": sha, "size": size}
         if f.get("path") is not None:
             item["path"] = _text(f["path"], "path")
+        # Its channels as the client read them (channels.clean_layout), for
+        # the roles picked for that layout; not kept on the file.
+        if f.get("layout") is not None:
+            try:
+                item["layout"] = channels.clean_layout(f["layout"])
+            except channels.ChannelError as exc:
+                raise BatchError(str(exc)) from exc
         # When the file was last changed and (a server folder only) made, as ISO text.
         for k in ("modified", "created"):
             if f.get(k) is not None:
@@ -212,11 +219,14 @@ def _take_stacks(files: list[dict[str, Any]], options: dict[str, Any]) -> tuple[
     return images, [f for f in files if f["rel"] not in used]
 
 
-def group(files: list[dict[str, Any]], stack: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+def group(files: list[dict[str, Any]], stack: dict[str, Any] | None = None,
+          choices: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
     """Files -> images, sorted by folder and cell. A cell is keyed by its
     folder inside the batch too, so same-named files in two subfolders stay two
     images. dup_of is the index of the first image with the same bytes. With
-    stack (zstack.clean_options), Z-stack slices make one image each stack."""
+    stack (zstack.clean_options), Z-stack slices make one image each stack.
+    With choices (channels.clean_choices), each image whose file's layout has
+    one gets those channel roles (apply_channels)."""
     stacks, files = _take_stacks(files, stack) if stack else ([], files)
     images: dict[str, dict[str, Any]] = {}
     for f in files:
@@ -236,6 +246,13 @@ def group(files: list[dict[str, Any]], stack: dict[str, Any] | None = None) -> l
         image = images.setdefault(key, {"key": key, "cell": cell, "dir": folder, "files": {}})
         image["files"][role] = f
     ordered = sorted([*images.values(), *stacks], key=lambda im: (im["dir"].lower(), im["cell"].lower(), im["key"]))
+    for image in ordered:
+        found = _file_layout(image)
+        if found and choices:
+            choice = next((c for c in choices if channels.same(c["layout"], found[1])), None)
+            if choice:
+                apply_channels(image, found[0], found[1], choice["roles"])
+        _drop_layouts(image)
     seen: dict[tuple[str, ...], int] = {}
     for i, image in enumerate(ordered):
         signature = _signature(image)
@@ -244,6 +261,47 @@ def group(files: list[dict[str, Any]], stack: dict[str, Any] | None = None) -> l
         else:
             seen[signature] = i
     return ordered
+
+
+def _file_layout(image: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
+    """(role, layout) of the file an image's channel roles apply to, from the
+    layouts the client sent: a .czi, a stack's first slice, else the TIFF with
+    the most channels (a pair's raw, usually; its processed is one plane)."""
+    files = image["files"]
+    if files.get("stack"):
+        first = files["stack"]["slices"][0]
+        return ("stack", first["layout"]) if first.get("layout") else None
+    if files.get("czi"):
+        return ("czi", files["czi"]["layout"]) if files["czi"].get("layout") else None
+    found = [(role, files[role]["layout"]) for role in ("raw", "processed") if files.get(role, {}).get("layout")]
+    return max(found, key=lambda rl: len(rl[1]["names"])) if found else None
+
+
+def _drop_layouts(image: dict[str, Any]) -> None:
+    for f in image["files"].values():
+        f.pop("layout", None)
+        for part in f.get("slices", []):
+            part.pop("layout", None)
+
+
+def apply_channels(image: dict[str, Any], role: str, layout: dict[str, Any], roles: list[dict[str, str]]) -> None:
+    """Give an image these channel roles (channels.py), on the file of role.
+    A stack's AIS channel is its plane, so it gets a new manifest and sha."""
+    if role == "stack":
+        f = image["files"]["stack"]
+        options = {k: image["z_stack"][k] for k in ("z_step_um", "pixel_um")} | {"plane": channels.picks(roles)[0]}
+        f["sha"] = zstack.sha(zstack.manifest(f["slices"], options))
+        image["z_stack"] = image["z_stack"] | {"plane": options["plane"]}
+        image["channels"] = channels.entry(role, layout, roles, None)
+    else:
+        image["channels"] = channels.entry(role, layout, roles, image["files"][role]["sha"])
+
+
+def traced_sha(image: dict[str, Any], role: str) -> str:
+    """The sha an image's file of role is traced and profiled from: its view's
+    when its channel roles need one (channels.py), else the file's own."""
+    chosen = image.get("channels") or {}
+    return chosen["sha"] if chosen.get("role") == role and chosen.get("sha") else image["files"][role]["sha"]
 
 
 def is_random(cell: str) -> bool:
@@ -822,6 +880,13 @@ def _signature(image: dict[str, Any]) -> tuple[str, ...]:
     return tuple(image["files"].get(role, {}).get("sha", "") for role in ROLES)
 
 
+def _choices(value: Any) -> list[dict[str, Any]]:
+    try:
+        return channels.clean_choices(value)
+    except channels.ChannelError as exc:
+        raise BatchError(str(exc)) from exc
+
+
 def _stack_options(stack: Any) -> dict[str, Any] | None:
     if stack is None:
         return None
@@ -833,7 +898,7 @@ def _stack_options(stack: Any) -> dict[str, Any] | None:
 
 def add_files(store: Store, batch_id: int, source: str, files: Any, path: str | None = None, *,
               randomize_names: bool = False, user_id: int | None = None, name: str | None = None,
-              translations: Any = None, stack: Any = None) -> Record | None:
+              translations: Any = None, stack: Any = None, channel_roles: Any = None) -> Record | None:
     """More files into a batch: a folder or files picked later, named by the
     __Translation.txt files that came with them (clean_translations), blinded
     with randomize_names, recorded as one add called name. With stack
@@ -842,7 +907,7 @@ def add_files(store: Store, batch_id: int, source: str, files: Any, path: str | 
     folder becomes source "mixed"."""
     if source not in SOURCES:
         raise BatchError("unknown source")
-    images = group(clean_files(files), _stack_options(stack))
+    images = group(clean_files(files), _stack_options(stack), _choices(channel_roles))
     if not images:
         raise BatchError("no TIFF or CZI files")
     images = name_images(images, clean_translations(translations))
@@ -863,12 +928,12 @@ def add_files(store: Store, batch_id: int, source: str, files: Any, path: str | 
 
 def create_batch(store: Store, name: str, source: str, files: list[dict[str, Any]], user_id: int,
                  path: str | None = None, *, randomize_names: bool = False, translations: Any = None,
-                 stack: Any = None) -> Record:
+                 stack: Any = None, channel_roles: Any = None) -> Record:
     """A batch with its files in one go (Open folder, Open path), named by
     the __Translation.txt files that came with them."""
     if source not in SOURCES:
         raise BatchError("unknown source")
-    images = group(clean_files(files), _stack_options(stack))
+    images = group(clean_files(files), _stack_options(stack), _choices(channel_roles))
     if not images:
         raise BatchError("no TIFF or CZI files")
     images = name_images(images, clean_translations(translations))
@@ -1351,15 +1416,71 @@ def local_path_for(store: Store, sha: str) -> str | None:
     return None
 
 
-def stack_for(store: Store, sha: str) -> dict[str, Any] | None:
-    """The manifest of the Z-stack with this sha, from the batch record that
-    holds it, for Library to keep a copy of."""
+def manifest_for(store: Store, sha: str) -> dict[str, Any] | None:
+    """The manifest of the Z-stack or channel view (channels.py) with this
+    sha, from the batch record that holds it, for Library to keep a copy of."""
     for _, batch in store.all(BUCKET_AIS_BATCHES):
         for image in batch["images"]:
             f = image["files"].get("stack")
             if f and f["sha"] == sha:
                 return zstack.manifest(f["slices"], image["z_stack"])
+            chosen = image.get("channels")
+            if chosen and chosen.get("sha") == sha:
+                return channels.manifest(image["files"][chosen["role"]]["sha"], *channels.picks(chosen["roles"]))
     return None
+
+
+stack_for = manifest_for
+
+
+def channel_scope(batch: Record, add_id: int | None) -> list[dict[str, Any]]:
+    """The images a Channels dialog is about: an add's, or the whole batch's."""
+    return [im for im in batch["images"] if add_id is None or im.get("add_id") == add_id]
+
+
+def channel_file(image: dict[str, Any]) -> tuple[str, str] | None:
+    """(role, sha) of the stored file whose layout an image without channel
+    roles would be read from: its .czi, a stack's first slice, its raw TIFF,
+    else its processed one. None for an image with none."""
+    files = image["files"]
+    if files.get("stack"):
+        return "stack", files["stack"]["slices"][0]["sha"]
+    for role in ("czi", "raw", "processed"):
+        if files.get(role):
+            return role, files[role]["sha"]
+    return None
+
+
+def set_channels(store: Store, batch_id: int, add_id: int | None, choices: Any,
+                 layouts: dict[str, tuple[str, dict[str, Any]]]) -> tuple[Record, list[str]] | None:
+    """New channel roles for a batch's images (or one add's): each image whose
+    layout (its own, else layouts[key] as read from its file) has a choice gets
+    it. Those that are now traced from another sha are no longer done by hand,
+    and are returned by key; their results stay. None when the batch is gone."""
+    cleaned = _choices(choices)
+    changed: list[str] = []
+
+    def mutate(record: Record) -> None:
+        changed.clear()
+        for image in channel_scope(record, add_id):
+            found = ((image["channels"]["role"], image["channels"]["layout"]) if image.get("channels")
+                     else layouts.get(image["key"]))
+            if not found:
+                continue
+            choice = next((c for c in cleaned if channels.same(c["layout"], found[1])), None)
+            if not choice:
+                continue
+            role = found[0]
+            before = image["files"]["stack"]["sha"] if role == "stack" else traced_sha(image, role)
+            apply_channels(image, role, found[1], choice["roles"])
+            after = image["files"]["stack"]["sha"] if role == "stack" else traced_sha(image, role)
+            if after != before:
+                changed.append(image["key"])
+        record["skipped"] = [k for k in record["skipped"] if k not in changed]
+        _stamp(record)
+
+    record = store.update_value(BUCKET_AIS_BATCHES, batch_id, mutate)
+    return None if record is None else (record, list(changed))
 
 
 # --- results -------------------------------------------------------------------

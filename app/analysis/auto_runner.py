@@ -224,17 +224,17 @@ class AutoRuns:
         """AisAuto.find then saveAll's step for one image: (saved, kept, hidden)."""
         files = image["files"]
         kind = ap.kind(files)
-        processed = files[ap.traced(files)]["sha"]
-        raw = files["raw"]["sha"] if kind == "pair" else None
+        processed = batches.traced_sha(image, ap.traced(files))
+        raw = batches.traced_sha(image, "raw") if kind == "pair" else None
         rows = [r for r in batches.list_results(self.store, run["batch_id"]) if r["image"] == image["key"]]
         z_method = run["choices"]["general"]["z_method"] if files.get("stack") else None
-        out = detect(processed, raw, run["choices"]["threshold"], settings, ap.start_for(kind, p["start"]),
+        out = detect(processed, raw, run["choices"]["threshold"], settings, ap.start_for(kind, p["start"], ap.has_soma(image)),
                      [r["pixels"] for r in rows if r.get("pixels")], z_method)
         candidates = out.get("candidates", [])
         kept = [c for c in candidates if ap.passes(c, p)]
         saved = 0
         for n, c in enumerate(kept):
-            row = ap.auto_row(files, c, p)
+            row = ap.auto_row(files, c, p, soma=ap.has_soma(image), sha=processed)
             batches.add_result(self.store, run["batch_id"], image["key"], row, run["user_id"],
                                f"auto-{run['id']}-{index}-{n}")
             saved += 1

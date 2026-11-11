@@ -40,7 +40,7 @@ def test_options_keep_what_a_stack_needs():
 
 
 @pytest.mark.parametrize("change", [
-    {"plane": 2}, {"plane": None}, {"plane": True}, {"plane": "0"},
+    {"plane": 4}, {"plane": -1}, {"plane": None}, {"plane": True}, {"plane": "0"},
     {"z_step_um": 0}, {"z_step_um": -1}, {"z_step_um": None}, {"z_step_um": True}, {"z_step_um": float("nan")},
     {"z_step_um": float("inf")}, {"z_step_um": 101},
     {"pixel_um": 0}, {"pixel_um": "0.161"},

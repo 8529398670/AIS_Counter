@@ -59,10 +59,13 @@ FILES = {"type": "array", "description": "The files, hashed on your side: name a
          "items": {"type": "object", "required": ["name", "rel", "sha", "size"],
                    "properties": {"name": {"type": "string"}, "rel": {"type": "string"},
                                   "sha": {"type": "string", "description": "sha-256 of the file, lower-case hex."},
-                                  "size": {"type": "integer"}, "modified": {"type": "number"}}}}
+                                  "size": {"type": "integer"}, "modified": {"type": "number"},
+                                  "layout": {"type": "object", "description": "Its channels, for channels: {kind: czi | tiff, names: [...]} (a .czi's channel names; a TIFF's planes as Red/Green/Blue or Channel N)."}}}}
 TRANSLATIONS = {"type": "array", "description": "__Translation.txt files that came with them: [{dir, text}].",
                 "items": {"type": "object", "properties": {"dir": {"type": "string"}, "text": {"type": "string"}}}}
-STACK = {"type": "object", "description": "Z-stack slices (name_zNNN.tif) become one image each stack: {plane: 0 red | 1 green, z_step_um, pixel_um}.",
+CHANNELS = {"type": "array", "description": "Channel roles per layout: [{layout: {kind, names}, roles: [{role: ais | soma | other, label}]}], one role per channel, exactly one ais, at most one soma, a label for each other. Images whose file layout matches get them; left out, the AIS is guessed (a .czi's Alexa Fluor 488, a TIFF's first plane).",
+            "items": {"type": "object", "properties": {"layout": {"type": "object"}, "roles": {"type": "array"}}}}
+STACK = {"type": "object", "description": "Z-stack slices (name_zNNN.tif) become one image each stack: {plane: 0 red | 1 green | 2 blue | 3, z_step_um, pixel_um}.",
          "properties": {"plane": {"type": "integer"}, "z_step_um": {"type": "number"}, "pixel_um": {"type": "number"}}}
 RANDOMIZE = {"type": "boolean", "description": "Blind the names (default true): images get random n-n-n names, the originals kept for admins."}
 GENERAL = {"type": "object", "description": "Settings' general auto mode fields (see auto_defaults), e.g. {auto_method: 'fitted', fitted_min_length: 13}. Left out: the defaults."}
@@ -335,7 +338,8 @@ def _image_body(image: dict[str, Any], settings: dict[str, Any], threshold: floa
     """What Ais.traceBody and AisAuto.find send for an image."""
     files = image["files"]
     kind = ap.kind(files)
-    body = {"processed": files[ap.traced(files)]["sha"], "raw": files["raw"]["sha"] if kind == "pair" else None,
+    body = {"processed": batches.traced_sha(image, ap.traced(files)),
+            "raw": batches.traced_sha(image, "raw") if kind == "pair" else None,
             "threshold": threshold, "settings": settings}
     if engine:
         body["engine"] = engine
@@ -366,7 +370,8 @@ async def trace_click(call: Call) -> dict[str, Any]:
     result = _ok(await _route(call, ais.trace, "POST", "/api/ais/trace", body=body))
     out = {"result": result}
     if result.get("ok") and result.get("pixels"):
-        out["row"] = ap.row_for(image["files"], result, "", ap.kind(image["files"]))
+        out["row"] = ap.row_for(image["files"], result, "", ap.kind(image["files"]),
+                                batches.traced_sha(image, ap.traced(image["files"])))
     return out
 
 
@@ -394,7 +399,7 @@ async def detect_image(call: Call) -> dict[str, Any]:
     kind = ap.kind(files)
     saved = await run_in_threadpool(batches.list_results, call.store, args["batch_id"])
     body = _image_body(image, choices["settings"], choices["threshold"], choices["engine"], choices["general"]["z_method"])
-    body |= {"start": ap.start_for(kind, p["start"]),
+    body |= {"start": ap.start_for(kind, p["start"], ap.has_soma(image)),
              "exclude": [r["pixels"] for r in saved if r["image"] == image["key"] and r.get("pixels")]}
     out = _ok(await _route(call, ais.detect, "POST", "/api/ais/detect", body=body))
     candidates = []
@@ -403,7 +408,8 @@ async def detect_image(call: Call) -> dict[str, Any]:
         if not kept and not args.get("include_hidden"):
             continue
         item = c if args.get("verbose") else {k: c[k] for k in _CANDIDATE_KEEP if k in c}
-        candidates.append({"index": index, "passes": kept, "row": ap.auto_row(files, c, p, "each"), "candidate": item})
+        candidates.append({"index": index, "passes": kept, "row": ap.auto_row(files, c, p, "each", ap.has_soma(image),
+                                                                                   batches.traced_sha(image, ap.traced(files))), "candidate": item})
     return {"image": image["key"], "kind": kind, "found": len(out.get("candidates", [])),
             "kept": sum(1 for c in out.get("candidates", []) if ap.passes(c, p)), "candidates": candidates,
             "filters": p, "components": out.get("components"), "failed": out.get("failed")}
@@ -502,14 +508,23 @@ def _specs() -> list[Spec]:
              "A new batch from files you hashed (name, rel, sha, size each), grouped into images as the browser does (<cell>.tif raw, '<cell>.tif - Processed method 2.5.tif' processed, .czi, *_zNNN.tif with stack). Duplicates start left out. Answers with the files the server still needs and how to upload them (POST each file's bytes to /api/ais/files with your API key).",
              ais.batch_upload, "/api/ais/batches/upload", "POST",
              props={"name": {"type": "string"}, "files": FILES, "randomize": RANDOMIZE, "translations": TRANSLATIONS,
-                    "stack": STACK},
+                    "stack": STACK, "channels": CHANNELS},
              required=("name", "files"), shape=_shape_created),
         Spec("add_files_to_batch", "Add files to a batch",
              "More files into an existing batch, as create_batch_from_files. add_name names this add (a folder name).",
              ais.batch_add, "/api/ais/batches/{batch_id}/upload", "POST",
              props=b | {"files": FILES, "randomize": RANDOMIZE, "add_name": {"type": "string"},
-                        "translations": TRANSLATIONS, "stack": STACK},
+                        "translations": TRANSLATIONS, "stack": STACK, "channels": CHANNELS},
              required=("batch_id", "files"), path_args=("batch_id",), shape=_shape_created),
+        Spec("get_channel_layouts", "List a batch's channel layouts",
+             "The channel layouts of a batch's images (or one add's): each with its channel names, how many images, the roles in use and how many already have results.",
+             ais.batch_layouts, "/api/ais/batches/{batch_id}/layouts", props=b | {"add": {"type": "integer"}},
+             required=("batch_id",), path_args=("batch_id",), query_args=("add",), read_only=True),
+        Spec("set_channel_roles", "Set channel roles",
+             "Which channel is the AIS, soma/dendrite or other, for a batch's (or one add's) images with those layouts. Images now traced from other channels are no longer done; their results stay, so look at them again.",
+             ais.batch_layouts_set, "/api/ais/batches/{batch_id}/layouts", "POST",
+             props=b | {"add": {"type": "integer"}, "channels": CHANNELS},
+             required=("batch_id", "channels"), path_args=("batch_id",)),
         Spec("rename_batch", "Rename a batch", "Its accepted AIS carry the new name too. Whoever opened it, or an admin.",
              ais.batch_rename, "/api/ais/batches/{batch_id}/rename", "POST", props=b | {"name": {"type": "string"}},
              required=("batch_id", "name"), path_args=("batch_id",), shape=_shape_brief),

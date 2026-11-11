@@ -217,9 +217,17 @@ def kind(files: dict[str, Any]) -> str:
     return "processed only" if files.get("processed") else "raw only"
 
 
-def start_for(image_kind: str, start: str) -> str:
-    """AisAuto.startFor: "soma" needs a .czi's somata."""
-    return "both" if start == "soma" and image_kind != "czi" else start
+def has_soma(image: dict[str, Any]) -> bool:
+    """AisAuto.hasSoma: a TIFF has somata only when a soma channel was chosen
+    for it (app/analysis/channels.py)."""
+    chosen = image.get("channels") or {}
+    return chosen.get("role") in ("raw", "processed") and any(r["role"] == "soma" for r in chosen.get("roles", []))
+
+
+def start_for(image_kind: str, start: str, soma: bool = False) -> str:
+    """AisAuto.startFor: "soma" needs a .czi's somata, or a TIFF's soma
+    channel (soma: has_soma)."""
+    return "both" if start == "soma" and image_kind != "czi" and not soma else start
 
 
 def _js_round(x: float) -> float:
@@ -239,10 +247,10 @@ def _num(v: Any) -> Any:
     return v
 
 
-def auto_fields(p: dict[str, Any], review: str, image_kind: str) -> dict[str, Any]:
+def auto_fields(p: dict[str, Any], review: str, image_kind: str, soma: bool = False) -> dict[str, Any]:
     """AisAuto.autoFields."""
     out: dict[str, Any] = {"auto_method": p["method"], "auto_review": review,
-                           "auto_start": start_for(image_kind, p["start"])}
+                           "auto_start": start_for(image_kind, p["start"], soma)}
     out["auto_min_length"] = _num(p.get("min") or 0)
     if "minShown" in p:
         out["auto_min_length_shown"] = _num(p["minShown"] or 0)
@@ -261,10 +269,12 @@ def auto_fields(p: dict[str, Any], review: str, image_kind: str) -> dict[str, An
     return out
 
 
-def row_for(files: dict[str, Any], r: dict[str, Any], origin: str, source: str) -> dict[str, Any]:
+def row_for(files: dict[str, Any], r: dict[str, Any], origin: str, source: str,
+            sha: str | None = None) -> dict[str, Any]:
     """Ais.rowFor: the row the server keeps for an accepted trace r on an
     image with these files. source is kind(files), which the browser puts on
-    a candidate (AisAuto.find) or a click's result."""
+    a candidate (AisAuto.find) or a click's result. sha is the image traced
+    when that is not its file's own: a channel view's (Ais.sha)."""
     m = r["measures"]
     f = files[traced(files)]
     # Not the path of a blinded file: it has the original name in it.
@@ -272,7 +282,7 @@ def row_for(files: dict[str, Any], r: dict[str, Any], origin: str, source: str) 
     clicks = r["clicks"]
     shape = r.get("shape")
     row: dict[str, Any] = {
-        "file": file, "sha": f.get("sha"),
+        "file": file, "sha": sha or f.get("sha"),
         "length_um": m.get("length_um"), "length_str": m.get("length_str"), "start_um": m.get("start_um"),
         "end_um": m.get("end_um"), "mid_um": m.get("mid_um"), "max_um": m.get("max_um"), "arc_um": m.get("arc_um"),
         "threshold_initial": r.get("threshold_initial"), "threshold": r.get("threshold"),
@@ -288,8 +298,9 @@ def row_for(files: dict[str, Any], r: dict[str, Any], origin: str, source: str) 
     return row | (r.get("z") or {})
 
 
-def auto_row(files: dict[str, Any], c: dict[str, Any], p: dict[str, Any], review: str = REVIEW) -> dict[str, Any]:
+def auto_row(files: dict[str, Any], c: dict[str, Any], p: dict[str, Any], review: str = REVIEW,
+             soma: bool = False, sha: str | None = None) -> dict[str, Any]:
     """What saveAll saves for a kept candidate: rowFor(..., "auto") and
-    autoFields."""
+    autoFields (soma: has_soma; sha: row_for's)."""
     source = kind(files)
-    return row_for(files, c, "auto", source) | auto_fields(p, review, source)
+    return row_for(files, c, "auto", source, sha) | auto_fields(p, review, source, soma)

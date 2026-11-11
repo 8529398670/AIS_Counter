@@ -779,10 +779,29 @@
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
+          "channels": {
+            "description": "Channel roles per layout: [{layout: {kind, names}, roles: [{role: ais | soma | other, label}]}], one role per channel, exactly one ais, at most one soma, a label for each other. Images whose file layout matches get them; left out, the AIS is guessed (a .czi's Alexa Fluor 488, a TIFF's first plane).",
+            "items": {
+              "properties": {
+                "layout": {
+                  "type": "object"
+                },
+                "roles": {
+                  "type": "array"
+                }
+              },
+              "type": "object"
+            },
+            "type": "array"
+          },
           "files": {
             "description": "The files, hashed on your side: name and rel (path inside the picked folder) as they are, sha256 of the bytes, size in bytes.",
             "items": {
               "properties": {
+                "layout": {
+                  "description": "Its channels, for channels: {kind: czi | tiff, names: [...]} (a .czi's channel names; a TIFF's planes as Red/Green/Blue or Channel N).",
+                  "type": "object"
+                },
                 "modified": {
                   "type": "number"
                 },
@@ -818,7 +837,7 @@
             "type": "boolean"
           },
           "stack": {
-            "description": "Z-stack slices (name_zNNN.tif) become one image each stack: {plane: 0 red | 1 green, z_step_um, pixel_um}.",
+            "description": "Z-stack slices (name_zNNN.tif) become one image each stack: {plane: 0 red | 1 green | 2 blue | 3, z_step_um, pixel_um}.",
             "properties": {
               "pixel_um": {
                 "type": "number"
@@ -878,10 +897,29 @@
             "minimum": 1,
             "type": "integer"
           },
+          "channels": {
+            "description": "Channel roles per layout: [{layout: {kind, names}, roles: [{role: ais | soma | other, label}]}], one role per channel, exactly one ais, at most one soma, a label for each other. Images whose file layout matches get them; left out, the AIS is guessed (a .czi's Alexa Fluor 488, a TIFF's first plane).",
+            "items": {
+              "properties": {
+                "layout": {
+                  "type": "object"
+                },
+                "roles": {
+                  "type": "array"
+                }
+              },
+              "type": "object"
+            },
+            "type": "array"
+          },
           "files": {
             "description": "The files, hashed on your side: name and rel (path inside the picked folder) as they are, sha256 of the bytes, size in bytes.",
             "items": {
               "properties": {
+                "layout": {
+                  "description": "Its channels, for channels: {kind: czi | tiff, names: [...]} (a .czi's channel names; a TIFF's planes as Red/Green/Blue or Channel N).",
+                  "type": "object"
+                },
                 "modified": {
                   "type": "number"
                 },
@@ -914,7 +952,7 @@
             "type": "boolean"
           },
           "stack": {
-            "description": "Z-stack slices (name_zNNN.tif) become one image each stack: {plane: 0 red | 1 green, z_step_um, pixel_um}.",
+            "description": "Z-stack slices (name_zNNN.tif) become one image each stack: {plane: 0 red | 1 green | 2 blue | 3, z_step_um, pixel_um}.",
             "properties": {
               "pixel_um": {
                 "type": "number"
@@ -953,6 +991,82 @@
       "name": "add_files_to_batch",
       "route": "POST /api/ais/batches/{batch_id}/upload",
       "title": "Add files to a batch"
+    },
+    {
+      "adminOnly": false,
+      "annotations": {
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": true,
+        "title": "List a batch's channel layouts"
+      },
+      "description": "The channel layouts of a batch's images (or one add's): each with its channel names, how many images, the roles in use and how many already have results.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "add": {
+            "type": "integer"
+          },
+          "batch_id": {
+            "description": "The batch's id, from list_batches.",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "batch_id"
+        ],
+        "type": "object"
+      },
+      "name": "get_channel_layouts",
+      "route": "GET /api/ais/batches/{batch_id}/layouts",
+      "title": "List a batch's channel layouts"
+    },
+    {
+      "adminOnly": false,
+      "annotations": {
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false,
+        "title": "Set channel roles"
+      },
+      "description": "Which channel is the AIS, soma/dendrite or other, for a batch's (or one add's) images with those layouts. Images now traced from other channels are no longer done; their results stay, so look at them again.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "add": {
+            "type": "integer"
+          },
+          "batch_id": {
+            "description": "The batch's id, from list_batches.",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "channels": {
+            "description": "Channel roles per layout: [{layout: {kind, names}, roles: [{role: ais | soma | other, label}]}], one role per channel, exactly one ais, at most one soma, a label for each other. Images whose file layout matches get them; left out, the AIS is guessed (a .czi's Alexa Fluor 488, a TIFF's first plane).",
+            "items": {
+              "properties": {
+                "layout": {
+                  "type": "object"
+                },
+                "roles": {
+                  "type": "array"
+                }
+              },
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "batch_id",
+          "channels"
+        ],
+        "type": "object"
+      },
+      "name": "set_channel_roles",
+      "route": "POST /api/ais/batches/{batch_id}/layouts",
+      "title": "Set channel roles"
     },
     {
       "adminOnly": false,

@@ -127,7 +127,7 @@ def build_app(
     # Files an Open-path batch recorded can be fetched for anyone viewing it,
     # but only while local folders are allowed at all.
     resolver = (lambda sha: ais_batches.local_path_for(store, sha)) if cfg.local_folders_enabled else None
-    app.state.ais = Library(cfg.storage_dir, resolver, lambda sha: ais_batches.stack_for(store, sha))
+    app.state.ais = Library(cfg.storage_dir, resolver, lambda sha: ais_batches.manifest_for(store, sha))
     # Auto runs people report on each batch, for the Batches screen.
     app.state.ais_activity = ais_batches.Activity()
     # Auto runs the server does itself, for agents and scripts (auto_runner.py).

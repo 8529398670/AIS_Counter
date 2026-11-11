@@ -366,20 +366,29 @@ const Ais = {
       return { dir: parts.slice( 1 , -1 ).join( "/" ) , text: await f.text() };
     } ) );
     const described = new Array( files.length );
+    const found = new Array( files.length );
     const bySha = new Map();
     let done = 0;
     // A few at a time: reading one file while another hashes.
     await this.pool( files , this.concurrency , async ( f , i ) => {
-      const digest = await crypto.subtle.digest( "SHA-256" , await f.arrayBuffer() );
+      const buffer = await f.arrayBuffer();
+      const digest = await crypto.subtle.digest( "SHA-256" , buffer );
       const sha = Array.from( new Uint8Array( digest ) , ( b ) => b.toString( 16 ).padStart( 2 , "0" ) ).join( "" );
       const fileRel = f.webkitRelativePath || f.name;
       described[ i ] = { name: f.name , rel: fileRel , sha: sha , size: f.size };
+      // Its channels, for the roles asked about before the add (Channels.ask).
+      const read = Channels.readLayout( buffer );
+      if ( read ) {
+        described[ i ].layout = read.layout;
+        found[ i ] = { layout: read.layout , colors: read.colors , stack: this.stackRe.test( f.name ) };
+      }
       if ( f.lastModified ) described[ i ].modified = new Date( f.lastModified ).toISOString();
       bySha.set( sha , f );
       done += 1;
       onProgress( done , files.length );
     } );
-    return { name: root || I18n.get( "ais.loose_files" ) || "Files" , files: described , bySha: bySha , translations: translations };
+    return { name: root || I18n.get( "ais.loose_files" ) || "Files" , files: described , bySha: bySha , translations: translations ,
+      layouts: Channels.summarize( found.filter( Boolean ) ) };
   },
 
   // Open folder / Open files: hash every image, create the batch from names
@@ -406,10 +415,10 @@ const Ais = {
   // Read by the server (Open path).
   async openPath( folder ) {
     try {
-      const stack = await Batches.askStackAt( folder );
-      if ( stack === false ) return;
+      const asked = await Batches.askAt( folder );
+      if ( !asked ) return;
       this.status( I18n.get( "ais.reading_path" ) );
-      const batch = await Api.post( "/api/ais/batches/path" , Object.assign( { path: folder , randomize: Batches.randomize() } , stack ? { stack: stack } : {} ) );
+      const batch = await Api.post( "/api/ais/batches/path" , Object.assign( { path: folder , randomize: Batches.randomize() } , Batches.addBody( asked ) ) );
       this.status( "" );
       await this.loadBatch( batch , null , { fresh: true } );
     } catch ( error ) {
@@ -439,7 +448,7 @@ const Ais = {
         if ( f.slices ) files[ role ].slices = f.slices.map( picked );
       } );
       return { key: image.key , cell: image.cell , dir: image.dir , dup_of: image.dup_of , add_id: image.add_id ,
-        original_key: image.original_key , z_stack: image.z_stack , files: files , included: false };
+        original_key: image.original_key , z_stack: image.z_stack , channels: image.channels , files: files , included: false };
     } );
     this.applyInclusion();
     this.index = -1;
@@ -510,6 +519,22 @@ const Ais = {
       }
     }
     if ( added ) this.stale = true;
+    // New channel roles: what is traced changed, so read the batch again.
+    if ( batch.images && this.images && !added ) {
+      const byKey = new Map( batch.images.map( ( image ) => [ image.key , image ] ) );
+      const traced = ( entry ) => entry && this.sha( entry ) + "|" + ( this.kind( entry ) === "pair" ? this.sha( entry , "raw" ) : "" );
+      const changed = this.images.some( ( entry ) => {
+        const image = byKey.get( entry.key );
+        if ( !image ) return false;
+        const before = traced( entry );
+        return before !== traced( Object.assign( {} , entry , { channels: image.channels ,
+          files: Object.assign( {} , entry.files , image.files.stack ? { stack: image.files.stack } : {} ) } ) );
+      } );
+      if ( changed ) {
+        this.stale = true;
+        if ( Nav.current() === "ais" ) this.followUrl();
+      }
+    }
     this.renderCurrent();
   },
 
@@ -581,9 +606,25 @@ const Ais = {
     return entry.files.stack ? { z_method: Settings.zMethod() } : {};
   },
 
+  // The sha an image's file of role (the traced one by default) is read
+  // through: its channel view's when its channel roles need one
+  // (app/analysis/channels.py), else the file's own.
   sha( entry , role ) {
-    const f = entry.files[ role || this.traced( entry ) ];
+    const wanted = role || this.traced( entry );
+    const chosen = entry.channels;
+    if ( chosen && chosen.sha && chosen.role === wanted ) return chosen.sha;
+    const f = entry.files[ wanted ];
     return f ? f.sha : null;
+  },
+
+  // The role a channel was given ("AIS", "Soma/dendrite" or its label), by
+  // its index; null when the image has no channel roles.
+  channelRole( entry , index ) {
+    const r = entry.channels && entry.channels.roles[ index ];
+    if ( !r ) return null;
+    if ( r.role !== "other" ) return I18n.get( "channels.role_" + r.role );
+    // An other channel left with its own name says nothing more.
+    return r.label && r.label !== entry.channels.layout.names[ index ] ? r.label : null;
   },
 
   kind( entry ) {
@@ -1227,7 +1268,8 @@ const Ais = {
     if ( this.kind( entry ) === "czi" ) {
       try {
         const out = await Api.request( "/api/ais/files/" + this.sha( entry ) + "/channels" );
-        list = out.channels.map( ( c ) => ( { key: "c" + c.index , name: c.name , label: this.channelLabel( c.name ) ,
+        list = out.channels.map( ( c ) => ( { key: "c" + c.index , name: c.name ,
+          label: this.channelLabel( c.name ) + ( this.channelRole( entry , c.index ) ? " · " + this.channelRole( entry , c.index ) : "" ) ,
           color: c.color , src: "/api/ais/files/" + this.sha( entry ) + "/channel/" + c.index + ".png" } ) );
       } catch ( error ) {
         list = [];
@@ -1337,7 +1379,7 @@ const Ais = {
   },
 
   async loadSomata( entry , index ) {
-    if ( this.somata || this.kind( entry ) !== "czi" ) return;
+    if ( this.somata || ( this.kind( entry ) !== "czi" && !AisAuto.hasSoma( entry ) ) ) return;
     let found = [];
     try {
       found = ( await Api.request( "/api/ais/files/" + this.sha( entry ) + "/somata" ) ).somata;
@@ -1376,7 +1418,7 @@ const Ais = {
         [ Dom.el( "i" , { class: "bi bi-image me-1" , attrs: { "aria-hidden": "true" } } ) , Dom.el( "span" , { text: I18n.get( "ais.view_processed" ) } ) ] ),
       ...list.map( ( v ) => button( v.key , on.has( v.key ) , v.name , [ dot( v.color ) , Dom.el( "span" , { text: v.label } ) ] ) ),
     ];
-    if ( this.kind( this.images[ this.index ] ) === "czi" ) {
+    if ( this.kind( this.images[ this.index ] ) === "czi" || AisAuto.hasSoma( this.images[ this.index ] ) ) {
       const soma = button( "soma" , this.showSomata , I18n.get( "ais.view_soma_help" ) ,
         [ dot( SOMA_COLOUR ) , Dom.el( "span" , { text: I18n.get( "ais.view_soma" ) } ) ] );
       soma.classList.add( "ais-view-soma" , "btn-sm" );
@@ -1967,7 +2009,8 @@ const Ais = {
     const row = {
       // Not the path of a blinded file: it has the original name in it.
       file: ( traced.original ? "" : traced.path ) || traced.rel || traced.name,
-      sha: traced.sha,
+      // The image traced: a channel view's sha when it had one (Ais.sha).
+      sha: this.sha( entry ),
       length_um: m.length_um,
       length_str: m.length_str,
       start_um: m.start_um,

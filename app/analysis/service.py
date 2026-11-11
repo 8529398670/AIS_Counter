@@ -24,6 +24,11 @@ behaves like a .czi with no soma channel: the max projection of its AIS plane is
 the raw image, traced on a processed version of it, and each trace is then
 followed through the slices (zlength.py). Its manifest comes from the batch that
 holds it (`stacks`); the copy kept beside the files is only a cache.
+
+A view (channels.py) is a stored file read with other channels than the app
+would pick: its AIS channel is the image, its soma channel (if any) gives the
+somata. Its sha isn't a file either; it is found the same way as a stack's,
+and stands for its file wherever the file itself is wanted (file_path).
 """
 from __future__ import annotations
 
@@ -48,10 +53,11 @@ from app.analysis import fast
 from app.analysis import mlcompat as ml
 from app.analysis import preprocess
 from app.analysis import soma as somata
+from app.analysis import channels as views
 from app.analysis import zlength, zstack
 from app.analysis.czi import is_czi, read_channels, read_czi
 from app.analysis.images import (ImageError, composite_png, preview_png, read_planes, read_tiff, scaled_png,
-                                 thumbnail_png, tiff_bytes)
+                                 thumbnail_png, tiff_bytes, tiff_names)
 
 class NotStored(ImageError):
     """The server does not have the file (yet), as opposed to having one it
@@ -73,7 +79,7 @@ class Library:
         self.files = self.root / "files"
         # sha -> a path on this machine holding those bytes (Open-path batches).
         self.resolver = resolver
-        # sha -> a Z-stack's manifest, from the batch that holds it.
+        # sha -> a Z-stack's or a view's manifest, from the batch that holds it.
         self.stacks = stacks
         self._manifests: dict[str, dict[str, Any]] = {}
         self._stacks: OrderedDict[str, np.ndarray] = OrderedDict()
@@ -128,9 +134,9 @@ class Library:
         """Whether its traced image is made here, by preprocess.py."""
         return self.is_stack(sha) or self.is_czi(sha)
 
-    def _manifest(self, sha: str) -> dict[str, Any] | None:
-        """A Z-stack's manifest; None for anything else. Kept beside the files
-        as a cache, and always checked against its sha."""
+    def _virtual(self, sha: str) -> dict[str, Any] | None:
+        """A Z-stack's or a view's manifest; None for a file. Kept beside the
+        files as a cache, and always checked against its sha."""
         with self._lock:
             if sha in self._manifests:
                 return self._manifests[sha]
@@ -138,19 +144,41 @@ class Library:
         # the batches.
         if self._path(sha).exists() or self._path(sha, czi=True).exists():
             return None
-        path = self.files / f"{sha}{zstack.SUFFIX}"
-        try:
-            found = json.loads(path.read_bytes())
-        except (OSError, ValueError):
+        found = None
+        for suffix in (zstack.SUFFIX, views.SUFFIX):
+            try:
+                found = json.loads((self.files / f"{sha}{suffix}").read_bytes())
+            except (OSError, ValueError):
+                continue
+            if isinstance(found, dict) and zstack.sha(found) == sha:
+                break
             found = None
-        if not (isinstance(found, dict) and zstack.sha(found) == sha):
+        if found is None:
             found = self.stacks(sha) if self.stacks else None
-            if found is None or zstack.sha(found) != sha:
+            if not isinstance(found, dict) or zstack.sha(found) != sha:
                 return None
-            self._store(path, zstack.canonical(found))
+            suffix = views.SUFFIX if views.is_view(found) else zstack.SUFFIX
+            self._store(self.files / f"{sha}{suffix}", zstack.canonical(found))
         with self._lock:
             self._manifests[sha] = found
         return found
+
+    def _manifest(self, sha: str) -> dict[str, Any] | None:
+        """A Z-stack's manifest; None for anything else."""
+        found = self._virtual(sha)
+        return found if found is not None and found.get("format") == zstack.FORMAT else None
+
+    def _view(self, sha: str) -> dict[str, Any] | None:
+        """A view's manifest (channels.py); None for anything else."""
+        found = self._virtual(sha)
+        return found if views.is_view(found) else None
+
+    def layout(self, sha: str) -> dict[str, Any]:
+        """A stored file's channels as channels.py lays them out: {kind, names}."""
+        if self.is_czi(sha):
+            return {"kind": "czi", "names": [c["name"] for c in self.channels(sha)]}
+        with self.file_path(sha).open("rb") as file:
+            return {"kind": "tiff", "names": tiff_names(file)}
 
     def require(self, sha: str) -> None:
         """NotStored unless the file, or every slice of a Z-stack, is here."""
@@ -223,7 +251,15 @@ class Library:
 
     def file_path(self, sha: str) -> Path:
         """The stored file, fetched in if it is known elsewhere (see the
-        module docstring); ImageError when it is nowhere."""
+        module docstring); ImageError when it is nowhere. A view's is its
+        file's."""
+        for czi in (False, True):
+            path = self._path(sha, czi)
+            if path.exists():
+                return path
+        view = self._view(sha)
+        if view is not None:
+            return self.file_path(view["source"])
         for czi in (False, True):
             path = self._path(sha, czi)
             if path.exists():
@@ -257,7 +293,11 @@ class Library:
             if sha in self._arrays:
                 self._arrays.move_to_end(sha)
                 return self._arrays[sha]
-        arr = self.stack(sha).max(axis=0) if self.is_stack(sha) else _read(self.file_path(sha).read_bytes())
+        view = self._view(sha)
+        if self.is_stack(sha):
+            arr = self.stack(sha).max(axis=0)
+        else:
+            arr = _read(self.file_path(sha).read_bytes(), view["ais"] if view else None)
         with self._lock:
             self._arrays[sha] = arr
             while len(self._arrays) > CACHE_SIZE * 2:
@@ -281,17 +321,30 @@ class Library:
         return prep
 
     def soma(self, sha: str) -> somata.Somata | None:
-        """A CZI's somata (soma.py), kept per image; None for a TIFF or a
-        CZI with no soma channel."""
-        if not self.is_czi(sha):
+        """A CZI's somata (soma.py), kept per image, from its soma channel: the
+        one a view names, else Czi.soma_name. A TIFF has some only through a
+        view that names a soma plane. None when there is no soma channel."""
+        view = self._view(sha)
+        if not self.is_czi(sha) and (view is None or view["soma"] is None):
             return None
         with self._lock:
             if sha in self._somata:
                 self._somata.move_to_end(sha)
                 return self._somata[sha]
-        image = read_czi(self.file_path(sha).read_bytes())
-        name = image.soma_name
-        found = somata.find(image.channel(name), image.pixel_um or aa.DEFAULT.pixconv) if name else None
+        data = self.file_path(sha).read_bytes()
+        if is_czi(data):
+            image = read_czi(data)
+            names = list(image.channels)
+            index = view["soma"] if view else views.soma_index(names)
+            if index is not None and not 0 <= index < len(names):
+                raise ImageError("the .czi file has no such channel")
+            plane, pixel_um = (None if index is None else image.channels[names[index]]), image.pixel_um
+        else:
+            planes = read_planes(data)
+            if view["soma"] >= planes.shape[2]:
+                raise ImageError("the TIFF has no such channel")
+            plane, pixel_um = planes[:, :, view["soma"]], None
+        found = somata.find(plane, pixel_um or aa.DEFAULT.pixconv) if plane is not None else None
         with self._lock:
             self._somata[sha] = found
             while len(self._somata) > CACHE_SIZE:
@@ -381,7 +434,12 @@ class Library:
         if not raw and self._preprocessed(processed):
             arr = self.array(processed)
             return tiff_bytes(preprocess.processed(arr)), tiff_bytes(arr)
-        return self.file_path(processed).read_bytes(), self.file_path(raw).read_bytes() if raw else None
+        return self._tiff_of(processed), self._tiff_of(raw) if raw else None
+
+    def _tiff_of(self, sha: str) -> bytes:
+        """The TIFF ais_auto.m reads for sha: the file, or a view's AIS plane
+        alone (it reads plane 1)."""
+        return tiff_bytes(self.array(sha)) if self._view(sha) else self.file_path(sha).read_bytes()
 
     def thumbnail(self, sha: str) -> bytes:
         return thumbnail_png(self.array(sha))
@@ -420,17 +478,19 @@ class Library:
             if start == "soma" and soma is None:
                 raise ImageError("start \"soma\" needs a soma channel (AMCA, DAPI or Hoechst), and this .czi has none")
             return auto.detect(prep, self.array(processed), threshold, settings, start, exclude, soma=soma)
-        if start == "soma":
-            raise ImageError("start \"soma\" needs a .czi image (its AMCA channel)")
+        # A TIFF has somata only through a view naming its soma plane.
+        soma = self.soma(raw or processed)
+        if start == "soma" and soma is None:
+            raise ImageError("start \"soma\" needs a .czi image (its AMCA channel) or a soma channel chosen")
         if not raw:
-            out = auto.detect(prep, prep.pic, threshold, settings, start, exclude)
+            out = auto.detect(prep, prep.pic, threshold, settings, start, exclude, soma=soma)
             for candidate in out["candidates"]:
                 candidate.setdefault("notes", []).insert(0, SINGLE_NOTE)
             return out
         raw_arr = self.array(raw)
         if raw_arr.shape[:2] != prep.pic.shape:
             raise ImageError("raw and processed images differ in size")
-        return auto.detect(prep, raw_arr, threshold, settings, start, exclude)
+        return auto.detect(prep, raw_arr, threshold, settings, start, exclude, soma=soma)
 
     def trace_fast(self, processed: str, raw: str | None,
                    click: tuple[float, float], click2: tuple[float, float] | None,
@@ -466,26 +526,37 @@ class Library:
             if start == "soma" and soma is None:
                 raise ImageError("start \"soma\" needs a soma channel (AMCA, DAPI or Hoechst), and this .czi has none")
             return fast.detect(prep, self.array(processed), threshold, settings, start, exclude, soma=soma)
-        if start == "soma":
-            raise ImageError("start \"soma\" needs a .czi image (its AMCA channel)")
+        # A TIFF has somata only through a view naming its soma plane.
+        soma = self.soma(raw or processed)
+        if start == "soma" and soma is None:
+            raise ImageError("start \"soma\" needs a .czi image (its AMCA channel) or a soma channel chosen")
         if not raw:
-            out = fast.detect(prep, prep.pic, threshold, settings, start, exclude)
+            out = fast.detect(prep, prep.pic, threshold, settings, start, exclude, soma=soma)
             for candidate in out["candidates"]:
                 candidate.setdefault("notes", []).insert(0, SINGLE_NOTE)
             return out
         raw_arr = self.array(raw)
         if raw_arr.shape[:2] != prep.pic.shape:
             raise ImageError("raw and processed images differ in size")
-        return fast.detect(prep, raw_arr, threshold, settings, start, exclude)
+        return fast.detect(prep, raw_arr, threshold, settings, start, exclude, soma=soma)
 
 
-def _read(data: bytes) -> np.ndarray:
+def _read(data: bytes, plane: int | None = None) -> np.ndarray:
     """The image a file holds: a TIFF's first page, a CZI's AIS channel as
-    ZEN exports it to TIFF."""
+    ZEN exports it to TIFF. With plane (a view's AIS channel), that channel
+    of the CZI or plane of the TIFF instead."""
     if is_czi(data):
         image = read_czi(data)
-        return np.ascontiguousarray(image.as_tiff(image.ais_name))
-    return read_tiff(data)
+        names = list(image.channels)
+        if plane is not None and not 0 <= plane < len(names):
+            raise ImageError("the .czi file has no such channel")
+        return np.ascontiguousarray(image.as_tiff(image.ais_name if plane is None else names[plane]))
+    if plane is None:
+        return read_tiff(data)
+    planes = read_planes(data)
+    if plane >= planes.shape[2]:
+        raise ImageError("the TIFF has no such channel")
+    return np.ascontiguousarray(planes[:, :, plane])
 
 
 def bright_level(raw: np.ndarray) -> float:

@@ -22,12 +22,8 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from app.analysis.channels import AIS_CHANNEL, SOMA_STAINS, ais_index, soma_index  # noqa: F401
 from app.analysis.images import ImageError
-
-# The channel the AIS is usually stained in, by the name ZEN records, and the
-# stains soma.py can read, in order of preference (matched within the name).
-AIS_CHANNEL = "Alexa Fluor 488"
-SOMA_STAINS = ("AMCA", "DAPI", "Hoechst")
 
 MAGIC = b"ZISRAWFILE"
 SEGMENT_HEADER = 32
@@ -52,22 +48,18 @@ class Czi:
     @property
     def soma_name(self) -> str | None:
         """The channel soma.py reads: the first SOMA_STAINS stain there is;
-        None when the cell has none."""
-        for stain in SOMA_STAINS:
-            for name in self.channels:
-                if stain.lower() in name.lower():
-                    return name
-        return None
+        None when the cell has none (channels.soma_index)."""
+        names = list(self.channels)
+        found = soma_index(names)
+        return None if found is None else names[found]
 
     @property
     def ais_name(self) -> str:
         """The channel the AIS is traced in: Alexa Fluor 488 when there is
         one, else the first channel that is not the soma's (an AIS stained in
-        594, say), else the only channel."""
-        if AIS_CHANNEL in self.channels:
-            return AIS_CHANNEL
-        soma = self.soma_name
-        return next((n for n in self.channels if n != soma), next(iter(self.channels)))
+        594, say), else the only channel (channels.ais_index)."""
+        names = list(self.channels)
+        return names[ais_index(names)]
 
     def as_tiff(self, name: str) -> np.ndarray:
         """The channel as ZEN exports it to TIFF: scaled up to fill 16 bits

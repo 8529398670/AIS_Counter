@@ -564,12 +564,12 @@ const AisExport = {
     }
     if ( opts.processedPng ) {
       const name = image.cell + "_processed.png";
-      if ( f.czi ) png( "processed_png" , name , url( f.czi.sha , this.view ) );
+      if ( f.czi ) png( "processed_png" , name , url( Ais.sha( image , "czi" ) , this.view ) );   // its AIS channel, as chosen
       else if ( f.processed && f.raw ) png( "processed_png" , name , url( f.processed.sha , "view.png" ) );
     }
     if ( opts.processed ) {
       if ( f.czi ) {
-        out.push( { folder: "processed" , name: image.cell + Ais.processedSuffix , url: "/api/ais/files/" + f.czi.sha + "/processed.tif" ,
+        out.push( { folder: "processed" , name: image.cell + Ais.processedSuffix , url: "/api/ais/files/" + Ais.sha( image , "czi" ) + "/processed.tif" ,
           size: f.czi.size || 0 } );
       } else if ( f.processed && f.raw ) {
         file( "processed" , f.processed );

@@ -24,7 +24,7 @@ SLICE_RE = re.compile(r"^(.+?)_z([0-9]{1,4})(c[0-9+]+)?\.tiff?\Z", re.IGNORECASE
 SUFFIX = ".zstack"
 FORMAT = "ais-zstack"
 MIN_SLICES = 2          # one match alone is an ordinary image
-PLANES = (0, 1)         # red and green; blue in ZEN's merge is green's tint
+PLANES = (0, 1, 2, 3)   # read_planes reads up to four: red, green, blue, the fourth
 MAX_UM = 100.0
 
 
@@ -48,7 +48,7 @@ def clean_options(value: Any) -> dict[str, Any]:
         raise ValueError("stack must be an object")
     plane = value.get("plane")
     if plane not in PLANES or isinstance(plane, bool):
-        raise ValueError("plane must be red (0) or green (1)")
+        raise ValueError("plane must be a channel from 0 to 3 (red, green, blue, fourth)")
     return {"plane": plane, "z_step_um": _micrometres(value.get("z_step_um"), "z step"),
             "pixel_um": _micrometres(value.get("pixel_um"), "pixel size")}
 

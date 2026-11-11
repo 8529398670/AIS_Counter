@@ -1033,3 +1033,6 @@ body { padding-left: env(safe-area-inset-left); padding-right: env(safe-area-ins
 
 /* A button waiting on the question it asked is not working yet. */
 .modal-open .btn[aria-busy="true"]:not(.modal .btn) .spinner-border { display: none; }
+
+/* A channel's display colour in the Channels dialog (static/js/channels.js). */
+.channels-swatch { display: inline-block; width: 0.9rem; height: 0.9rem; border-radius: 0.2rem; border: 1px solid var(--bs-border-color); }
