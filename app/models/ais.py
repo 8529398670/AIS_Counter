@@ -52,6 +52,11 @@ top). They are the team's, changed by admins only (the routes see to that).
 Deleting a folder loses nothing: what was in it moves up to its parent. The
 batches' priority order stays one order for every batch; a folder shows its
 batches in that order.
+
+Deleting a batch or a folder, or resetting a batch, puts what it took away in
+the trash first (a snapshot in BUCKET_AIS_TRASH, written in the same
+transaction), so restore_trash can put it back for TRASH_DAYS. Ids come from
+sequences and are never handed out twice, so rows go back under their own.
 """
 from __future__ import annotations
 
@@ -65,9 +70,11 @@ from collections import Counter
 from typing import Any, Callable
 
 from app.analysis import channels, zstack
+from datetime import timedelta
+
 from app.core.db import (BUCKET_AIS_BATCHES, BUCKET_AIS_FOLDERS, BUCKET_AIS_MEASUREMENTS, BUCKET_AIS_RESULTS,
-                         BUCKET_META, Record, Store)
-from app.models import to_iso, utc_now
+                         BUCKET_AIS_TRASH, BUCKET_META, Record, Store)
+from app.models import from_iso, to_iso, utc_now
 
 PROCESSED_SUFFIX = ".tif - Processed method 2.5.tif"
 SHA_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -1122,10 +1129,11 @@ def order_folders(store: Store, parent_id: Any, ids: Any) -> None:
                 tx.put(BUCKET_AIS_FOLDERS, folder["id"], folder | {"position": position})
 
 
-def delete_folder(store: Store, folder_id: int) -> Record | None:
+def delete_folder(store: Store, folder_id: int, user_id: int | None = None) -> Record | None:
     """The folder gone, its folders and batches moved up into its parent
-    (after what is there). Returns the folder that was deleted, None when it
-    was gone already."""
+    (after what is there), and into the trash: the folder and what it held,
+    so restore_trash can file them back. Returns the folder that was deleted
+    with trash_id added, None when it was gone already."""
     with store.transaction() as tx:
         folder = tx.get(BUCKET_AIS_FOLDERS, folder_id)
         if folder is None:
@@ -1137,11 +1145,18 @@ def delete_folder(store: Store, folder_id: int) -> Record | None:
                           key=lambda f: (_folder_position(f), f["id"]))
         for n, child in enumerate(children, 1):
             tx.put(BUCKET_AIS_FOLDERS, child["id"], child | {"parent_id": parent_id, "position": end + n})
+        moved = []
         for key, batch in tx.all(BUCKET_AIS_BATCHES):
             if batch.get("folder_id") == folder_id:
+                moved.append(batch["id"])
                 tx.put(BUCKET_AIS_BATCHES, key, batch | {"folder_id": parent_id})
         tx.delete(BUCKET_AIS_FOLDERS, folder_id)
-    return folder
+        trash_id = _trash(tx, "folder", folder["name"], user_id, {
+            "folder": folder,
+            "folders": [{"id": c["id"], "position": c.get("position")} for c in children],
+            "batches": moved,
+        })
+    return folder | {"trash_id": trash_id}
 
 
 def move_batches(store: Store, ids: Any, folder_id: Any) -> int:
@@ -1256,12 +1271,14 @@ def set_done(store: Store, batch_id: int, key: str, done: bool) -> Record | None
 RESET_SCOPES = ("all", "auto")
 
 
-def reset_batch(store: Store, batch_id: int, scope: str) -> tuple[Record, int] | None:
+def reset_batch(store: Store, batch_id: int, scope: str,
+                user_id: int | None = None) -> tuple[Record, int, int | None] | None:
     """An admin's fresh start on a batch, to run it again: scope "all" deletes
     every accepted AIS, recorded measurement and done mark, "auto" only the
     AIS auto mode saved (the rest renumbered 1..k per image) and the done
-    marks of the images they were on. Images and the assignment stay. Returns
-    (batch, AIS deleted)."""
+    marks of the images they were on. Images and the assignment stay. What
+    went (and every row's number before) goes in the trash first. Returns
+    (batch, AIS deleted, trash id -- None when nothing went)."""
     if scope not in RESET_SCOPES:
         raise BatchError("scope must be all or auto")
     with store.transaction() as tx:
@@ -1270,6 +1287,14 @@ def reset_batch(store: Store, batch_id: int, scope: str) -> tuple[Record, int] |
             return None
         rows = [r for _, r in tx.all(BUCKET_AIS_RESULTS) if r["batch_id"] == batch_id]
         gone = [r for r in rows if scope == "all" or r.get("origin") == "auto"]
+        lines = [m for _, m in tx.all(BUCKET_AIS_MEASUREMENTS) if m["batch_id"] == batch_id] if scope == "all" else []
+        trash_id = None
+        if gone or lines or (scope == "all" and record.get("skipped")):
+            trash_id = _trash(tx, "reset", record["name"], user_id, {
+                "batch_id": batch_id, "scope": scope, "results": gone, "measurements": lines,
+                "skipped": list(record.get("skipped") or []),
+                "numbers": {str(r["id"]): r["n"] for r in rows},
+            })
         for r in gone:
             tx.delete(BUCKET_AIS_RESULTS, r["id"])
         if scope == "all":
@@ -1289,14 +1314,180 @@ def reset_batch(store: Store, batch_id: int, scope: str) -> tuple[Record, int] |
                         tx.put(BUCKET_AIS_RESULTS, r["id"], r | {"n": n})
         _stamp(record)
         tx.put(BUCKET_AIS_BATCHES, batch_id, record)
-    return record, len(gone)
+    return record, len(gone), trash_id
 
 
-def delete_batch(store: Store, batch_id: int) -> None:
+def delete_batch(store: Store, batch_id: int, user_id: int | None = None) -> int | None:
+    """The batch, its AIS and its recorded lines gone -- into the trash, from
+    where restore_trash puts them back. Returns the trash id, None when the
+    batch was gone already."""
     with store.transaction() as tx:
+        batch = tx.get(BUCKET_AIS_BATCHES, batch_id)
+        if batch is None:
+            return None
+        results = [r for _, r in tx.all(BUCKET_AIS_RESULTS) if r["batch_id"] == batch_id]
+        lines = [m for _, m in tx.all(BUCKET_AIS_MEASUREMENTS) if m["batch_id"] == batch_id]
+        trash_id = _trash(tx, "batch", batch["name"], user_id,
+                          {"batch": batch, "results": results, "measurements": lines})
         tx.delete(BUCKET_AIS_BATCHES, batch_id)
         tx.delete_where(BUCKET_AIS_RESULTS, lambda _key, row: row["batch_id"] == batch_id)
         tx.delete_where(BUCKET_AIS_MEASUREMENTS, lambda _key, line: line["batch_id"] == batch_id)
+    return trash_id
+
+
+# --- trash ---------------------------------------------------------------------
+#
+# Each entry: {id, kind, name, deleted_at, deleted_by} and what restoring needs:
+#   batch:  batch, results, measurements -- the rows as they were.
+#   folder: folder; folders [{id, position}] and batches [ids] it held, which
+#           go back in only if they still sit where the delete moved them.
+#   reset:  batch_id, scope, results and measurements it deleted, skipped
+#           (the done marks before), numbers {result id: n} before renumbering.
+
+TRASH_DAYS = 30
+TRASH_KINDS = ("batch", "folder", "reset")
+
+
+def _trash(tx: Any, kind: str, name: str, user_id: int | None, payload: dict[str, Any]) -> int:
+    trash_id = tx.next_sequence(BUCKET_AIS_TRASH)
+    tx.put(BUCKET_AIS_TRASH, trash_id, {"id": trash_id, "kind": kind, "name": name,
+                                        "deleted_at": to_iso(utc_now()), "deleted_by": user_id} | payload)
+    return trash_id
+
+
+def trash_summary(entry: Record) -> dict[str, Any]:
+    """What the Trash list shows of an entry: not the rows themselves."""
+    out = {key: entry.get(key) for key in ("id", "kind", "name", "deleted_at", "deleted_by")}
+    out["expires_at"] = to_iso(from_iso(entry["deleted_at"]) + timedelta(days=TRASH_DAYS))
+    if entry["kind"] == "folder":
+        out["folders"] = len(entry.get("folders") or [])
+        out["batches"] = len(entry.get("batches") or [])
+    else:
+        out["results"] = len(entry.get("results") or [])
+        out["measurements"] = len(entry.get("measurements") or [])
+    if entry["kind"] == "batch":
+        out["images"] = len(entry["batch"].get("images") or [])
+        out["batch_id"] = entry["batch"]["id"]
+    if entry["kind"] == "reset":
+        out["batch_id"] = entry["batch_id"]
+        out["scope"] = entry["scope"]
+    return out
+
+
+def list_trash(store: Store) -> list[dict[str, Any]]:
+    """Every entry, newest first."""
+    entries = [trash_summary(e) for _, e in store.all(BUCKET_AIS_TRASH)]
+    return sorted(entries, key=lambda e: (e["deleted_at"], e["id"]), reverse=True)
+
+
+def get_trash(store: Store, trash_id: int) -> Record | None:
+    return store.get(BUCKET_AIS_TRASH, trash_id)
+
+
+def restore_trash(store: Store, trash_id: int) -> dict[str, Any] | None:
+    """Put an entry back and take it out of the trash. Returns its summary,
+    None when there is no such entry; BatchError when it cannot go back."""
+    with store.transaction() as tx:
+        entry = tx.get(BUCKET_AIS_TRASH, trash_id)
+        if entry is None:
+            return None
+        kind = entry["kind"]
+        if kind == "batch":
+            _restore_batch(tx, entry)
+        elif kind == "folder":
+            _restore_folder(tx, entry)
+        elif kind == "reset":
+            _restore_reset(tx, entry)
+        else:
+            raise BatchError("unknown kind of trash")
+        tx.delete(BUCKET_AIS_TRASH, trash_id)
+    return trash_summary(entry)
+
+
+def _restore_batch(tx: Any, entry: Record) -> None:
+    batch = dict(entry["batch"])
+    if tx.get(BUCKET_AIS_BATCHES, batch["id"]) is not None:
+        raise BatchError("that batch is back already")
+    if batch.get("folder_id") is not None and tx.get(BUCKET_AIS_FOLDERS, batch["folder_id"]) is None:
+        batch["folder_id"] = None
+    tx.put(BUCKET_AIS_BATCHES, batch["id"], batch)
+    for r in entry.get("results") or []:
+        tx.put(BUCKET_AIS_RESULTS, r["id"], r)
+    for m in entry.get("measurements") or []:
+        tx.put(BUCKET_AIS_MEASUREMENTS, m["id"], m)
+
+
+def _restore_folder(tx: Any, entry: Record) -> None:
+    folder = dict(entry["folder"])
+    folder_id = folder["id"]
+    if tx.get(BUCKET_AIS_FOLDERS, folder_id) is not None:
+        raise BatchError("that folder is back already")
+    parent_id = folder.get("parent_id")
+    if parent_id is not None and tx.get(BUCKET_AIS_FOLDERS, parent_id) is None:
+        folder["parent_id"] = parent_id = None
+    folders = [f for _, f in tx.all(BUCKET_AIS_FOLDERS)]
+    parents = _parents(folders)
+    if _depth(parents, parent_id) + 1 > MAX_FOLDER_DEPTH:
+        raise BatchError(f"folders go at most {MAX_FOLDER_DEPTH} deep")
+    tx.put(BUCKET_AIS_FOLDERS, folder_id, folder)
+    by_id = {f["id"]: f for f in folders}
+    for child in entry.get("folders") or []:
+        current = by_id.get(child["id"])
+        # Only what is still where the delete left it; anything moved since stays.
+        if current is not None and current.get("parent_id") == entry["folder"].get("parent_id"):
+            tx.put(BUCKET_AIS_FOLDERS, child["id"], current | {"parent_id": folder_id, "position": child.get("position")})
+    for batch_id in entry.get("batches") or []:
+        batch = tx.get(BUCKET_AIS_BATCHES, batch_id)
+        if batch is not None and batch.get("folder_id") == entry["folder"].get("parent_id"):
+            tx.put(BUCKET_AIS_BATCHES, batch_id, batch | {"folder_id": folder_id})
+
+
+def _restore_reset(tx: Any, entry: Record) -> None:
+    batch_id = entry["batch_id"]
+    record = tx.get(BUCKET_AIS_BATCHES, batch_id)
+    if record is None:
+        raise BatchError("that batch has been deleted -- restore it first")
+    numbers = entry.get("numbers") or {}
+    # The rows that stayed take back the numbers they had; ones added since
+    # go after, so nobody's AIS shares a number.
+    rows = [r for _, r in tx.all(BUCKET_AIS_RESULTS) if r["batch_id"] == batch_id]
+    for r in entry.get("results") or []:
+        if tx.get(BUCKET_AIS_RESULTS, r["id"]) is None:
+            rows.append(r)
+    by_image: dict[str, list[Record]] = {}
+    for r in rows:
+        by_image.setdefault(r["image"], []).append(r)
+    for image_rows in by_image.values():
+        known = sorted((r for r in image_rows if str(r["id"]) in numbers), key=lambda r: (numbers[str(r["id"])], r["id"]))
+        added = sorted((r for r in image_rows if str(r["id"]) not in numbers), key=lambda r: (r["n"], r["id"]))
+        for n, r in enumerate(known + added, 1):
+            tx.put(BUCKET_AIS_RESULTS, r["id"], r | {"n": n})
+    for m in entry.get("measurements") or []:
+        if tx.get(BUCKET_AIS_MEASUREMENTS, m["id"]) is None:
+            tx.put(BUCKET_AIS_MEASUREMENTS, m["id"], m)
+    skipped = list(record.get("skipped") or [])
+    record["skipped"] = skipped + [k for k in entry.get("skipped") or [] if k not in skipped]
+    _stamp(record)
+    tx.put(BUCKET_AIS_BATCHES, batch_id, record)
+
+
+def purge_trash(store: Store, trash_id: int) -> bool:
+    """Delete an entry for good. False when it was not there."""
+    with store.transaction() as tx:
+        if tx.get(BUCKET_AIS_TRASH, trash_id) is None:
+            return False
+        tx.delete(BUCKET_AIS_TRASH, trash_id)
+    return True
+
+
+def purge_old_trash(store: Store) -> int:
+    """For housekeeping: entries older than TRASH_DAYS. Returns how many went."""
+    cutoff = utc_now() - timedelta(days=TRASH_DAYS)
+    with store.transaction() as tx:
+        old = [key for key, e in tx.all(BUCKET_AIS_TRASH) if from_iso(e["deleted_at"]) < cutoff]
+        for key in old:
+            tx.delete(BUCKET_AIS_TRASH, key)
+    return len(old)
 
 
 # --- assignments ---------------------------------------------------------------

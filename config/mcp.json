@@ -60,6 +60,10 @@
       "route": "GET /api/ais/matlab/helper/next"
     },
     {
+      "reason": "The trash only holds what the Batches screen deleted, which agents cannot do.",
+      "route": "GET /api/ais/trash"
+    },
+    {
       "reason": "The MCP reference itself; tools/list gives the same list.",
       "route": "GET /api/mcp.json"
     },
@@ -106,6 +110,14 @@
     {
       "reason": "A results file upload: MCP messages are JSON, and clients cap their size. Send it over HTTP with the same key.",
       "route": "POST /api/ais/results/import"
+    },
+    {
+      "reason": "Deleting for good is kept out of agents' reach on purpose.",
+      "route": "POST /api/ais/trash/{trash_id}/purge"
+    },
+    {
+      "reason": "The trash only holds what the Batches screen deleted, which agents cannot do.",
+      "route": "POST /api/ais/trash/{trash_id}/restore"
     },
     {
       "reason": "Ends a browser session; a key has none to end.",
@@ -1910,7 +1922,7 @@
         "readOnlyHint": false,
         "title": "Delete a batch's auto AIS (admin)"
       },
-      "description": "Deletes every AIS auto mode saved on the batch (the rest renumbered) and the done marks of the images they were on, to run auto again. Cannot be undone; get_backup or export_report first.",
+      "description": "Deletes every AIS auto mode saved on the batch (the rest renumbered) and the done marks of the images they were on, to run auto again. What went is kept in the Batches screen's Trash for 30 days, where a person can put it back.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {

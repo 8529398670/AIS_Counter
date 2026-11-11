@@ -247,6 +247,10 @@ def build_routes(static_server: StaticServer, cfg: Config) -> list[BaseRoute]:
         # Admins: splitting a batch among people, and resetting its results.
         admins("/api/ais/batches/{batch_id}/assign", ais.batch_assign, ["POST"]),
         admins("/api/ais/batches/{batch_id}/reset", ais.batch_reset, ["POST"]),
+        # The trash: what deleting a batch or folder, or a reset, took away.
+        signed_in("/api/ais/trash", ais.trash_list),
+        signed_in("/api/ais/trash/{trash_id}/restore", ais.trash_restore, ["POST"]),
+        admins("/api/ais/trash/{trash_id}/purge", ais.trash_purge, ["POST"]),
         admins("/api/ais/batches/{batch_id}/translation.txt", ais.batch_translation),
         # Treatments give away what blinding hides: admins.
         admins("/api/ais/compare", ais.compare_batches, ["POST"]),

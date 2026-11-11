@@ -330,14 +330,14 @@ def test_reset_deletes_all_or_only_auto_and_keeps_images_and_assignment(store):
         ais.reset_batch(store, bid, "some")
     assert ais.reset_batch(store, 999, "all") is None
 
-    after, deleted = ais.reset_batch(store, bid, "auto")
+    after, deleted, _ = ais.reset_batch(store, bid, "auto")
     assert deleted == 1
     left = ais.list_results(store, bid)
     assert sorted((r["image"], r["n"], r["origin"]) for r in left) == [("a", 1, ""), ("b", 1, "")]
     assert next(r for r in left if r["id"] == clicked["id"])["n"] == 1
     assert after["skipped"] == ["c"]   # only the image that had auto AIS is un-marked
 
-    after, deleted = ais.reset_batch(store, bid, "all")
+    after, deleted, _ = ais.reset_batch(store, bid, "all")
     assert deleted == 2 and ais.list_results(store, bid) == []
     assert after["skipped"] == [] and len(after["images"]) == 3 and after["assignment"]
     assert ais.list_batches(store)[0]["completed"] == 0

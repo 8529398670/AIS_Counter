@@ -13,7 +13,8 @@
 //
 // Admins file a batch by dragging its card onto a folder (tile, heading or a
 // step of the path) or from its menu (Move to folder); folders have a menu
-// of their own. Deleting a folder loses nothing: what was in it moves up.
+// of their own. Deleting a folder loses nothing: what was in it moves up,
+// and the folder itself goes to the trash (trash.js), from where it comes back.
 // Admins can also Compare a folder: every batch in it and the folders inside
 // it, one culture each, through Compare.run (compare.js) as Compare selected.
 const BatchFolders = {
@@ -475,13 +476,17 @@ const BatchFolders = {
     if ( !( await Dom.confirm( question ) ) ) return;
     // Standing in it: go up to where its contents land.
     const here = this.current();
+    const remove = async () => ( await Api.post( "/api/ais/folders/" + f.id + "/delete" , {} ) ).trash_id;
+    let trashId;
     try {
-      await Api.post( "/api/ais/folders/" + f.id + "/delete" , {} );
+      trashId = await remove();
     } catch ( error ) {
       App.showError( error.message );
       return;
     }
     if ( here === f.id ) this.go( parent );
     await Batches.refresh( true );
+    // Undo (trash.js) files the folder and what it held back.
+    Trash.undoable( I18n.get( "undo.deleted_folder" ) , trashId , remove , () => Batches.refresh( true ) );
   },
 };

@@ -586,8 +586,8 @@ async def folder_delete(request: Request) -> Response:
     if refused:
         return refused
     folder_id = _folder_id(request)
-    folder = await run(batches.delete_folder, get_store(request), folder_id) if folder_id else None
-    return JSONResponse({"ok": True}) if folder else not_found("no such folder")
+    folder = await run(batches.delete_folder, get_store(request), folder_id, _user_id(request)) if folder_id else None
+    return JSONResponse({"ok": True, "trash_id": folder["trash_id"]}) if folder else not_found("no such folder")
 
 
 async def folder_order(request: Request) -> Response:
@@ -1169,8 +1169,10 @@ async def batch_delete(request: Request) -> Response:
     actor = actor_from(request)
     if batch["created_by"] != actor.user.id and not actor.is_admin:
         return forbidden("only whoever opened the batch, or an admin, can delete it")
-    await run(batches.delete_batch, store, batch_id)
-    return JSONResponse({"ok": True})
+    trash_id = await run(batches.delete_batch, store, batch_id, actor.user.id)
+    if trash_id is None:
+        return not_found("no such batch")
+    return JSONResponse({"ok": True, "trash_id": trash_id})
 
 
 async def batch_done(request: Request) -> Response:
@@ -1200,13 +1202,67 @@ async def batch_reset(request: Request) -> Response:
     if not batch_id:
         return not_found("no such batch")
     try:
-        out = await run(batches.reset_batch, get_store(request), batch_id, body.get("scope"))
+        out = await run(batches.reset_batch, get_store(request), batch_id, body.get("scope"), _user_id(request))
     except batches.BatchError as exc:
         return bad_request(str(exc))
     if out is None:
         return not_found("no such batch")
-    batch, deleted = out
-    return JSONResponse({"batch": await run(_batch_json, request, batch), "deleted": deleted})
+    batch, deleted, trash_id = out
+    return JSONResponse({"batch": await run(_batch_json, request, batch), "deleted": deleted, "trash_id": trash_id})
+
+
+# --- trash (deleted batches and folders, reset results) ------------------------
+
+
+def _may_restore(request: Request, entry: dict[str, Any]) -> bool:
+    """A batch: whoever deleted it or an admin, as for deleting it. A folder
+    or a reset: admins, who are the only ones who can do those."""
+    actor = actor_from(request)
+    if actor.is_admin:
+        return True
+    return entry["kind"] == "batch" and entry.get("deleted_by") == actor.user.id
+
+
+async def trash_list(request: Request) -> Response:
+    """What was deleted in the last TRASH_DAYS days, newest first, each with
+    can_restore for whoever asks."""
+    store = get_store(request)
+    entries = await run(batches.list_trash, store)
+    names = await run(_names, request)
+    for entry in entries:
+        entry["deleted_by_name"] = names.get(entry["deleted_by"], "")
+        entry["can_restore"] = _may_restore(request, entry)
+    return JSONResponse({"entries": entries, "days": batches.TRASH_DAYS})
+
+
+async def trash_restore(request: Request) -> Response:
+    body, refused = await _body(request)
+    if refused:
+        return refused
+    store = get_store(request)
+    trash_id = parse_id(request.path_params["trash_id"])
+    entry = await run(batches.get_trash, store, trash_id) if trash_id else None
+    if entry is None:
+        return not_found("not in the trash")
+    if not _may_restore(request, entry):
+        return forbidden("only whoever deleted it, or an admin, can put it back")
+    try:
+        restored = await run(batches.restore_trash, store, trash_id)
+    except batches.BatchError as exc:
+        return bad_request(str(exc))
+    if restored is None:
+        return not_found("not in the trash")
+    return JSONResponse(restored)
+
+
+async def trash_purge(request: Request) -> Response:
+    """Delete an entry for good (admins)."""
+    body, refused = await _body(request)
+    if refused:
+        return refused
+    trash_id = parse_id(request.path_params["trash_id"])
+    gone = await run(batches.purge_trash, get_store(request), trash_id) if trash_id else False
+    return JSONResponse({"ok": True}) if gone else not_found("not in the trash")
 
 
 async def batch_assign(request: Request) -> Response:

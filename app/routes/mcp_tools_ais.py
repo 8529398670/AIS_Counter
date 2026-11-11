@@ -622,7 +622,7 @@ def _specs() -> list[Spec]:
              ais.measure_types_set, "/api/ais/measure-types", "POST",
              props={"types": {"type": "array", "items": {"type": "string"}}}, required=("types",), admin_only=True),
         Spec("reset_batch_auto", "Delete a batch's auto AIS (admin)",
-             "Deletes every AIS auto mode saved on the batch (the rest renumbered) and the done marks of the images they were on, to run auto again. Cannot be undone; get_backup or export_report first.",
+             "Deletes every AIS auto mode saved on the batch (the rest renumbered) and the done marks of the images they were on, to run auto again. What went is kept in the Batches screen's Trash for 30 days, where a person can put it back.",
              ais.batch_reset, "/api/ais/batches/{batch_id}/reset", "POST", props=b, required=("batch_id",),
              path_args=("batch_id",), fixed={"scope": "auto"}, shape=_shape_brief, destructive=True, admin_only=True),
         # auto runs

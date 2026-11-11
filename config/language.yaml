@@ -68,7 +68,7 @@ ais:
   assign_clear: "Clear assignment"
   assign_save: "Save"
   batch_delete: "Delete this batch and its accepted AIS"
-  batch_delete_confirm: "Delete the batch \"{name}\" and every AIS accepted in it, for everyone?"
+  batch_delete_confirm: "Delete the batch \"{name}\" and every AIS accepted in it, for everyone? It goes to the Trash, from where it can be put back for 30 days."
   uploaded: "uploaded from a browser"
   no_batch: "That batch does not exist (any more)."
   imported_batch: "Imported from browser"
@@ -500,7 +500,7 @@ batches:
   reset_title: "Reset results"
   reset_all: "Everything: all {n} AIS (hand and auto), every recorded measurement and every done mark"
   reset_auto: "Auto AIS only: the {n} auto mode saved, and the done marks of their images"
-  reset_help: "Images and assignments stay, so the batch can be run again. This cannot be undone: download a backup first."
+  reset_help: "Images and assignments stay, so the batch can be run again. What is deleted goes to the Trash for 30 days; a backup keeps it for good."
   reset_backup: "Download backup (ZIP)"
   reset_backing_up: "Preparing the backup…"
   reset_backed_up: "Backup downloaded."
@@ -727,7 +727,33 @@ undo:
   rename_session: "device name changed"
   deleted_key: "API key deleted"
   deleted_invite: "invite link deleted"
+  deleted_batch: "batch moved to the trash"
+  deleted_folder: "folder deleted"
+  reset: "\"{name}\" reset: {n} AIS moved to the trash"
   settings: "settings change"
+
+# The Batches screen's Trash (static/js/trash.js): deleted batches and
+# folders and reset results, kept for {days} days so they can be put back.
+trash:
+  button: "Trash"
+  button_help: "Deleted batches and folders, and reset results, to put back"
+  title: "Trash"
+  help: "Deleted batches, folders and reset results stay here for {days} days, then go for good."
+  loading: "Loading…"
+  empty: "Nothing in the trash."
+  kind_batch: "Batch"
+  kind_folder: "Folder"
+  kind_reset: "Reset results"
+  kind_reset_auto: "Reset auto AIS"
+  count_batch: "{images} images, {ais} AIS, {lines} lines"
+  count_reset: "{ais} AIS, {lines} lines"
+  count_folder: "batches in it: {batches}, folders: {folders}"
+  deleted: "Deleted"
+  by: "by {name}"
+  restore: "Restore"
+  restored: "\"{name}\" put back."
+  purge: "Delete for good"
+  purge_confirm: "Delete \"{name}\" for good? This cannot be undone."
 
 # The Appearance screen (static/js/themes_editor.js). Light is always the
 # default. Names for the built-in themes in static/js/theme.js, used until a

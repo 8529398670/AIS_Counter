@@ -63,6 +63,9 @@ BUCKET_AIS_MEASUREMENTS = "ais_measurements"
 # The Batches screen's folders (nested, shared), batches filed in them by
 # folder_id. See app/models/ais.py.
 BUCKET_AIS_FOLDERS = "ais_folders"
+# What deleting a batch or folder, or resetting a batch, took away, kept for a
+# while so it can be put back (the Batches screen's Trash). See app/models/ais.py.
+BUCKET_AIS_TRASH = "ais_trash"
 
 BUCKETS = (
     BUCKET_USERS,
@@ -81,6 +84,7 @@ BUCKETS = (
     BUCKET_AIS_RESULTS,
     BUCKET_AIS_MEASUREMENTS,
     BUCKET_AIS_FOLDERS,
+    BUCKET_AIS_TRASH,
 )
 
 # How long a writer waits for another writer before giving up. Without it a

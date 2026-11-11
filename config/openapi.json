@@ -11352,6 +11352,185 @@
           }
         }
       }
+    },
+    "/api/ais/trash": {
+      "get": {
+        "summary": "The Batches screen's trash",
+        "operationId": "get_api_ais_trash",
+        "tags": [
+          "AIS"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "503": {
+            "$ref": "#/components/responses/E503"
+          }
+        },
+        "x-mcp-http": "The trash only holds what the Batches screen deleted, which agents cannot do.",
+        "description": "What deleting a batch or folder, or resetting a batch, took away in the last 30 days, newest first: {entries: [{id, kind (batch | folder | reset), name, deleted_at, deleted_by, deleted_by_name, expires_at, can_restore, counts}], days}."
+      }
+    },
+    "/api/ais/trash/{trash_id}/restore": {
+      "post": {
+        "summary": "Restore from the trash",
+        "operationId": "post_api_ais_trash_trash_id_restore",
+        "tags": [
+          "AIS"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "trash_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "csrf_token": {
+                    "type": "string",
+                    "description": "From GET /api/me. Browser sessions only."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "503": {
+            "$ref": "#/components/responses/E503"
+          }
+        },
+        "x-mcp-http": "The trash only holds what the Batches screen deleted, which agents cannot do.",
+        "description": "Put a deleted batch (with its AIS and lines), folder or reset back. A batch: whoever deleted it or an admin; a folder or reset: admins."
+      }
+    },
+    "/api/ais/trash/{trash_id}/purge": {
+      "post": {
+        "summary": "Delete from the trash for good",
+        "operationId": "post_api_ais_trash_trash_id_purge",
+        "tags": [
+          "AIS"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "trash_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "csrf_token": {
+                    "type": "string",
+                    "description": "From GET /api/me. Browser sessions only."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "503": {
+            "$ref": "#/components/responses/E503"
+          }
+        },
+        "x-mcp-http": "Deleting for good is kept out of agents' reach on purpose.",
+        "description": "The entry gone for good (admins).",
+        "x-required-role": "admin"
+      }
     }
   },
   "components": {

@@ -13,14 +13,15 @@ from app.models import login_tokens, sessions
 from app.models import api_keys
 from app.models import invite_links
 from app.models import sign_in
+from app.models import ais
 
 HOUR_SECONDS = 60 * 60
 
 
 def purge(store: db.Store) -> tuple[str, str]:
     """Drop expired sessions, expired login tokens, the API keys and invite
-    links that have been dead long enough to stop being worth listing, and old
-    webhook rows.
+    links that have been dead long enough to stop being worth listing, the
+    Batches screen's trash past its TRASH_DAYS, and old webhook rows.
     None of it is a correctness issue -- every one of those is already refused
     on read -- so this is only here to keep the file from growing forever.
 
@@ -32,6 +33,7 @@ def purge(store: db.Store) -> tuple[str, str]:
         ("api keys", api_keys.purge_dead_api_keys),
         ("invite links", invite_links.purge_dead_invite_links),
         ("sign-in challenges", sign_in.purge_expired_challenges),
+        ("batch trash", ais.purge_old_trash),
     )
     removed: list[str] = []
     errors: list[str] = []

@@ -591,6 +591,10 @@
             <button id="batches-new-folder" class="btn btn-outline-secondary btn-sm" type="button" hidden>
               <i class="bi bi-folder-plus" aria-hidden="true"></i> <span data-i18n="batches.folder_new"></span>
             </button>
+            <!-- What was deleted, to put back (static/js/trash.js). -->
+            <button id="batches-trash" class="btn btn-outline-secondary btn-sm" type="button" data-i18n-attr="title:trash.button_help">
+              <i class="bi bi-trash3" aria-hidden="true"></i> <span data-i18n="trash.button"></span>
+            </button>
             <button id="batches-import" class="btn btn-outline-secondary btn-sm" type="button" data-i18n-attr="title:batches.import_help" hidden>
               <i class="bi bi-upload" aria-hidden="true"></i> <span data-i18n="batches.import"></span>
             </button>
@@ -783,6 +787,22 @@
             </div>
           </div>
 
+          <!-- Trash: deleted batches and folders and reset results, to put back (static/js/trash.js). -->
+          <div class="modal fade" id="batches-trash-modal" tabindex="-1" aria-labelledby="batches-trash-title" aria-hidden="true">
+            <div class="modal-dialog modal-dialog-scrollable">
+              <div class="modal-content">
+                <div class="modal-header">
+                  <h2 class="modal-title h5 mb-0 me-auto" id="batches-trash-title" data-i18n="trash.title"></h2>
+                  <button type="button" class="btn-close" data-bs-dismiss="modal" data-i18n-attr="aria-label:nav.close"></button>
+                </div>
+                <div class="modal-body">
+                  <p id="batches-trash-help" class="small text-body-secondary"></p>
+                  <p id="batches-trash-status" class="small text-body-secondary mb-2"></p>
+                  <ul id="batches-trash-list" class="list-group"></ul>
+                </div>
+              </div>
+            </div>
+          </div>
           <div class="modal fade" id="batches-reset-modal" tabindex="-1" aria-labelledby="batches-reset-title" aria-hidden="true">
             <div class="modal-dialog">
               <div class="modal-content">
@@ -2375,6 +2395,7 @@
   <script src="/js/treatments.js"></script>
   <script src="/js/compare.js"></script>
   <script src="/js/batch_folders.js"></script>
+  <script src="/js/trash.js"></script>
   <script src="/js/batches.js"></script>
   <script src="/js/logs.js"></script>
   <script src="/js/jobs.js"></script>

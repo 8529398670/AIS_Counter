@@ -74,6 +74,7 @@ const Batches = {
     Treatments.init();
     Compare.init();
     BatchFolders.init();
+    Trash.init();
     Dom.get( "batches-compare" ).addEventListener( "click" , () => this.compareSelected() );
     this.onView();
   },
@@ -221,20 +222,28 @@ const Batches = {
     await this.refresh( true );
   },
 
+  // Into the trash (trash.js): the toast's Undo or the Trash dialog puts it back.
   async remove( b ) {
     const question = I18n.get( "ais.batch_delete_confirm" ).replace( "{name}" , b.name );
     if ( question && !window.confirm( question ) ) return;
+    let trashId;
     try {
-      await Api.post( "/api/ais/batches/" + b.id + "/delete" , {} );
+      trashId = await this.deleteBatch( b );
     } catch ( error ) {
       App.showError( error.message );
       return;
     }
+    await this.refresh( true );
+    Trash.undoable( I18n.get( "undo.deleted_batch" ) , trashId , () => this.deleteBatch( b ) , () => this.refresh( true ) );
+  },
+
+  async deleteBatch( b ) {
+    const out = await Api.post( "/api/ais/batches/" + b.id + "/delete" , {} );
     if ( Ais.batch && Ais.batch.id === b.id ) Ais.closeBatch();
     this.queue = this.queue.filter( ( item ) => item.batchId !== b.id );
     this.local.delete( b.id );
     this.expanded.delete( b.id );
-    await this.refresh( true );
+    return out.trash_id;
   },
 
   async setArchived( b , archived ) {
@@ -322,13 +331,27 @@ const Batches = {
     }
     this.resetting = null;
     this.resetModal.hide();
-    Dom.toast( I18n.get( "batches.reset_done" ).replace( "{name}" , b.name ).replace( "{n}" , out.deleted ) );
-    // The open batch reloads (its rows and done marks) when Process shows it.
+    this.resetShown( b , out );
+    await this.refresh( true );
+    if ( out.trash_id ) {
+      // Undo puts the results back from the trash; Redo resets again.
+      const label = I18n.get( "undo.reset" ).replace( "{name}" , b.name ).replace( "{n}" , out.deleted );
+      Trash.undoable( label , out.trash_id , async () => {
+        const again = await Api.post( "/api/ais/batches/" + b.id + "/reset" , { scope: scope } );
+        this.resetShown( b , again );
+        return again.trash_id;
+      } , () => Trash.changed( { kind: "reset" , batch_id: b.id } ) );
+    } else {
+      Dom.toast( I18n.get( "batches.reset_done" ).replace( "{name}" , b.name ).replace( "{n}" , out.deleted ) );
+    }
+  },
+
+  // The open batch reloads (its rows and done marks) when Process shows it.
+  resetShown( b , out ) {
     if ( Ais.batch && Ais.batch.id === b.id ) {
       AisAuto.reset();
       Ais.batchChanged( out.batch , true );
     }
-    await this.refresh( true );
   },
 
   // --- importing an export (admins) ----------------------------------------------

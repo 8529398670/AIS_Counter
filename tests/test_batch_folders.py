@@ -156,7 +156,7 @@ def test_everyone_sees_folders_and_only_admins_change_them(h):
     assert call(h, "POST", f"/api/ais/folders/{f['id']}/rename", admin, name="Y")[1]["name"] == "Y"
     assert call(h, "POST", f"/api/ais/folders/{f['id']}/move", admin, parent_id=sub["id"])[0] == 400
     assert call(h, "POST", "/api/ais/folders/999/rename", admin, name="Y")[0] == 404
-    assert call(h, "POST", f"/api/ais/folders/{sub['id']}/delete", admin) == (200, {"ok": True})
+    assert call(h, "POST", f"/api/ais/folders/{sub['id']}/delete", admin)[1]["ok"] is True
     assert call(h, "POST", f"/api/ais/folders/{sub['id']}/delete", admin)[0] == 404
     assert call(h, "GET", "/api/ais/batches", ann)[1]["batches"][0]["folder_id"] == f["id"]
     # A batch made while a folder shows lands in it, for anyone who can make one.
