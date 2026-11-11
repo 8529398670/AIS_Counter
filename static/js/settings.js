@@ -7,7 +7,7 @@
 // plus a <fieldset data-method="key"> of its controls in index.html; only the
 // chosen method's fieldset shows.
 //
-// General settings (minimum length, trace thickness, and how auto mode runs)
+// General settings (minimum length, trace thickness and colour, and how auto mode runs)
 // apply whatever the method, and are kept apart from any one method's.
 //
 // Like the theme, the choice is remembered in this browser (localStorage)
@@ -56,14 +56,15 @@ const Settings = {
     // "fitted2" a second trial (start "fitted2", the fitted2_ filters);
     // "learned" its own detector (start "learned", app/analysis/learned.py)
     // with a lowest score and length.
-    defaults: { min_length: 0 , line_width: 1.5 , z_method: "trace_lift" , batches_view: "drill" ,
+    defaults: { min_length: 0 , line_width: 1.5 , trace_color: "#3cdc78" , live_trace_color: "#286eff" , z_method: "trace_lift" , batches_view: "drill" ,
       auto_review: "each" , auto_method: "fitted" , auto_start: "soma" , auto_min_length: 5 , auto_min_brightness: 30 ,
       auto_min_width: 2.4 , auto_max_soma_gap: 10 ,
       fitted_min_length: 13 , fitted_min_brightness: 55 , fitted_max_branchiness: 1.02 ,
       fitted2_min_length: 13 , fitted2_min_contrast: 30 , fitted2_min_brightness: 0 , fitted2_max_branchiness: 1.02 ,
       learned_min_score: 25 , learned_min_length: 0 ,
       auto_skip_done: true },
-    controls: { min_length: "settings-min-length" , line_width: "settings-line-width" , z_method: "settings-z-method" ,
+    controls: { min_length: "settings-min-length" , line_width: "settings-line-width" , trace_color: "settings-trace-color" , live_trace_color: "settings-live-trace-color" ,
+      z_method: "settings-z-method" ,
       batches_view: "settings-batches-view" ,
       auto_review: "settings-auto-review" , auto_method: "settings-auto-method" , auto_start: "settings-auto-start" ,
       auto_min_length: "settings-auto-min-length" , auto_min_brightness: "settings-auto-min-brightness" ,
@@ -82,6 +83,8 @@ const Settings = {
     // batches_view: how the Batches screen shows its folders (batch_folders.js).
     choices: { batches_view: [ "drill" , "tree" ] , auto_review: [ "each" , "end" , "all" ] , auto_method: [ "classic" , "fitted" , "fitted2" , "learned" ] ,
       auto_start: [ "soma" , "both" , "brighter" , "dimmer" ] },
+    // A colour as the colour picker gives it, #rrggbb.
+    colors: [ "trace_color" , "live_trace_color" ],
     // A build that briefly made the fitted filters the auto_ ones (marked by
     // auto_max_branchiness) saved its values there: they move to fitted_,
     // and the auto_ ones go back to their defaults.
@@ -120,15 +123,22 @@ const Settings = {
         } );
       } );
     } );
-    // The slider redraws as it moves; the number box once it is left.
+    // The slider and colour picker redraw as they move; the number box once it is left.
     Object.keys( this.general.controls ).forEach( ( field ) => {
       const control = Dom.get( this.general.controls[ field ] );
-      control.addEventListener( control.type === "range" ? "input" : "change" , ( e ) => {
+      const live = control.type === "range" || control.type === "color";
+      control.addEventListener( live ? "input" : "change" , ( e ) => {
         const value = this.clean( this.general , field , control.type === "checkbox" ? e.target.checked : e.target.value );
         this.values[ field ] = value;
-        if ( control.type !== "range" && control.type !== "checkbox" ) e.target.value = value;
+        if ( !live && control.type !== "checkbox" ) e.target.value = value;
         this.renderGeneral();
         this.save();
+      } );
+    } );
+    // Each colour's Default button.
+    this.general.colors.forEach( ( field ) => {
+      Dom.get( this.general.controls[ field ] + "-reset" ).addEventListener( "click" , () => {
+        this.setGeneral( field , this.general.defaults[ field ] );
       } );
     } );
     // Back to the original's constants, for the method shown.
@@ -152,6 +162,9 @@ const Settings = {
   clean( group , field , value ) {
     const fallback = group.defaults[ field ];
     if ( typeof fallback === "boolean" ) return typeof value === "boolean" ? value : fallback;
+    if ( ( group.colors || [] ).includes( field ) ) {
+      return typeof value === "string" && /^#[0-9a-f]{6}$/i.test( value ) ? value.toLowerCase() : fallback;
+    }
     const choices = group.choices && group.choices[ field ];
     if ( choices ) return choices.includes( value ) ? value : fallback;
     if ( typeof fallback !== "number" ) return value;
@@ -293,6 +306,16 @@ const Settings = {
   minLength() { return this.values.min_length; },
   // Screen pixels, whatever the zoom.
   lineWidth() { return this.values.line_width; },
+  // A colour setting as rgba() with the given opacity (1 if left out).
+  rgba( field , alpha ) {
+    const hex = this.values[ field ];
+    const rgb = [ 1 , 3 , 5 ].map( ( i ) => parseInt( hex.slice( i , i + 2 ) , 16 ) );
+    return "rgba(" + rgb.join( ", " ) + ", " + ( alpha === undefined ? 1 : alpha ) + ")";
+  },
+  // Accepted traces and their numbers.
+  traceColor( alpha ) { return this.rgba( "trace_color" , alpha ); },
+  // The trace just made, before it is accepted.
+  liveTraceColor( alpha ) { return this.rgba( "live_trace_color" , alpha ); },
   // Auto mode (ais_auto.js): each | end | all, classic | fitted | fitted2 | learned,
   // classic's soma | both | brighter | dimmer and filters (µm, % of the
   // image's bright level, µm, and µm from a soma on a .czi; 0 is off),

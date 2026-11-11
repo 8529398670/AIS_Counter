@@ -959,7 +959,7 @@ const AisMeasure = {
     // The traces as the image draws them: saved AIS green, the one measured amber.
     if ( this.options.loupe_traces ) {
       const entry = Ais.images[ Ais.index ];
-      if ( entry ) Ais.savedRows( entry ).forEach( ( r ) => { if ( r !== this.row ) Ais.polyline( r.pixels , "rgba(60, 220, 120, 0.9)" , 1.5 / k , ctx ); } );
+      if ( entry ) Ais.savedRows( entry ).forEach( ( r ) => { if ( r !== this.row ) Ais.polyline( r.pixels , Settings.traceColor( 0.9 ) , 1.5 / k , ctx ); } );
       if ( this.row ) Ais.polyline( this.row.pixels , "rgba(255, 190, 0, 1)" , 2.5 / k , ctx );
     }
     this.shapes().forEach( ( shape ) => this.paint( ctx , shape , 1.5 / k , k ) );

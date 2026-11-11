@@ -270,8 +270,10 @@ the start of an AIS gives the original's trace and length. **Enter** accepts,
   under the lock, fits the image (and becomes the locked view when locked).
 - **Settings.** *Minimum AIS length* (µm, 0 = off) skips a trace that comes
   out shorter: it is shown with a note but cannot be accepted. *Trace line
-  thickness* sets how thick traces and markers are drawn, on screen and in the
-  exported PNGs. Both are kept in this browser.
+  thickness* sets how thick traces and markers are drawn, and *Accepted trace
+  colour* the colour of accepted traces and their numbers, on screen and in the
+  exported PNGs. *Current trace colour* is the trace you have just made, before
+  it is accepted (on screen only). All are kept in this browser.
 - **About.** What each overlay colour is, the numbers and keys, the MATLAB
   requirements, and the full [ais_auto.m report](docs/ais_auto_report.md)
   rendered in the app (`/api/about/report`).

@@ -684,13 +684,13 @@ const AisExport = {
     const unit = Math.max( 1 , Math.max( canvas.width , canvas.height ) / 700 );
     ctx.font = "bold " + Math.round( 12 * unit ) + "px sans-serif";
     rows.forEach( ( row ) => {
-      Ais.polyline( row.pixels , "rgba(60, 220, 120, 0.95)" , Settings.lineWidth() * unit , ctx );
+      Ais.polyline( row.pixels , Settings.traceColor( 0.95 ) , Settings.lineWidth() * unit , ctx );
       const p = row.pixels && row.pixels[ 0 ];
       if ( p ) {
         ctx.lineWidth = 3 * unit;
         ctx.strokeStyle = "rgba(0, 0, 0, 0.8)";
         ctx.strokeText( String( row.n ) , p[ 0 ] + 3 * unit , p[ 1 ] - 3 * unit );
-        ctx.fillStyle = "rgba(60, 220, 120, 1)";
+        ctx.fillStyle = Settings.traceColor();
         ctx.fillText( String( row.n ) , p[ 0 ] + 3 * unit , p[ 1 ] - 3 * unit );
       }
     } );

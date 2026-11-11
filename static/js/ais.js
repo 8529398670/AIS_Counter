@@ -2582,11 +2582,11 @@ const Ais = {
     const entry = this.images[ this.index ];
     if ( entry && this.layer( "saved" ) ) {
       this.savedRows( entry ).forEach( ( row ) => {
-        this.polyline( row.pixels , "rgba(60, 220, 120, 0.9)" , lw );
+        this.polyline( row.pixels , Settings.traceColor( 0.9 ) , lw );
         this.drawAtSlice( row.pixels , row.z_path , lw * 2.5 );
         const p = row.pixels[ 0 ];
         if ( p ) {
-          ctx.fillStyle = "rgba(60, 220, 120, 1)";
+          ctx.fillStyle = Settings.traceColor();
           ctx.font = ( 12 / s ) + "px sans-serif";
           ctx.fillText( String( row.n ) , p[ 0 ] + 3 / s , p[ 1 ] - 3 / s );
         }
@@ -2613,7 +2613,7 @@ const Ais = {
     if ( r ) {
       if ( r.component && this.layer( "component" ) ) this.dots( r.component.edge , "rgba(0, 200, 255, 0.55)" );
       if ( r.skeleton && this.layer( "skeleton" ) ) this.dots( r.skeleton , "rgba(255, 40, 40, 0.95)" );
-      if ( r.pixels && this.layer( "trace" ) ) this.polyline( r.pixels , "rgba(40, 110, 255, 1)" , lw );
+      if ( r.pixels && this.layer( "trace" ) ) this.polyline( r.pixels , Settings.liveTraceColor() , lw );
       if ( r.spline && this.layer( "spline" ) ) this.polyline( r.spline , "rgba(255, 225, 0, 1)" , lw );
       if ( r.pixels && r.z ) this.drawAtSlice( r.pixels , r.z.z_path , lw * 2.5 );
       if ( r.start ) this.cross( r.start , "rgba(255, 255, 255, 1)" , ( 4 + Settings.lineWidth() ) / s , lw );
