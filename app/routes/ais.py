@@ -120,8 +120,9 @@ async def channels(request: Request) -> Response:
 
 
 async def somata(request: Request) -> Response:
-    """A .czi's soma outlines (soma.py), each its edge pixels as 1-based [x, y],
-    for the Soma button; [] for a TIFF."""
+    """An image's soma outlines (soma.py), each its edge pixels as 1-based
+    [x, y], for the Soma button: from its soma channel, else whichever channel
+    shows cell bodies; [] when none does (and for a Z-stack)."""
     try:
         found = await run(_library(request).soma, request.path_params["sha"])
     except ImageError as exc:

@@ -331,11 +331,11 @@ const AisMeasure = {
     Ais.draw();
   },
 
-  // On a .czi with the hint on, load its somata (once) and put an unplaced
-  // B on the nearest.
+  // With the hint on, load the image's somata (once; from whichever channel
+  // shows cell bodies) and put an unplaced B on the nearest.
   hint() {
     const entry = Ais.images[ Ais.index ];
-    if ( !this.on || !this.options.soma_hint || !entry || ( Ais.kind( entry ) !== "czi" && !AisAuto.hasSoma( entry ) ) ) return;
+    if ( !this.on || !this.options.soma_hint || !entry || !AisAuto.hasSoma( entry ) ) return;
     const index = Ais.index;
     Ais.loadSomata( entry , index ).then( () => {
       if ( Ais.index !== index || !this.row || !this.a || this.b ) return;

@@ -87,3 +87,63 @@ def test_a_dendrite_trunk_is_not_a_soma_of_its_own():
     found = soma.find(img.astype(np.uint16), PX)
     assert len(found.outlines) == 1
     assert len(found.bodies(True).hotspots) == 1
+
+
+def lines(seed=0):
+    """AIS-like thin bright lines on a dim, slightly noisy background: no cell bodies."""
+    H, W = 500, 700
+    rng = np.random.default_rng(seed)
+    img = np.full((H, W), 800.0)
+    for k in range(20, W, 45):
+        img[100:400, k:k + 6] += 1500
+    return (img + rng.normal(0, 30, (H, W))).astype(np.uint16)
+
+
+def noise(seed=1):
+    return (1000 + np.random.default_rng(seed).normal(0, 100, (500, 700))).astype(np.uint16)
+
+
+def test_cell_bodies_score_and_lines_noise_and_flat_do_not():
+    img, _ = amca()
+    assert soma.quality(soma.find(img, PX), img, PX) > 0
+    for plane in (lines(), noise(), np.full((500, 700), 1000, np.uint16)):
+        assert soma.quality(soma.find(plane, PX), plane, PX) == 0
+
+
+def test_an_ais_thick_end_is_not_a_cell_body():
+    """A lone tapered AIS (as tests/test_pairing.tapered) shows no somata."""
+    H, W = 200, 300
+    yy, xx = np.mgrid[1:H + 1, 1:W + 1].astype(np.float64)
+    frac = np.clip((xx - 50) / 150, 0, 1)
+    sigma = 4.0 - 2.5 * frac
+    img = (100 + 1000 * ((xx >= 50) & (xx <= 200)) * np.exp(-((yy - 100) ** 2) / (2 * sigma ** 2))).astype(np.uint16)
+    assert soma.best([img], PX, ais=0) is None
+
+
+def test_best_takes_the_channel_that_shows_cell_bodies():
+    img, centres = amca()
+    index, found = soma.best([lines(), noise(), img], PX, ais=0)
+    assert index == 2 and all(found.mask[r, c] for r, c in centres)
+    assert soma.best([lines(), noise()], PX, ais=0) is None
+
+
+def test_a_soma_channel_that_shows_too_little_gives_way_to_another():
+    img, centres = amca()
+    assert soma.best([lines(), img, noise()], PX, ais=0, first=1)[0] == 1       # it shows them: kept
+    index, found = soma.best([lines(), noise(), img], PX, ais=0, first=1)       # it does not: the next
+    assert index == 2 and all(found.mask[r, c] for r, c in centres)
+    assert soma.best([lines(), noise()], PX, ais=0, first=1)[0] == 1          # none does: still the chosen
+
+
+def test_best_takes_the_ais_channel_only_when_no_other_shows_any():
+    img, _ = amca()
+    assert soma.best([img, img.copy()], PX, ais=0)[0] == 1
+    assert soma.best([img, noise()], PX, ais=0)[0] == 0
+
+
+def test_a_dim_noisy_channel_is_not_taken_for_somata():
+    """Smoothed noise can make a few blobs stand out against its own small
+    range; none stands out against the pixel noise."""
+    for seed in range(3):
+        plane = np.random.default_rng(seed).normal(300, 20, (1040, 1388)).clip(0).astype(np.uint16)
+        assert soma.quality(soma.find(plane, PX), plane, PX) == 0

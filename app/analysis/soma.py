@@ -25,6 +25,16 @@ local hotspot at least HOTSPOT_SEP_UM from a brighter one and share the
 outline out among them (each pixel climbing the smoothed image to its peak); a piece under
 MIN_PIECE_UM2, or longer than MAX_ASPECT times its width (a thick
 dendrite's trunk), gives its hotspot up. "Whole" bodies are one per outline.
+
+Any channel may show somata, not only a soma stain (best): the soma stain
+is tried first, and when it shows too little the others are, too. each channel's
+outlines are judged (quality) by how many look like a cell body -- MIN_AREA_UM2
+to MAX_AREA_UM2, at least MIN_WIDTH_UM wide (an AIS's thick end is not), no
+longer than MAX_ASPECT times their width, and brighter than
+a RING_UM ring around them by MIN_CONTRAST of the channel's range and by
+MIN_SNR times its pixel noise -- and the
+channel with the most convincing ones is used. A channel where most outlines
+are not cell-body-like (noise, texture, AIS segments) shows none.
 """
 from __future__ import annotations
 
@@ -45,6 +55,11 @@ HOTSPOT_UM = 2.5       # smoothing for hotspots: a MAP2 ring or a nucleolus blur
 HOTSPOT_SEP_UM = 8.0   # split: hotspots nearer than this are one cell (a soma is 10-20 um across)
 MIN_PIECE_UM2 = 40.0   # split: a smaller piece is not a cell of its own (as MIN_AREA_UM2)
 MAX_ASPECT = 3.0       # split: a piece longer than this times its width is a dendrite trunk (somata here: 1.5-2)
+MAX_AREA_UM2 = 1200.0  # quality: larger is not one cell body, nor a few run together
+MIN_WIDTH_UM = 6.0     # quality: narrower is not a cell body (an AIS is 1-2 um wide)
+RING_UM = 3.0          # quality: the ring around an outline its contrast is judged against
+MIN_CONTRAST = 0.08    # quality: inside minus ring, as a fraction of the channel's 1-99.9 percentile range
+MIN_SNR = 1.0          # quality: ... and at least this times the pixel noise (real somata: 2-10; plain noise: 0.1)
 
 
 @dataclass
@@ -190,6 +205,15 @@ def _keep_pieces(region: np.ndarray, local: np.ndarray, seeds: list[tuple[int, i
     return seeds
 
 
+def _width(piece: np.ndarray) -> float:
+    """A piece's width in pixels: that of the ellipse with its spread."""
+    rows, cols = np.nonzero(piece)
+    if len(rows) < 3:
+        return 0.0
+    D = np.stack([rows - rows.mean(), cols - cols.mean()], axis=1)
+    return 4.0 * math.sqrt(max(float(np.linalg.eigvalsh(D.T @ D / len(D))[0]), 0.0))
+
+
 def _long(piece: np.ndarray) -> bool:
     """Longer than MAX_ASPECT times its width: a dendrite's trunk."""
     rows, cols = np.nonzero(piece)
@@ -198,3 +222,72 @@ def _long(piece: np.ndarray) -> bool:
     D = np.stack([rows - rows.mean(), cols - cols.mean()], axis=1)
     small, large = np.linalg.eigvalsh(D.T @ D / len(D))
     return bool(large > MAX_ASPECT ** 2 * max(small, 1e-9))
+
+
+def quality(found: Somata, plane: np.ndarray, pixel_um: float) -> float:
+    """How surely found (find(plane, pixel_um)) shows cell bodies: the number
+    of soma-like outlines times their median contrast; 0 when there are none,
+    or when they are fewer than the outlines that are not."""
+    if found.whole is None or not found.outlines:
+        return 0.0
+    step = found.whole.step
+    um = pixel_um * step
+    small = ndi.gaussian_filter(plane.astype(np.float64), SMOOTH_PX)[::step, ::step]
+    labels = found.whole.labels
+    lo, hi = np.percentile(small, (1, 99.9))
+    span = max(float(hi - lo), 1e-9)
+    detail = plane.astype(np.float64) - ndi.gaussian_filter(plane.astype(np.float64), 1.0)
+    noise = max(1.4826 * float(np.median(np.abs(detail - np.median(detail)))), 1e-9)   # the pixel noise (robust sd)
+    ring = _disk(RING_UM / um)
+    r = ring.shape[0] // 2 + 1
+    good: list[float] = []
+    count = 0
+    for k, box in enumerate(ndi.find_objects(labels), 1):
+        if box is None:
+            continue
+        count += 1
+        big = tuple(slice(max(0, b.start - r), b.stop + r) for b in box)
+        region = labels[big] == k
+        area = np.count_nonzero(region) * um * um
+        if not MIN_AREA_UM2 <= area <= MAX_AREA_UM2 or _long(region) or _width(region) * um < MIN_WIDTH_UM:
+            continue
+        around = ndi.binary_dilation(region, structure=ring) & (labels[big] == 0)
+        if not around.any():
+            continue
+        step_up = float(np.median(small[big][region]) - np.median(small[big][around]))
+        contrast = step_up / span
+        if contrast >= MIN_CONTRAST and step_up >= MIN_SNR * noise:
+            good.append(float(contrast))
+    if not good or 2 * len(good) < count:
+        return 0.0
+    return len(good) * float(np.median(good))
+
+
+def best(planes: list[np.ndarray], pixel_um: float, ais: int | None = None,
+         first: int | None = None) -> tuple[int, Somata] | None:
+    """The channel of planes that shows somata most surely, with its somata:
+    first (the soma channel chosen or named) when it shows them well enough
+    (quality > 0), else the best other one; the AIS channel (ais) only when
+    no other shows any; first's own, however few, when none does. None when
+    there is no first and no channel shows any."""
+    chosen = None
+    if first is not None and 0 <= first < len(planes):
+        chosen = first, find(planes[first], pixel_um)
+        if quality(chosen[1], planes[first], pixel_um) > 0:
+            return chosen
+    scored: list[tuple[float, int, Somata]] = []
+    for i, plane in enumerate(planes):
+        if i in (ais, first):
+            continue
+        found = find(plane, pixel_um)
+        score = quality(found, plane, pixel_um)
+        if score > 0:
+            scored.append((score, -i, found))
+    if scored:
+        _, i, found = max(scored, key=lambda t: (t[0], t[1]))
+        return -i, found
+    if ais is not None and ais != first and 0 <= ais < len(planes):
+        found = find(planes[ais], pixel_um)
+        if quality(found, planes[ais], pixel_um) > 0:
+            return ais, found
+    return chosen

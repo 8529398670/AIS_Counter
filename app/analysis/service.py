@@ -17,7 +17,8 @@ A .czi is one whole cell (CZI mode): its AIS channel (Czi.ais_name, usually
 <cell>_ORG.tif), traced on a processed version of it (preprocess.py, a port
 of the "Processed method 2.5" Fiji macro) and profiled from the raw, like a
 TIFF pair; its soma channel (Czi.soma_name, usually "AMCA") gives the somata
-auto mode starts from (soma.py), if it has one.
+auto mode starts from (soma.py). Without one, whichever channel shows cell
+bodies does (soma.best), if any.
 
 A Z-stack (zstack.py) is many stored slices under one sha that isn't a file. It
 behaves like a .czi with no soma channel: the max projection of its AIS plane is
@@ -27,7 +28,8 @@ holds it (`stacks`); the copy kept beside the files is only a cache.
 
 A view (channels.py) is a stored file read with other channels than the app
 would pick: its AIS channel is the image, its soma channel (if any) gives the
-somata. Its sha isn't a file either; it is found the same way as a stack's,
+somata. A TIFF, like a .czi, otherwise takes them from whichever of its planes
+shows cell bodies. Its sha isn't a file either; it is found the same way as a stack's,
 and stands for its file wherever the file itself is wanted (file_path).
 """
 from __future__ import annotations
@@ -71,6 +73,7 @@ STACK_CACHE_SIZE = 2    # a whole stack each: the container has 256 MB
 CHANNEL_PERCENTILES = (0.1, 99.9)
 SINGLE_NOTE = "single image: traced and profiled from the same file (the original profiles the raw <cell>.tif)"
 UNLIFTED_NOTE = "could not follow this trace through the slices: no 3D length"
+NO_SOMA_NOTE = "no channel shows cell bodies: started from both ends instead of the soma"
 
 
 class Library:
@@ -322,35 +325,61 @@ class Library:
         return prep
 
     def soma(self, sha: str) -> somata.Somata | None:
-        """A CZI's somata (soma.py), kept per image, from its soma channel: the
-        one a view names, else Czi.soma_name. A TIFF has some only through a
-        view that names a soma plane. None when there is no soma channel."""
-        view = self._view(sha)
-        if not self.is_czi(sha) and (view is None or view["soma"] is None):
+        """An image's somata (soma.py), kept per image: from the soma channel
+        a view names, else a .czi's soma stain (Czi.soma_name), when it shows
+        cell bodies well enough; else from whichever channel shows them best
+        (soma.best; the AIS channel only when no other does). None when none
+        does, and always for a Z-stack."""
+        if self.is_stack(sha):
             return None
         with self._lock:
             if sha in self._somata:
                 self._somata.move_to_end(sha)
                 return self._somata[sha]
+        view = self._view(sha)
         data = self.file_path(sha).read_bytes()
         if is_czi(data):
             image = read_czi(data)
             names = list(image.channels)
+            planes = [image.channels[n] for n in names]
             index = view["soma"] if view else views.soma_index(names)
-            if index is not None and not 0 <= index < len(names):
-                raise ImageError("the .czi file has no such channel")
-            plane, pixel_um = (None if index is None else image.channels[names[index]]), image.pixel_um
+            ais = view["ais"] if view else views.ais_index(names)
+            pixel_um = image.pixel_um or aa.DEFAULT.pixconv
+            missing = "the .czi file has no such channel"
         else:
-            planes = read_planes(data)
-            if view["soma"] >= planes.shape[2]:
-                raise ImageError("the TIFF has no such channel")
-            plane, pixel_um = planes[:, :, view["soma"]], None
-        found = somata.find(plane, pixel_um or aa.DEFAULT.pixconv) if plane is not None else None
+            stacked = read_planes(data)
+            planes = [stacked[:, :, i] for i in range(stacked.shape[2])]
+            index = view["soma"] if view else None
+            ais = view["ais"] if view else 0
+            pixel_um = aa.DEFAULT.pixconv
+            missing = "the TIFF has no such channel"
+        if index is not None and not 0 <= index < len(planes):
+            raise ImageError(missing)
+        picked = somata.best(planes, pixel_um, ais, first=index)
+        found = picked[1] if picked else None
         with self._lock:
             self._somata[sha] = found
             while len(self._somata) > CACHE_SIZE:
                 self._somata.popitem(last=False)
         return found
+
+    def _soma_for(self, sha: str, start: str) -> tuple[somata.Somata | None, str]:
+        """The somata detect starts from, and the start to use: "soma" falls
+        back to "both" (with NO_SOMA_NOTE) when no channel shows cell bodies.
+        A Z-stack has none to find, so it is told so."""
+        found = self.soma(sha)
+        if start == "soma" and found is None:
+            if self.is_stack(sha):
+                raise ImageError("start \"soma\" needs a .czi or TIFF whose channels show cell bodies; a Z-stack has none")
+            return None, "both"
+        return found, start
+
+    @staticmethod
+    def _noted(out: dict[str, Any], start: str, used: str) -> dict[str, Any]:
+        if start == "soma" and used != "soma":
+            for candidate in out.get("candidates", []):
+                candidate.setdefault("notes", []).insert(0, NO_SOMA_NOTE)
+        return out
 
     def pair(self, sha: str, traces: list[list[list[int]]], pixel_um: float, split: bool = True,
              shape: pairing.SomaShape | None = None,
@@ -488,23 +517,20 @@ class Library:
             out["candidates"] = [self._lifted(processed, c, z_method) for c in out["candidates"]]
             return out
         if not raw and self.is_czi(processed):
-            soma = self.soma(processed)
-            if start == "soma" and soma is None:
-                raise ImageError("start \"soma\" needs a soma channel (AMCA, DAPI or Hoechst), and this .czi has none")
-            return auto.detect(prep, self.array(processed), threshold, settings, start, exclude, soma=soma)
-        # A TIFF has somata only through a view naming its soma plane.
-        soma = self.soma(raw or processed)
-        if start == "soma" and soma is None:
-            raise ImageError("start \"soma\" needs a .czi image (its AMCA channel) or a soma channel chosen")
+            soma, used = self._soma_for(processed, start)
+            out = auto.detect(prep, self.array(processed), threshold, settings, used, exclude, soma=soma)
+            return self._noted(out, start, used)
+        # A TIFF's somata: from its soma channel, else whichever plane shows them.
+        soma, used = self._soma_for(raw or processed, start)
         if not raw:
-            out = auto.detect(prep, prep.pic, threshold, settings, start, exclude, soma=soma)
+            out = auto.detect(prep, prep.pic, threshold, settings, used, exclude, soma=soma)
             for candidate in out["candidates"]:
                 candidate.setdefault("notes", []).insert(0, SINGLE_NOTE)
-            return out
+            return self._noted(out, start, used)
         raw_arr = self.array(raw)
         if raw_arr.shape[:2] != prep.pic.shape:
             raise ImageError("raw and processed images differ in size")
-        return auto.detect(prep, raw_arr, threshold, settings, start, exclude, soma=soma)
+        return self._noted(auto.detect(prep, raw_arr, threshold, settings, used, exclude, soma=soma), start, used)
 
     def trace_fast(self, processed: str, raw: str | None,
                    click: tuple[float, float], click2: tuple[float, float] | None,
@@ -536,23 +562,20 @@ class Library:
             out["candidates"] = [self._lifted(processed, c, z_method) for c in out["candidates"]]
             return out
         if not raw and self.is_czi(processed):
-            soma = self.soma(processed)
-            if start == "soma" and soma is None:
-                raise ImageError("start \"soma\" needs a soma channel (AMCA, DAPI or Hoechst), and this .czi has none")
-            return fast.detect(prep, self.array(processed), threshold, settings, start, exclude, soma=soma)
-        # A TIFF has somata only through a view naming its soma plane.
-        soma = self.soma(raw or processed)
-        if start == "soma" and soma is None:
-            raise ImageError("start \"soma\" needs a .czi image (its AMCA channel) or a soma channel chosen")
+            soma, used = self._soma_for(processed, start)
+            out = fast.detect(prep, self.array(processed), threshold, settings, used, exclude, soma=soma)
+            return self._noted(out, start, used)
+        # A TIFF's somata: from its soma channel, else whichever plane shows them.
+        soma, used = self._soma_for(raw or processed, start)
         if not raw:
-            out = fast.detect(prep, prep.pic, threshold, settings, start, exclude, soma=soma)
+            out = fast.detect(prep, prep.pic, threshold, settings, used, exclude, soma=soma)
             for candidate in out["candidates"]:
                 candidate.setdefault("notes", []).insert(0, SINGLE_NOTE)
-            return out
+            return self._noted(out, start, used)
         raw_arr = self.array(raw)
         if raw_arr.shape[:2] != prep.pic.shape:
             raise ImageError("raw and processed images differ in size")
-        return fast.detect(prep, raw_arr, threshold, settings, start, exclude, soma=soma)
+        return self._noted(fast.detect(prep, raw_arr, threshold, settings, used, exclude, soma=soma), start, used)
 
 
 def _read(data: bytes, plane: int | None = None) -> np.ndarray:

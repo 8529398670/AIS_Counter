@@ -162,17 +162,25 @@ def test_a_czi_is_traced_on_its_processed_ais_channel_and_finds_somata(tmp_path)
     assert library.matlab_pair(tiff, None) == (_tiff(synthetic()[0]), None)
     assert not library.is_czi(tiff) and library.soma(tiff) is None
     assert library.channels(tiff) == []
-    with pytest.raises(ImageError, match="czi"):
-        library.detect(tiff, None, 0.01, start="soma")
+    # No channel shows cell bodies: the Soma start falls back to both ends, and says so.
+    from app.analysis.service import NO_SOMA_NOTE
+
+    for run in (library.detect, library.detect_fast):
+        fell = run(tiff, None, 0.01, aa.DEFAULT, "soma")["candidates"]
+        assert fell and all(NO_SOMA_NOTE in c["notes"] for c in fell)
 
     # Another staining: the AIS in 594 is traced, and with no soma stain
-    # there are no somata, so only the Soma start is refused.
+    # and nothing else showing cell bodies there are no somata.
     other = library.add(write_czi({"Alexa Fluor 594": ais_channel}))["sha256"]
     assert np.array_equal(library.array(other), ais_channel * 16)
     assert library.soma(other) is None
     assert library.detect(other, None, 0.01)["candidates"]
-    with pytest.raises(ImageError, match="soma channel"):
-        library.detect(other, None, 0.01, start="soma")
+    assert library.detect(other, None, 0.01, start="soma")["candidates"]
+
+    # A cell-body stain by any name is found: the somata come from it.
+    named = library.add(write_czi({"Alexa Fluor 488": ais_channel, "Cy5": amca}))["sha256"]
+    assert library.soma(named).mask[100, 30]
+    assert all(NO_SOMA_NOTE not in c.get("notes", []) for c in library.detect(named, None, 0.01, start="soma")["candidates"])
 
     # Only a file the server does not have is NotStored (the page calls it
     # "not uploaded"); one it has but cannot read is a plain ImageError.

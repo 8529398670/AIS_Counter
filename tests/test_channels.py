@@ -162,7 +162,9 @@ def test_a_tiff_with_a_soma_channel_may_start_from_somata(store, library):
     image = batch["images"][0]
     assert ap.has_soma(image)
     assert ap.start_for("raw only", "soma", ap.has_soma(image)) == "soma"
-    assert ap.start_for("raw only", "soma") == "both"
+    assert ap.start_for("raw only", "soma") == "soma"           # any channel may show somata
+    assert ap.start_for("stack", "soma") == "both"              # a Z-stack never has any
+    assert not ap.has_soma({"files": {"stack": {"slices": []}}})
     assert library.soma(ais.traced_sha(image, "raw")) is not None
 
 

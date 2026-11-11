@@ -1,6 +1,9 @@
 """Channel roles: which colour channel of an image is the AIS, which the
 soma/dendrite stain, and what the others are called.
 
+A soma channel is a choice, not a requirement: without one, somata come from
+whichever channel shows cell bodies (soma.best).
+
 The person adding images says this per channel layout (the channels a file
 has, by name), and each image keeps it as `image["channels"]`:
 

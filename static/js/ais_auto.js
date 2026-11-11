@@ -361,17 +361,16 @@ const AisAuto = {
     return run.pending.get( index );
   },
 
-  // "soma" needs a .czi's somata, or a TIFF's soma channel (chosen with
-  // its channel roles): any other TIFF is traced from both ends instead.
+  // "soma" on a Z-stack (no somata) is traced from both ends instead; any
+  // other image's somata come from whichever channel shows cell bodies, and
+  // the server starts from both ends itself when none does.
   startFor( entry , start ) {
-    return start === "soma" && Ais.kind( entry ) !== "czi" && !this.hasSoma( entry ) ? "both" : start;
+    return start === "soma" && !this.hasSoma( entry ) ? "both" : start;
   },
 
-  // As app/analysis/auto_params.has_soma.
+  // As app/analysis/auto_params.has_soma: any image but a Z-stack may have somata.
   hasSoma( entry ) {
-    const chosen = entry.channels;
-    return Boolean( chosen && ( chosen.role === "raw" || chosen.role === "processed" )
-      && chosen.roles.some( ( r ) => r.role === "soma" ) );
+    return Ais.kind( entry ) !== "stack";
   },
 
   // Settings > Auto mode's filters: long, bright and wide enough, and (a

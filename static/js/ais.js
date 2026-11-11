@@ -1296,7 +1296,8 @@ const Ais = {
         slice: true , src: "/api/ais/files/" + this.sha( entry ) + "/slice/" + i + ".png" } ) );
     }
     if ( this.index !== index ) return;
-    if ( this.showSomata ) this.loadSomata( entry , index );
+    // Always: the Soma button shows only when a channel shows cell bodies.
+    this.loadSomata( entry , index );
     this.views = { list: list , on: new Set( list.filter( ( v ) => this.viewWanted.includes( v.name ) ).map( ( v ) => v.key ) ) };
     const slider = Dom.get( "ais-z-slider" );
     slider.max = list.filter( ( v ) => v.slice ).length;
@@ -1403,7 +1404,7 @@ const Ais = {
   },
 
   async loadSomata( entry , index ) {
-    if ( this.somata || ( this.kind( entry ) !== "czi" && !AisAuto.hasSoma( entry ) ) ) return;
+    if ( this.somata || !AisAuto.hasSoma( entry ) ) return;
     let found = [];
     try {
       found = ( await Api.request( "/api/ais/files/" + this.sha( entry ) + "/somata" ) ).somata;
@@ -1412,6 +1413,7 @@ const Ais = {
     }
     if ( this.index !== index ) return;
     this.somata = found;
+    this.renderViews();
     this.draw();
   },
 
@@ -1432,12 +1434,13 @@ const Ais = {
     const bar = Dom.get( "ais-channels" );
     bar.classList.toggle( "is-open" , this.viewsOpen );
     const list = this.views ? this.views.list.filter( ( v ) => !v.slice ) : [];
-    Dom.show( bar , list.length > 0 );
-    if ( !list.length ) {
+    const hasSomata = Boolean( this.somata && this.somata.length );
+    Dom.show( bar , list.length > 0 || hasSomata );
+    if ( !list.length && !hasSomata ) {
       Dom.clear( bar );
       return;
     }
-    const on = this.views.on;
+    const on = this.views ? this.views.on : new Set();
     const button = ( key , pressed , title , children ) => Dom.el( "button" , {
       class: "btn btn-dark" + ( pressed ? " active" : "" ),
       attrs: { type: "button" , "data-view": key , "aria-pressed": String( pressed ) , title: title },
@@ -1455,7 +1458,8 @@ const Ais = {
         [ Dom.el( "i" , { class: "bi bi-image me-1" , attrs: { "aria-hidden": "true" } } ) , Dom.el( "span" , { text: I18n.get( "ais.view_processed" ) } ) ] ),
       ...list.map( ( v ) => button( v.key , on.has( v.key ) , v.name , [ dot( v.color ) , Dom.el( "span" , { text: v.label } ) ] ) ),
     ];
-    if ( this.kind( this.images[ this.index ] ) === "czi" || AisAuto.hasSoma( this.images[ this.index ] ) ) {
+    // Only when the server found somata in one of the channels (soma.best).
+    if ( hasSomata ) {
       const soma = button( "soma" , this.showSomata , I18n.get( "ais.view_soma_help" ) ,
         [ dot( SOMA_COLOUR ) , Dom.el( "span" , { text: I18n.get( "ais.view_soma" ) } ) ] );
       soma.classList.add( "ais-view-soma" );

@@ -218,16 +218,16 @@ def kind(files: dict[str, Any]) -> str:
 
 
 def has_soma(image: dict[str, Any]) -> bool:
-    """AisAuto.hasSoma: a TIFF has somata only when a soma channel was chosen
-    for it (app/analysis/channels.py)."""
-    chosen = image.get("channels") or {}
-    return chosen.get("role") in ("raw", "processed") and any(r["role"] == "soma" for r in chosen.get("roles", []))
+    """AisAuto.hasSoma: whether the image may have somata -- any but a
+    Z-stack, as any channel showing cell bodies gives them (soma.best); the
+    server starts from both ends when none does."""
+    return not (image.get("files") or {}).get("stack")
 
 
-def start_for(image_kind: str, start: str, soma: bool = False) -> str:
-    """AisAuto.startFor: "soma" needs a .czi's somata, or a TIFF's soma
-    channel (soma: has_soma)."""
-    return "both" if start == "soma" and image_kind != "czi" and not soma else start
+def start_for(image_kind: str, start: str, soma: bool = True) -> str:
+    """AisAuto.startFor: "soma" on an image that can have no somata (a
+    Z-stack; soma: has_soma) is "both"."""
+    return "both" if start == "soma" and (image_kind == "stack" or not soma) else start
 
 
 def _js_round(x: float) -> float:
