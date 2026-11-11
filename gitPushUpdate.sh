@@ -4,9 +4,9 @@ ssh-add -D
 git init
 git config --global --unset user.name
 git config --global --unset user.email
-git config user.name "8529398670"
-git config user.email "banjo.kazooie.2955@gmail.com"
-ssh-add -k /Users/collincerbus/.ssh/github-wsu-m1
+git config user.name "daringfawn"
+git config user.email "chisholm.8@wright.edu"
+ssh-add -k /Users/ac/.ssh/github-daringfawn
 
 LastCommit=$(git log -1 --pretty="%B" | xargs)
 # https://stackoverflow.com/a/3626205
@@ -27,6 +27,6 @@ else
     git commit -m "$NextCommitNumber"
     git tag v1.0.$NextCommitNumber
 fi
-git remote add origin git@github-8529398670:8529398670/AIS_Counter.git
+git remote add origin git@github-wsu/AIS_Counter.git
 git push origin --tags
 git push -u origin HEAD
