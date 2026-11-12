@@ -37,11 +37,11 @@ MEASURE_COLS = ("batch_name", "batch_id", "image", "n", "type", "label", "length
                 "b_x", "b_y", "pixconv", "created_at", "edited_at")
 SUMMARY_COLS = ("batch", "batch_id", "opened_by", "created", "archived", "images", "completed", "duplicates", "ais",
                 "mean_um", "median_um", "sd_um", "min_um", "max_um", "ais_per_image")
-IMAGE_COLS = ("batch", "image", "state", "ais", "mean_um", "median_um", "assignee")
+IMAGE_COLS = ("batch", "image", "state", "ais", "assignee")
 ASSIGNEE_COLS = ("batch", "person", "images", "completed", "percent", "ais", "last_activity")
-TYPE_COLS = ("batch", "image", "type", "count", "mean_type_um", "median_type_um", "sd_type_um")
+TYPE_COLS = ("batch", "type", "count", "mean_type_um", "median_type_um", "sd_type_um")
 # compare.js imageSheets, pooledSheet, statsSheet and sheets.
-NAMES_COLS = ("batch", "image", "original", "treatment", "ais", "mean_length", "soma", "mean_soma")
+NAMES_COLS = ("batch", "image", "original", "treatment", "ais", "soma")
 GROUP_COLS = ("batch", "treatment", "measure", "n", "mean", "median", "sd", "sem")
 CULTURE_COLS = ("batch", "treatment", "measure", "n", "mean", "sd", "sem")
 POOLED_COLS = ("treatment", "measure", "n", "mean", "sd", "sem", "cultures", "culture_mean", "culture_sd",
@@ -112,16 +112,10 @@ def sheets(items: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
                         "ais": len(rows), "mean_um": s["mean"], "median_um": s["median"], "sd_um": s["sd"],
                         "min_um": s["min"], "max_um": s["max"],
                         "ais_per_image": ap._js_round(1000 * len(rows) / completed) / 1000 if completed else None})
-    image_rows = []
-    for item in items:
-        by_image: dict[str, list[Any]] = {}
-        for r in item["rows"]:
-            by_image.setdefault(r["image"], []).append(r.get("length_um"))
-        for image in item.get("images") or []:
-            s = stats(by_image.get(image["key"], []))
-            image_rows.append({"batch": item["batch"]["name"], "image": image["key"], "state": image_state(image),
-                               "ais": image["ais"], "mean_um": s["mean"], "median_um": s["median"],
-                               "assignee": image.get("assignee_name") or ""})
+    # No means per image: AIS are averaged per batch (and per treatment, compare.py).
+    image_rows = [{"batch": item["batch"]["name"], "image": image["key"], "state": image_state(image),
+                   "ais": image["ais"], "assignee": image.get("assignee_name") or ""}
+                  for item in items for image in item.get("images") or []]
     assignees = [{"batch": item["batch"]["name"], "person": a.get("name") or "", "images": a.get("images"),
                   "completed": a.get("completed"), "percent": ap._js_round(a["percent"]) if a.get("percent") is not None
                   else None, "ais": a.get("ais"), "last_activity": a.get("last_at") or ""}
@@ -139,19 +133,20 @@ def sheets(items: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
 
 
 def type_rows(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """AisExport.typeRows: the recorded lines per batch, image and type."""
-    groups: dict[tuple[Any, str, str | None], dict[str, Any]] = {}
+    """AisExport.typeRows: the recorded lines per batch and type, every line
+    alike (no means per image)."""
+    groups: dict[tuple[Any, str | None], dict[str, Any]] = {}
     for item in items:
         b = item["batch"]
         for line in item.get("measurements") or []:
             kind = line.get("type") or None
-            key = (b["id"], line["image"], kind)
-            groups.setdefault(key, {"batch": b["name"], "image": line["image"], "type": kind, "lengths": []})
+            key = (b["id"], kind)
+            groups.setdefault(key, {"batch": b["name"], "type": kind, "lengths": []})
             groups[key]["lengths"].append(line.get("length_um"))
     out = []
     for g in groups.values():
         s = stats(g["lengths"])
-        out.append({"batch": g["batch"], "image": g["image"], "type": g["type"], "count": s["n"],
+        out.append({"batch": g["batch"], "type": g["type"], "count": s["n"],
                     "mean_type_um": s["mean"], "median_type_um": s["median"], "sd_type_um": s["sd"]})
     return out
 

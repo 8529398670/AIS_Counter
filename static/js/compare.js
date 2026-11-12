@@ -3,7 +3,9 @@
 //
 // - A batch report (AisExport.buildReport) gains two sheets once its images
 //   have treatments: Original names, By treatment and Statistics (the
-//   ANOVA blocks on image means and individual values; extraSheets).
+//   ANOVA blocks on culture means and individual values; extraSheets).
+//   Nothing is averaged per image: every AIS of a treatment within a culture
+//   counts alike, and across batches each culture is one n.
 // - Compare selected (the Batches screen) takes two batches or more, one
 //   culture each, asks which stats to compute (choose; the ANOVA blocks by
 //   default), and downloads a ZIP: comparison.xlsx (culture means, the
@@ -42,9 +44,9 @@ const Compare = {
   BLOCK_TESTS: [ "anova" , "tukey" , "welch" , "dunnett" , "twoway" ],
   // The two-way ANOVA's factors (compare.py DESIGNS), the first picked when the dialog opens.
   DESIGNS: [ "drug x add-on" , "treatment x culture" ],
-  UNITS: [ "culture means" , "image means" , "individual values" ],
+  UNITS: [ "culture means" , "individual values" ],
   // Ticked each time the dialog opens: the whole ANOVA blocks, on every unit.
-  DEFAULTS: [ "anova" , "tukey" , "welch" , "dunnett" , "twoway" , "culture means" , "image means" , "individual values" ],
+  DEFAULTS: [ "anova" , "tukey" , "welch" , "dunnett" , "twoway" , "culture means" , "individual values" ],
   modal: null,
   resolve: null,     // choose()'s promise: { tests, units, design }, or null when closed
 
@@ -113,8 +115,8 @@ const Compare = {
   // treatment x measure.
   imageSheets( out ) {
     return [
-      { name: I18n.get( "compare.sheet_names" ) , cols: this.header( [ "batch" , "image" , "original" , "treatment" , "ais" , "mean_length" , "soma" , "mean_soma" ] ) ,
-        rows: out.images.map( ( im ) => [ im.batch , im.image , im.original , this.treatment( im.treatment ) , im.ais , im.mean_length , im.soma , im.mean_soma ] ) },
+      { name: I18n.get( "compare.sheet_names" ) , cols: this.header( [ "batch" , "image" , "original" , "treatment" , "ais" , "soma" ] ) ,
+        rows: out.images.map( ( im ) => [ im.batch , im.image , im.original , this.treatment( im.treatment ) , im.ais , im.soma ] ) },
       { name: I18n.get( "compare.sheet_groups" ) , cols: this.header( [ "batch" , "treatment" , "measure" , "n" , "mean" , "median" , "sd" , "sem" ] ) ,
         rows: out.groups.map( ( g ) => [ g.batch , this.treatment( g.treatment ) , this.measureName( g.measure ) , g.n , g.mean , g.median , g.sd , g.sem ] ) },
     ];

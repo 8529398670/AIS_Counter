@@ -278,8 +278,7 @@ def _ellipse_json(e: dict[str, float]) -> dict[str, float]:
 
 
 def pair_image(smooth: np.ndarray, bodies: Bodies | None, traces: list[list[list[int]]],
-               pixel_um: float, shape: SomaShape | None = None,
-               sections: list[tuple[int, int] | None] | None = None) -> dict[str, Any]:
+               pixel_um: float, shape: SomaShape | None = None) -> dict[str, Any]:
     """The Measure tool's guesses for every AIS on an image, and its somata:
     {pairs, bodies}. smooth: smoothed(ais); bodies: Somata.bodies(split), None
     without a soma channel.
@@ -289,12 +288,6 @@ def pair_image(smooth: np.ndarray, bodies: Bodies | None, traces: list[list[list
     out. Each trace's start end and body as pair's rules say (the body by
     best_soma on the pieces' edges). B is where the line from the ellipse's
     centre to A meets the ellipse.
-
-    sections: per trace, the measured AIS's first and last trace points
-    (1-based; where its profile crosses F, ais_auto's ais_start and ais_end),
-    or None for the whole trace. A, the AIS's start, is the section's end on
-    the soma's side; which end that is, and the way the AIS points, still
-    come from the whole trace.
 
     pairs: per trace {end, by, widths [first, last] um, a, b, body, soma (=
     body), gap_um, angle_deg, confident, other {end, a, b, body, gap_um} (the
@@ -313,13 +306,11 @@ def pair_image(smooth: np.ndarray, bodies: Bodies | None, traces: list[list[list
                 outlines.append(edges[k])
     background = float(np.median(smooth))
     guesses = []
-    for t, pixels in enumerate(traces):
-        section = sections[t] if sections and t < len(sections) else None
-        first, last = (section[0] - 1, section[1] - 1) if section else (0, len(pixels) - 1)
+    for pixels in traces:
         widths = end_widths(smooth, pixels, pixel_um)
         ends = {}
         for end in ("first", "last"):
-            a = list(pixels[first] if end == "first" else pixels[last])
+            a = list(pixels[0] if end == "first" else pixels[-1])
             ends[end] = (a, best_soma(outlines, a, outward(pixels, end, pixel_um), pixel_um) if outlines else None)
         end, by, thick = _choose(widths, ends)
         P = np.asarray(pixels).reshape(-1, 2) - 1

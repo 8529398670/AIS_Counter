@@ -8,9 +8,8 @@
 // zooms to its start site (the trace's first pixel, the end at its click),
 // and its two ends are placed:
 //
-// - AIS end "preset": A starts where the AIS's length measurement does (its
-//   profile's 33% point) at the trace's thicker end (an AIS tapers away from
-//   its soma); a click places the soma end B. S (Other end) puts A
+// - AIS end "preset": A starts on the trace's thicker end (an AIS tapers
+//   away from its soma); a click places the soma end B. S (Other end) puts A
 //   on the trace's other end instead.
 // - AIS end "click": a click places A, the next B.
 //
@@ -291,14 +290,11 @@ const AisMeasure = {
     this.render();
   },
 
-  // The start site: where the measured AIS begins along the trace (its
-  // profile's 33% point nearer the trace's first pixel), or with end "last"
-  // where it ends.
+  // The start site: the trace's first pixel (the end at its click), or with
+  // end "last" its last.
   startOf( row , end ) {
     const pixels = row.pixels || [];
-    // The measured AIS's ends (where its profile crosses 33%), not the trace's.
-    const section = AisSomata.section( row ) || [ 1 , pixels.length ];
-    const p = ( end || this.end ) === "last" ? pixels[ section[ 1 ] - 1 ] : pixels[ section[ 0 ] - 1 ];
+    const p = ( end || this.end ) === "last" ? pixels[ pixels.length - 1 ] : pixels[ 0 ];
     return p ? [ p[ 0 ] , p[ 1 ] ] : [ row.click_x , row.click_y ];
   },
 

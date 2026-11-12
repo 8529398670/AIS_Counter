@@ -867,6 +867,8 @@ th[aria-sort="descending"] .th-sort::after { content: " \2193"; }
 .batches-drop-after { box-shadow: 4px 0 0 0 var(--bs-primary); }
 .batches-drop-vertical.batches-drop-before { box-shadow: 0 -4px 0 0 var(--bs-primary); }
 .batches-drop-vertical.batches-drop-after { box-shadow: 0 4px 0 0 var(--bs-primary); }
+/* Files or a folder from the computer over a batch: dropping adds them. */
+.batches-file-over { outline: 2px dashed var(--bs-primary); outline-offset: 2px; }
 .batches-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0.5rem; }
 .batches-head > .min-w-0 { flex: 1 1 14rem; }
 .batches-head > .batches-select { flex: 0 0 auto; margin-top: 0.35rem; }

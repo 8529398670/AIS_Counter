@@ -343,19 +343,10 @@ const AisExport = {
         ( list || [] ).length , b.completed , b.duplicates || 0 , rows.length , s.mean , s.median , s.sd , s.min , s.max ,
         b.completed ? Math.round( 1000 * rows.length / b.completed ) / 1000 : null ];
     } );
+    // No means per image: AIS are averaged per batch (and per treatment, Compare).
     const images = [];
-    items.forEach( ( { batch: b , images: list , rows } ) => {
-      const byImage = new Map();
-      rows.forEach( ( r ) => {
-        if ( !byImage.has( r.image ) ) byImage.set( r.image , [] );
-        byImage.get( r.image ).push( r.length_um );
-      } );
-      ( list || [] ).forEach( ( image ) => {
-        const s = this.stats( byImage.get( image.key ) || [] );
-        images.push( [ b.name , image.key , I18n.get( "batches.state_" + this.imageState( image )[ 0 ] ) , image.ais , s.mean , s.median ,
-          image.assignee_name || "" ] );
-      } );
-    } );
+    items.forEach( ( { batch: b , images: list } ) => ( list || [] ).forEach( ( image ) => images.push( [ b.name , image.key ,
+      I18n.get( "batches.state_" + this.imageState( image )[ 0 ] ) , image.ais , image.assignee_name || "" ] ) ) );
     const assignees = [];
     items.forEach( ( { batch: b } ) => ( b.assignees || [] ).forEach( ( a ) => assignees.push( [
       b.name , a.name || "" , a.images , a.completed , Math.round( a.percent ) , a.ais , date( a.last_at ) ] ) ) );
@@ -365,29 +356,29 @@ const AisExport = {
     const lines = items.flatMap( ( item ) => item.measurements || [] ).map( ( line ) => this.measureCols.map( ( c ) => line[ c ] ) );
     const measured = lines.length ? [ { name: I18n.get( "report.sheet_measurements" ) , rows: lines , cols: this.measureCols } ,
       { name: I18n.get( "report.sheet_types" ) , rows: this.typeRows( items ) ,
-        cols: this.header( [ "batch" , "image" , "type" , "count" , "mean_type_um" , "median_type_um" , "sd_type_um" ] ) } ] : [];
+        cols: this.header( [ "batch" , "type" , "count" , "mean_type_um" , "median_type_um" , "sd_type_um" ] ) } ] : [];
     return [
       { name: I18n.get( "report.sheet_summary" ) , rows: summary , cols: this.header( [ "batch" , "batch_id" , "opened_by" , "created" , "archived" ,
         "images" , "completed" , "duplicates" , "ais" , "mean_um" , "median_um" , "sd_um" , "min_um" , "max_um" , "ais_per_image" ] ) },
-      { name: I18n.get( "report.sheet_images" ) , rows: images , cols: this.header( [ "batch" , "image" , "state" , "ais" , "mean_um" , "median_um" , "assignee" ] ) },
+      { name: I18n.get( "report.sheet_images" ) , rows: images , cols: this.header( [ "batch" , "image" , "state" , "ais" , "assignee" ] ) },
       { name: I18n.get( "report.sheet_assignees" ) , rows: assignees , cols: this.header( [ "batch" , "person" , "images" , "completed" , "percent" , "ais" , "last_activity" ] ) },
       { name: I18n.get( "report.sheet_ais" ) , rows: ais , cols: aisCols },
     ].concat( measured );
   },
 
-  // The recorded lines per batch, image and type: how many, and their
-  // length. Lines with no type count under "(no type)".
+  // The recorded lines per batch and type, every line alike (no means per
+  // image): how many, and their length. Lines with no type count under "(no type)".
   typeRows( items ) {
     const groups = new Map();
     items.forEach( ( { batch: b , measurements } ) => ( measurements || [] ).forEach( ( line ) => {
       const type = line.type || I18n.get( "ais.measure_type_none" );
-      const key = JSON.stringify( [ b.id , line.image , type ] );
-      if ( !groups.has( key ) ) groups.set( key , { batch: b.name , image: line.image , type: type , lengths: [] } );
+      const key = JSON.stringify( [ b.id , type ] );
+      if ( !groups.has( key ) ) groups.set( key , { batch: b.name , type: type , lengths: [] } );
       groups.get( key ).lengths.push( line.length_um );
     } ) );
     return [ ...groups.values() ].map( ( g ) => {
       const s = this.stats( g.lengths );
-      return [ g.batch , g.image , g.type , s.n , s.mean , s.median , s.sd ];
+      return [ g.batch , g.type , s.n , s.mean , s.median , s.sd ];
     } );
   },
 

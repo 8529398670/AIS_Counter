@@ -117,16 +117,6 @@ def test_ends_alike_fall_back_to_the_soma_in_front():
     assert not p["confident"]
 
 
-def test_a_starts_where_the_measured_ais_does():
-    smooth = pairing.smoothed(tapered())
-    soma = discs((20, ROW, 15), (240, ROW, 15))
-    whole, measured = pairing.pair_image(smooth, soma, [trace(), trace()], PX, SMALL, [None, (21, 131)])["pairs"]
-    assert whole["a"] == [50, ROW] and measured["a"] == [70, ROW]          # points 1 and 21
-    assert measured["end"] == whole["end"] == "first"                      # still the thicker end
-    assert measured["gap_um"] == pytest.approx(whole["gap_um"] + 20 * PX, abs=0.2)
-    assert measured["other"]["a"] == [180, ROW]                            # point 131, not the trace's last
-
-
 def test_a_dot_is_left_on_its_one_pixel():
     p = pairing.pair_image(pairing.smoothed(tapered()), discs((20, ROW, 15)), [[[60, ROW]]], PX, SMALL)["pairs"][0]
     assert p["end"] == "first" and p["a"] == [60, ROW] and p["widths"] == [None, None]
@@ -224,7 +214,6 @@ def test_the_route_refuses_bad_bodies_and_unknown_files(h):
     assert h.get("POST", path, session=who, body={"pixel_um": PX, "traces": [{"pixels": [[0, 1]]}]}).status == 400
     assert h.get("POST", path, session=who, body={"pixel_um": PX, "traces": [{"pixels": []}]}).status == 400
     assert h.get("POST", path, session=who, body={"pixel_um": PX, "traces": [], "split": "yes"}).status == 400
-    assert h.get("POST", path, session=who, body={"pixel_um": PX, "traces": [{"pixels": trace(), "section": [5, 2]}]}).status == 400
     missing = "0" * 64
     assert h.get("POST", f"/api/ais/files/{missing}/pair", session=who,
                  body={"pixel_um": PX, "traces": [{"pixels": trace()}]}).status == 404

@@ -158,10 +158,11 @@ def test_values_are_grouped_by_treatment_and_measures_never_mix(store):
     # One batch, TTX with one value: every ANOVA block says why it could not run; no plots.
     length = [r for r in out["stats"] if r["measure"] == "ais_length" and r["family"] not in ("ks", "twoway")]
     assert [(r["design"], r["test"]) for r in length] == [
-        ("individual values", "one-way ANOVA"), ("culture means", "one-way ANOVA"), ("image means", "one-way ANOVA")]
+        ("individual values", "one-way ANOVA"), ("culture means", "one-way ANOVA")]
     assert all(r["p"] is None for r in length) and out["plots"] == []
-    names = {im["original"]: (im["treatment"], im["ais"], im["mean_length"]) for im in out["images"]}
-    assert names["BB50 DMSO A"][0] == "DMSO" and names["BB50 TTX A"] == ("TTX", 1, 5.0)
+    names = {im["original"]: (im["treatment"], im["ais"]) for im in out["images"]}
+    assert names["BB50 DMSO A"][0] == "DMSO" and names["BB50 TTX A"] == ("TTX", 1)
+    assert all("mean_length" not in im and "mean_soma" not in im for im in out["images"])   # no means per image
 
 
 def test_left_out_images_and_unmatched_case_are_handled(store):
@@ -295,9 +296,12 @@ def test_the_anova_blocks_alone_leave_out_paired_unpaired_and_ks(store):
 
 def test_units_narrow_the_blocks_and_main_moves_to_a_chosen_one(store):
     ids = _three_cultures(store)
-    out = compare.compare(store, ids, tests=["anova", "tukey"], units=["image means"])
-    assert {r["design"] for r in out["stats"]} == {"image means"}
+    out = compare.compare(store, ids, tests=["anova", "tukey"], units=["individual values"])
+    assert {r["design"] for r in out["stats"]} == {"individual values"}
     assert all(r["main"] for r in out["stats"])
+    # "image means" is no longer a unit: asked for, it is left out, not refused.
+    old = compare.compare(store, ids, tests=["anova"], units=["image means", "culture means"])
+    assert {r["design"] for r in old["stats"]} == {"culture means"}
     ks = compare.compare(store, ids, tests=["ks"], units=["culture means"])
     assert {r["test"] for r in ks["stats"]} == {"Kolmogorov-Smirnov (Holm)"}
     assert compare.compare(store, ids, tests=[])["stats"] == []
@@ -321,8 +325,8 @@ def test_the_control_is_the_shortest_name_with_a_control_word():
 
 def test_an_anova_block_matches_scipy_and_compares_every_pair_three_ways():
     groups = {"DMSO": [10.0, 11, 12, 10.5], "TM": [14.0, 15, 13.5, 16], "TTX": [10.0, 9, 11, 10.2]}
-    rows = compare._anova_block("ais_length", "image means", groups, True)
-    assert all(r["main"] and r["design"] == "image means" for r in rows)
+    rows = compare._anova_block("ais_length", "individual values", groups, True)
+    assert all(r["main"] and r["design"] == "individual values" for r in rows)
     data = [groups[t] for t in ("DMSO", "TM", "TTX")]
     anova = rows[0]
     assert anova["test"] == "one-way ANOVA" and anova["p"] == pytest.approx(sps.f_oneway(*data).pvalue, rel=1e-3)
@@ -335,7 +339,7 @@ def test_an_anova_block_matches_scipy_and_compares_every_pair_three_ways():
     expected = sps.dunnett(groups["TM"], groups["TTX"], control=groups["DMSO"], rng=0).pvalue
     assert dunnett == {"TM vs DMSO": pytest.approx(expected[0], rel=1e-3),
                        "TTX vs DMSO": pytest.approx(expected[1], rel=1e-3)}
-    assert compare._anova_block("ais_length", "image means", groups, True) == rows   # the same on a re-run
+    assert compare._anova_block("ais_length", "individual values", groups, True) == rows   # the same on a re-run
 
 
 def test_two_treatments_still_get_an_anova_which_is_the_t_test_squared():
@@ -346,11 +350,24 @@ def test_two_treatments_still_get_an_anova_which_is_the_t_test_squared():
     assert anova["p"] == pytest.approx(t.pvalue, rel=1e-3)
 
 
-def test_one_batch_is_tested_on_image_means_and_several_on_culture_means(store):
+def test_a_culture_mean_weighs_every_ais_alike_not_each_image(store):
+    """Image A: three AIS of 10; image B: one of 20. The culture's DMSO mean
+    is 12.5 (every AIS alike), not 15 (the mean of the image means)."""
+    batch = culture(store, "C1", {"DMSO": [10, 20], "TM": [5]})
+    a = next(r["image"] for r in ais.list_results(store, batch["id"]) if r["length_um"] == 10)
+    for _ in range(2):
+        ais.add_result(store, batch["id"], a, {"length_um": 10, "pixels": [[1, 1]]}, 1)
+    values = compare.collect(store, [batch["id"]])["values"]
+    assert compare.culture_means(values, "ais_length")[batch["id"]]["DMSO"] == 12.5
+    group = next(g for g in compare.compare(store, [batch["id"]])["groups"] if g["treatment"] == "DMSO")
+    assert (group["n"], group["mean"]) == (4, 12.5)
+
+
+def test_one_batch_is_tested_on_its_ais_and_several_on_culture_means(store):
     one = culture(store, "C1", {"DMSO": [10, 11, 12], "TM": [15, 16, 14]})
     out = compare.compare(store, [one["id"]])
     main = [r for r in out["stats"] if r["main"]]
-    assert {r["design"] for r in main} == {"image means"} and main[0]["test"] == "one-way ANOVA"
+    assert {r["design"] for r in main} == {"individual values"} and main[0]["test"] == "one-way ANOVA"
     assert out["stats"][0] is main[0] and main[0]["p"] < 0.05
     culture_row = next(r for r in out["stats"] if r["design"] == "culture means")
     assert culture_row["p"] is None and "needs 2" in culture_row["note"]

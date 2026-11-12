@@ -613,6 +613,89 @@ const Batches = {
     Dom.get( id ).click();
   },
 
+  // Folder…: the browser's own folder chooser where it has one (Chrome,
+  // Edge: a whole folder, subfolders and all), else the folder input.
+  // Called straight from the click: either needs its user activation.
+  async pickFolder( b ) {
+    if ( typeof window.showDirectoryPicker !== "function" ) {
+      this.pick( b , "batches-add-folder" );
+      return;
+    }
+    let folder;
+    try {
+      folder = await window.showDirectoryPicker( { id: "ais-images" , mode: "read" } );
+    } catch ( error ) {
+      if ( error.name !== "AbortError" ) App.showError( error.message );
+      return;
+    }
+    const files = await this.filesIn( folder , folder.name );
+    if ( files.length ) this.addPicked( b , files );
+    else App.showError( I18n.get( "ais.no_tiffs" ) );
+  },
+
+  // Every file under a folder handle, each with its path from the folder.
+  async filesIn( folder , path ) {
+    const out = [];
+    for await ( const entry of folder.values() ) {
+      if ( entry.name.startsWith( "." ) ) continue;
+      const rel = path + "/" + entry.name;
+      if ( entry.kind === "directory" ) out.push( ...await this.filesIn( entry , rel ) );
+      else out.push( this.withPath( await entry.getFile() , rel ) );
+    }
+    return out;
+  },
+
+  // Files (and folders, subfolders and all) dropped on a batch: every file
+  // with its path from what was dropped. The entries are taken at once, as
+  // a drop's items are gone once the handler returns.
+  async droppedFiles( items ) {
+    const entries = Array.from( items || [] ).map( ( item ) => item.webkitGetAsEntry && item.webkitGetAsEntry() ).filter( Boolean );
+    const out = [];
+    const walk = async ( entry , rel ) => {
+      if ( entry.name.startsWith( "." ) ) return;
+      if ( entry.isFile ) {
+        out.push( this.withPath( await new Promise( ( ok , fail ) => entry.file( ok , fail ) ) , rel ) );
+        return;
+      }
+      const reader = entry.createReader();
+      for ( ;; ) {
+        const some = await new Promise( ( ok , fail ) => reader.readEntries( ok , fail ) );
+        if ( !some.length ) break;
+        for ( const child of some ) await walk( child , rel + "/" + child.name );
+      }
+    };
+    // A loose file dropped alone has no folder: its path is just "", as a picked file's.
+    for ( const entry of entries ) await walk( entry , entry.isFile ? "" : entry.name );
+    return out;
+  },
+
+  withPath( file , rel ) {
+    Object.defineProperty( file , "aisRel" , { value: rel } );
+    return file;
+  },
+
+  // Dropping files or folders from the computer on a batch's card adds them,
+  // as Add images does.
+  fileDrop( card , b ) {
+    const files = ( e ) => Array.from( e.dataTransfer?.types || [] ).includes( "Files" );
+    card.addEventListener( "dragover" , ( e ) => {
+      if ( !files( e ) ) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "copy";
+      card.classList.add( "batches-file-over" );
+    } );
+    card.addEventListener( "dragleave" , ( e ) => {
+      if ( !card.contains( e.relatedTarget ) ) card.classList.remove( "batches-file-over" );
+    } );
+    card.addEventListener( "drop" , async ( e ) => {
+      if ( !files( e ) ) return;
+      e.preventDefault();
+      card.classList.remove( "batches-file-over" );
+      const picked = await this.droppedFiles( e.dataTransfer.items );
+      if ( picked.length ) this.addPicked( b , picked );
+    } );
+  },
+
   // Whether images added from here get blinded names: on unless switched
   // off in an Add menu, remembered in this browser.
   randomize() {
@@ -657,7 +740,7 @@ const Batches = {
     Array.from( fileList ).forEach( ( f ) => {
       const match = f.name.startsWith( "." ) ? null : Ais.stackRe.exec( f.name );
       if ( !match ) return;
-      const folder = ( f.webkitRelativePath || "" ).split( "/" ).slice( 0 , -1 ).join( "/" );
+      const folder = Ais.relPath( f ).split( "/" ).slice( 0 , -1 ).join( "/" );
       const key = [ folder , match[ 1 ] , ( match[ 3 ] || "" ).toLowerCase() ].join( "\n" );
       found.set( key , { cell: match[ 1 ] , slices: ( found.has( key ) ? found.get( key ).slices : 0 ) + 1 } );
     } );
@@ -997,7 +1080,7 @@ const Batches = {
       on: { change: ( e ) => this.setRandomize( e.target.checked ) } } );
     box.checked = this.randomize();
     const items = [
-      item( "bi-folder2-open" , "batches.add_folder" , () => this.pick( b , "batches-add-folder" ) ),
+      item( "bi-folder2-open" , "batches.add_folder" , () => this.pickFolder( b ) ),
       item( "bi-images" , "batches.add_files" , () => this.pick( b , "batches-add-files" ) ),
       Dom.el( "li" , { children: [ Dom.el( "hr" , { class: "dropdown-divider" } ) ] } ),
       // Its own click must not close the menu (Bootstrap closes on any click inside).
@@ -1109,6 +1192,7 @@ const Batches = {
       attrs: { id: "batches-card-" + b.id } , children: [ Dom.el( "div" , { class: "card-body" , children: body } ) ] } );
     this.renderLocalInto( local , b.id );
     if ( admin ) this.dragHandlers( card , b );
+    this.fileDrop( card , b );
     return card;
   },
 

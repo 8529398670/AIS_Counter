@@ -16,10 +16,14 @@ spelling first met is the one shown. Spellings that differ otherwise ("TM+KCl
 WO" and "TM+KCl+WO") stay apart: whether they are one treatment is the
 admin's call, made in the Treatments dialog (its "matched" guesses).
 
+Nothing is averaged per image: every AIS (or line) of a treatment within a
+culture counts the same, and a culture's mean for a treatment is the mean of
+all of them. Across batches, each culture is one n.
+
 compare() tests the treatments against each other, per measure. First come
-three ANOVA blocks, one per unit -- culture means (one per batch per
-treatment, needing 2 cultures per treatment), image means (one per image)
-and individual values (every AIS or line) -- each a one-way ANOVA over every
+two ANOVA blocks, one per unit -- culture means (one per batch per
+treatment, needing 2 cultures per treatment) and individual values (every
+AIS or line, pooled within its treatment) -- each a one-way ANOVA over every
 treatment followed by every pair compared three ways: Tukey HSD, Welch
 t-tests with Holm's correction, and Dunnett against the control (_control).
 Then a two-way ANOVA per unit (Type III, so unequal groups are fine), its
@@ -27,8 +31,9 @@ factors picked per export: drug x add-on (from the names: the first drug,
 and what was added to it) or treatment x culture; each followed by its
 simple effects, Holm-corrected t-tests on the two-way error.
 The main block (rows flagged main) is culture means when it can be worked
-out, else image means, else individual values; image means and individual
-values are not independent cultures, so their p-values run low. After them
+out (two cultures or more per treatment), else individual values (one
+culture: its AIS); across cultures, individual values are not independent,
+so their p-values run low. After them
 come the other tests on culture means, paired (only the cultures that have
 every treatment) and unpaired, and a KS test of the individual values'
 cumulative distributions. With two batches or more it also draws, as SVG
@@ -118,8 +123,7 @@ def collect(store: Store, batch_ids: list[int]) -> dict[str, Any]:
             somas = [v for measure, v in mine if measure == AIS_SOMA]
             images.append({"batch_id": batch_id, "batch": batch["name"], "image": im["key"],
                            "original": batches.original_cell(im), "treatment": treatment,
-                           "ais": len(lengths), "mean_length": describe(lengths)["mean"],
-                           "soma": len(somas), "mean_soma": describe(somas)["mean"]})
+                           "ais": len(lengths), "soma": len(somas)})
             values += [{"batch_id": batch_id, "batch": batch["name"], "image": im["key"],
                         "original": batches.original_cell(im), "treatment": treatment,
                         "measure": measure, "value": v} for measure, v in mine]
@@ -147,17 +151,9 @@ def group_table(values: list[dict[str, Any]]) -> list[dict[str, Any]]:
             for (b, name, t, m), vs in groups.items()]
 
 
-def image_means(values: list[dict[str, Any]], measure: str) -> dict[str, list[float]]:
-    """{treatment: [mean of each image's values]} of one measure."""
-    sums: dict[str, dict[tuple[int, str], list[float]]] = {}
-    for v in values:
-        if v["measure"] == measure and v["treatment"]:
-            sums.setdefault(v["treatment"], {}).setdefault((v["batch_id"], v["image"]), []).append(v["value"])
-    return {t: [float(np.mean(vs)) for vs in by.values()] for t, by in sums.items()}
-
-
 def culture_means(values: list[dict[str, Any]], measure: str) -> dict[int, dict[str, float]]:
-    """{batch id: {treatment: mean}} of one measure: a culture's mean per treatment."""
+    """{batch id: {treatment: mean}} of one measure: a culture's mean per
+    treatment, of every value in it alike (no image means in between)."""
     sums: dict[int, dict[str, list[float]]] = {}
     for v in values:
         if v["measure"] == measure and v["treatment"]:
@@ -239,7 +235,6 @@ def _control(treatments: list[str]) -> str:
 
 UNIT_NOTES = {
     "culture means": "one mean per culture (batch) per treatment",
-    "image means": "one mean per image; images are not independent cultures, so p runs low",
     "individual values": "every value; not independent cultures, so p runs low",
 }
 
@@ -484,25 +479,23 @@ def _two_way_block(measure: str, unit: str, data: list[tuple[str, int, float]], 
 
 
 def _two_way_data(values: list[dict[str, Any]], measure: str, unit: str) -> list[tuple[str, int, float]]:
-    """(treatment, batch id, value) per culture mean, image mean or value of one measure."""
+    """(treatment, batch id, value) per culture mean or value of one measure."""
     mine = [v for v in values if v["measure"] == measure and v["treatment"]]
     if unit == "individual values":
         return [(v["treatment"], v["batch_id"], v["value"]) for v in mine]
-    key = (lambda v: (v["treatment"], v["batch_id"])) if unit == "culture means" else \
-        (lambda v: (v["treatment"], v["batch_id"], v["image"]))
     sums: dict[tuple, list[float]] = {}
     for v in mine:
-        sums.setdefault(key(v), []).append(v["value"])
+        sums.setdefault((v["treatment"], v["batch_id"]), []).append(v["value"])
     return [(k[0], k[1], float(np.mean(vs))) for k, vs in sums.items()]
 
 
 def tests_for(values: list[dict[str, Any]], measure: str, names: dict[int, str],
               units: tuple[str, ...] | list[str] = (), design: str = DRUG_ADDON) -> dict[str, Any]:
-    """Every test of one measure's treatments: {rows (the three ANOVA
+    """Every test of one measure's treatments: {rows (the two ANOVA
     blocks, main first, then the others), dropped (the cultures left out of
     the paired tests: missing a treatment), brackets (the culture means'
     Tukey HSD p per pair, for the box plot)}. units: the ANOVA blocks to
-    pick the main one from (every unit when empty); all three are worked
+    pick the main one from (every unit when empty); both are worked
     out regardless, for the box plot's brackets. After the one-way blocks
     come the two-way ANOVA blocks, one per unit, in the same order
     (_two_way_block; design: DESIGNS)."""
@@ -512,9 +505,8 @@ def tests_for(values: list[dict[str, Any]], measure: str, names: dict[int, str],
     if k < 2:
         return {"rows": [], "dropped": [], "brackets": {}}
     by_culture = {t: [by[t] for by in means.values() if t in by] for t in treatments}
-    by_image = image_means(values, measure)
     by_value = {t: [v["value"] for v in values if v["measure"] == measure and v["treatment"] == t] for t in treatments}
-    blocks_in = [("culture means", by_culture), ("image means", by_image), ("individual values", by_value)]
+    blocks_in = [("culture means", by_culture), ("individual values", by_value)]
     candidates = [(d, g) for d, g in blocks_in if not units or d in units] or blocks_in
     main = next((d for d, g in candidates if all(len(g[t]) >= 2 for t in treatments)), candidates[-1][0])
     blocks = {d: _anova_block(measure, d, g, d == main) for d, g in blocks_in}
@@ -923,13 +915,18 @@ def cdf_plot(measure_name: str, each: dict[str, list[float]], lay: dict[str, Any
 
 TESTS = ("anova", "tukey", "welch", "dunnett", "twoway", "paired", "unpaired", "ks")
 BLOCK_TESTS = ("anova", "tukey", "welch", "dunnett", "twoway")   # the ANOVA blocks' tests, run per unit
-UNITS = ("culture means", "image means", "individual values")
+UNITS = ("culture means", "individual values")
+# Units there were once, still accepted and left out: nothing is averaged per image now.
+RETIRED_UNITS = ("image means",)
 
 
-def _choice(value: Any, known: tuple[str, ...], what: str) -> tuple[str, ...]:
-    """A list of known keys (None: all of them), in known's order."""
+def _choice(value: Any, known: tuple[str, ...], what: str, retired: tuple[str, ...] = ()) -> tuple[str, ...]:
+    """A list of known keys (None: all of them), in known's order; retired
+    keys are dropped."""
     if value is None:
         return known
+    if isinstance(value, list):
+        value = [v for v in value if v not in retired]
     if not isinstance(value, list) or not all(isinstance(v, str) and v in known for v in value):
         raise CompareError(f"{what} must be a list of: {', '.join(known)}")
     return tuple(k for k in known if k in value)
@@ -957,7 +954,7 @@ def compare(store: Store, batch_ids: Any, labels: Any = None, tests: Any = None,
             not all(isinstance(b, int) and not isinstance(b, bool) for b in batch_ids):
         raise CompareError("batch_ids must be a list of batch ids")
     tests = _choice(tests, TESTS, "tests")
-    units = _choice(units, UNITS, "units")
+    units = _choice(units, UNITS, "units", RETIRED_UNITS)
     design = DRUG_ADDON if design is None else design
     if design not in DESIGNS:
         raise CompareError(f"design must be one of: {', '.join(DESIGNS)}")

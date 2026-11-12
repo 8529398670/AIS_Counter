@@ -140,6 +140,7 @@ const Ais = {
     Dom.get( "ais-replay" ).addEventListener( "click" , () => this.replayInMatlab() );
     Dom.get( "ais-replay-download" ).addEventListener( "click" , () => this.downloadReplay() );
     Dom.get( "ais-table-scope" ).addEventListener( "change" , () => this.loadTable() );
+    Dom.get( "ais-clear" ).addEventListener( "click" , () => this.clearShown() );
     // A changed setting (on the Settings screen) drops a half-done two-click.
     // A method setting starts the click over; a general one (thickness, minimum
     // length) only redraws, and the minimum applies from the next trace.
@@ -367,14 +368,21 @@ const Ais = {
   // finds each File again: the server may have blinded its name. A folder
   // blinded by RandomNames.bat brings its __Translation.txt along:
   // translations, [{ dir , text }] with dir its folder as an image's dir.
+  // A picked file's path from the folder picked ("folder/sub/a.czi"), or ""
+  // for a loose file: the folder picker's webkitRelativePath, or the path
+  // Batches.withPath gave one read from a folder chooser or a drop.
+  relPath( f ) {
+    return f.aisRel || f.webkitRelativePath || "";
+  },
+
   async hashFiles( fileList , onProgress ) {
     const all = Array.from( fileList );
     const files = all.filter( ( f ) => /\.(tiff?|czi)$/i.test( f.name ) && !f.name.startsWith( "." ) );
     if ( !files.length ) return null;
-    const rel = files[ 0 ].webkitRelativePath || "";
+    const rel = this.relPath( files[ 0 ] );
     const root = rel.includes( "/" ) ? rel.split( "/" )[ 0 ] : "";
     const translations = await Promise.all( all.filter( ( f ) => /^__Translation.*\.txt$/i.test( f.name ) ).map( async ( f ) => {
-      const parts = ( f.webkitRelativePath || f.name ).split( "/" );
+      const parts = ( this.relPath( f ) || f.name ).split( "/" );
       return { dir: parts.slice( 1 , -1 ).join( "/" ) , text: await f.text() };
     } ) );
     const described = new Array( files.length );
@@ -386,7 +394,7 @@ const Ais = {
       const buffer = await f.arrayBuffer();
       const digest = await crypto.subtle.digest( "SHA-256" , buffer );
       const sha = Array.from( new Uint8Array( digest ) , ( b ) => b.toString( 16 ).padStart( 2 , "0" ) ).join( "" );
-      const fileRel = f.webkitRelativePath || f.name;
+      const fileRel = this.relPath( f ) || f.name;
       described[ i ] = { name: f.name , rel: fileRel , sha: sha , size: f.size };
       // Its channels, for the roles asked about before the add (Channels.ask).
       const read = Channels.readLayout( buffer );
@@ -2513,6 +2521,7 @@ const Ais = {
     const lines = this.shownMeasurements().length;
     Dom.get( "ais-export" ).disabled = !rows && !lines;
     Dom.get( "ais-export-csv" ).disabled = !rows;
+    Dom.get( "ais-clear" ).disabled = !this.clearable().length;
     Dom.show( Dom.get( "ais-export-measurements-item" ) , Boolean( lines ) );
     AisMeasure.render();
   },
@@ -2528,6 +2537,25 @@ const Ais = {
       attrs: { type: "button" , title: I18n.get( "ais.measure_row" ) },
       on: { click: () => AisMeasure.measureRow( row ) },
     } );
+  },
+
+  // Clear all: delete every accepted AIS the table lists that is in the open
+  // batch (the image's, or the batch's), as one step Undo puts back.
+  async clearShown() {
+    const rows = this.clearable();
+    if ( !rows.length || this.busy || this.historyBusy ) return;
+    if ( !window.confirm( I18n.get( "ais.clear_confirm" ).replace( "{n}" , rows.length ) ) ) return;
+    const steps = [];
+    for ( const row of rows ) {
+      const ref = this.refFor( row );
+      await this.postDelete( row );
+      steps.push( { kind: "delete" , ref: ref } );
+    }
+    this.remember( { kind: "group" , steps: steps } );
+  },
+
+  clearable() {
+    return this.batch ? this.shownRows().filter( ( row ) => row.batch_id === this.batch.id ) : [];
   },
 
   // Delete a saved row; the server renumbers the rest of its image 1..k.
@@ -2599,21 +2627,12 @@ const Ais = {
   async replay( from , to , backwards ) {
     if ( this.historyBusy || this.busy || !from.length ) return;
     const step = from.pop();
-    const ref = step.ref;
-    const remove = ( step.kind === "add" ) === backwards;
     this.historyBusy = true;
     this.renderHistory();
     try {
-      if ( step.kind === "edit" ) {
-        await this.postUpdate( ref.row , backwards ? step.before : step.after );
-      } else if ( remove ) {
-        await this.postDelete( ref.row );
-      } else {
-        const saved = await this.postAdd( ref.row.batch_id , ref.row.image , ref.row );
-        this.refs.delete( this.rowKey( ref.row ) );
-        ref.row = saved;
-        this.refs.set( this.rowKey( saved ) , ref );
-      }
+      // A group (Clear all) is its steps, undone last first.
+      const steps = step.kind === "group" ? ( backwards ? step.steps.slice().reverse() : step.steps ) : [ step ];
+      for ( const one of steps ) await this.replayOne( one , backwards );
       to.push( step );
     } catch ( error ) {
       App.showError( error.message );
@@ -2625,6 +2644,20 @@ const Ais = {
     this.renderTable();
     this.renderPicker();
     this.draw();
+  },
+
+  async replayOne( step , backwards ) {
+    const ref = step.ref;
+    if ( step.kind === "edit" ) {
+      await this.postUpdate( ref.row , backwards ? step.before : step.after );
+    } else if ( ( step.kind === "add" ) === backwards ) {
+      await this.postDelete( ref.row );
+    } else {
+      const saved = await this.postAdd( ref.row.batch_id , ref.row.image , ref.row );
+      this.refs.delete( this.rowKey( ref.row ) );
+      ref.row = saved;
+      this.refs.set( this.rowKey( saved ) , ref );
+    }
   },
 
   // --- drawing -------------------------------------------------------------

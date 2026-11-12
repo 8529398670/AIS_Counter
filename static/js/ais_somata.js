@@ -63,18 +63,6 @@ const AisSomata = {
     this.ensure();
   },
 
-  // The measured AIS on a row's trace: its first and last trace points,
-  // 1-based, where its profile crosses 33% (start_um and end_um over the
-  // pixel size it was measured at, as service.shape reads them); null when
-  // the row lacks them.
-  section( row ) {
-    const n = ( row.pixels || [] ).length;
-    if ( !n || row.start_um == null || row.end_um == null || !row.pixconv ) return null;
-    const first = Math.min( n , Math.max( 1 , Math.round( row.start_um / row.pixconv ) ) );
-    const last = Math.min( n , Math.max( first , Math.round( row.end_um / row.pixconv ) ) );
-    return [ first , last ];
-  },
-
   pairKey( row ) {
     return row.id != null ? "id:" + row.id : "c:" + row.client_id;
   },
@@ -87,15 +75,12 @@ const AisSomata = {
     if ( !sha ) return null;
     const rows = Ais.savedRows( entry ).filter( ( r ) => r.pixels && r.pixels.length );
     const shape = this.shape;
-    const key = [ sha , this.split ? "split" : "whole" , shape.min_um , shape.max_um , shape.roundness , ...rows.map( ( r ) => this.pairKey( r ) + ":" + r.pixels.length + ":" + this.section( r ) ) ].join( "|" );
+    const key = [ sha , this.split ? "split" : "whole" , shape.min_um , shape.max_um , shape.roundness , ...rows.map( ( r ) => this.pairKey( r ) + ":" + r.pixels.length ) ].join( "|" );
     if ( this.state && this.state.index === Ais.index && this.state.key === key ) return this.state.promise;
     const state = { index: Ais.index , key: key , bodies: null , byKey: null };
     this.state = state;
     state.promise = Api.post( "/api/ais/files/" + sha + "/pair" , { pixel_um: Ais.pixconvFor( entry ) , split: this.split , soma: shape ,
-      traces: rows.map( ( r ) => {
-        const section = this.section( r );
-        return section ? { id: this.pairKey( r ) , pixels: r.pixels , section: section } : { id: this.pairKey( r ) , pixels: r.pixels };
-      } ) } ).then( ( out ) => {
+      traces: rows.map( ( r ) => ( { id: this.pairKey( r ) , pixels: r.pixels } ) ) } ).then( ( out ) => {
       if ( this.state !== state ) return state;
       state.bodies = out.bodies;
       state.byKey = new Map( out.pairs.map( ( p ) => [ p.id , p ] ) );

@@ -6899,7 +6899,7 @@
             "apiKey": []
           }
         ],
-        "description": "Body {pixel_um, traces: [{id, pixels, section?: [first, last] (the measured AIS's trace points, 1-based; A is on its end)}], split?, soma?: {min_um, max_um, roundness}}: for each accepted AIS on the image, the Measure tool's guess (app/analysis/pairing.py): which end starts at the soma (the thicker), the soma in front of it, and B on that soma's ellipse (the largest inside it the soma size and roundness allow); and the image's soma ellipses (split, the default: one per hotspot, else one per outline). {pairs: [{id, end, by, widths, a, b, body, gap_um, angle_deg, confident, other}], bodies: [{cx, cy, a, b, angle_deg, ais}]}.",
+        "description": "Body {pixel_um, traces: [{id, pixels}], split?, soma?: {min_um, max_um, roundness}}: for each accepted AIS on the image, the Measure tool's guess (app/analysis/pairing.py): which end starts at the soma (the thicker), the soma in front of it, and B on that soma's ellipse (the largest inside it the soma size and roundness allow); and the image's soma ellipses (split, the default: one per hotspot, else one per outline). {pairs: [{id, end, by, widths, a, b, body, gap_um, angle_deg, confident, other}], bodies: [{cx, cy, a, b, angle_deg, ais}]}.",
         "parameters": [
           {
             "name": "sha",
@@ -6944,15 +6944,6 @@
                               "type": "integer"
                             }
                           }
-                        },
-                        "section": {
-                          "type": "array",
-                          "items": {
-                            "type": "integer"
-                          },
-                          "minItems": 2,
-                          "maxItems": 2,
-                          "description": "The measured AIS's first and last trace points, 1-based: A, its start, is on the soma's side of these."
                         }
                       }
                     }
