@@ -55,10 +55,14 @@ const Batches = {
         const target = this.addTarget;
         // A copy: input.files is live, and clearing the input below empties it.
         const picked = Array.from( input.files || [] );
-        if ( target && picked.length ) this.addPicked( target , picked );
+        if ( target && picked.length ) {
+          this.closeFolderAdd();
+          this.addPicked( target , picked );
+        }
         input.value = "";
       } );
     } );
+    this.initFolderAdd();
     Dom.get( "batches-translation" ).addEventListener( "change" , ( e ) => {
       const file = e.target.files && e.target.files[ 0 ];
       if ( this.addTarget && file ) this.loadTranslation( this.addTarget , file );
@@ -613,12 +617,53 @@ const Batches = {
     Dom.get( id ).click();
   },
 
-  // Folder…: the browser's own folder chooser where it has one (Chrome,
-  // Edge: a whole folder, subfolders and all), else the folder input.
-  // Called straight from the click: either needs its user activation.
-  async pickFolder( b ) {
+  // Folder…: a dialog with three ways in, as no one of them works in every
+  // browser: drop the folder on it, choose the folder, or choose its files
+  // (or a .zip of it).
+  pickFolder( b ) {
+    this.addTarget = b;
+    Dom.get( "batches-addfolder-batch" ).textContent = b.name;
+    bootstrap.Modal.getOrCreateInstance( Dom.get( "batches-addfolder-modal" ) ).show();
+  },
+
+  closeFolderAdd() {
+    const element = Dom.get( "batches-addfolder-modal" );
+    if ( element.classList.contains( "show" ) ) bootstrap.Modal.getOrCreateInstance( element ).hide();
+  },
+
+  initFolderAdd() {
+    const zone = Dom.get( "batches-addfolder-drop" );
+    const files = ( e ) => Array.from( e.dataTransfer?.types || [] ).includes( "Files" );
+    zone.addEventListener( "dragover" , ( e ) => {
+      if ( !files( e ) ) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "copy";
+      zone.classList.add( "is-over" );
+    } );
+    zone.addEventListener( "dragleave" , ( e ) => {
+      if ( !zone.contains( e.relatedTarget ) ) zone.classList.remove( "is-over" );
+    } );
+    zone.addEventListener( "drop" , async ( e ) => {
+      if ( !files( e ) ) return;
+      e.preventDefault();
+      zone.classList.remove( "is-over" );
+      const target = this.addTarget;
+      const picked = await this.droppedFiles( e.dataTransfer.items );
+      if ( !target || !picked.length ) return;
+      this.closeFolderAdd();
+      this.addPicked( target , picked );
+    } );
+    // Straight from the click: a chooser needs its user activation.
+    Dom.get( "batches-addfolder-choose" ).addEventListener( "click" , () => this.chooseFolder() );
+    Dom.get( "batches-addfolder-files" ).addEventListener( "click" , () => Dom.get( "batches-add-files" ).click() );
+  },
+
+  // The browser's own folder chooser where it has one (Chrome, Edge: the
+  // folder, subfolders and all), else the folder input.
+  async chooseFolder() {
+    const target = this.addTarget;
     if ( typeof window.showDirectoryPicker !== "function" ) {
-      this.pick( b , "batches-add-folder" );
+      Dom.get( "batches-add-folder" ).click();
       return;
     }
     let folder;
@@ -629,8 +674,35 @@ const Batches = {
       return;
     }
     const files = await this.filesIn( folder , folder.name );
-    if ( files.length ) this.addPicked( b , files );
-    else App.showError( I18n.get( "ais.no_tiffs" ) );
+    if ( !target ) return;
+    this.closeFolderAdd();
+    this.addPicked( target , files );
+  },
+
+  // Picked or dropped files with any .zip among them opened: its images (and
+  // __Translation.txt) as files, each with its path in the ZIP. A ZIP whose
+  // entries sit at its top level gets its own name as their folder.
+  async expandZips( fileList , onOpen ) {
+    const out = [];
+    for ( const f of Array.from( fileList ) ) {
+      if ( !/\.zip$/i.test( f.name ) ) {
+        out.push( f );
+        continue;
+      }
+      onOpen( f.name );
+      const entries = await Zip.read( f );
+      if ( !entries ) throw new Error( I18n.get( "batches.zip_bad" ).replace( "{name}" , f.name ) );
+      const base = Ais.relPath( f ).split( "/" ).slice( 0 , -1 ).concat( f.name.replace( /\.zip$/i , "" ) ).join( "/" );
+      const names = [ ...entries.keys() ].filter( ( name ) => !name.endsWith( "/" ) && !/(^|\/)(__MACOSX|\.)/.test( name )
+        && /(\.(tiff?|czi)|^__Translation.*\.txt)$/i.test( name.split( "/" ).pop() ) );
+      const nested = names.length && names.every( ( name ) => name.includes( "/" ) );
+      for ( const name of names ) {
+        const blob = await Zip.blob( f , entries.get( name ) );
+        const file = new File( [ blob ] , name.split( "/" ).pop() , { lastModified: f.lastModified } );
+        out.push( this.withPath( file , nested ? name : base + "/" + name ) );
+      }
+    }
+    return out;
   },
 
   // Every file under a folder handle, each with its path from the folder.
@@ -771,11 +843,12 @@ const Batches = {
   // Files picked in this browser: hash them, add them to the batch, then
   // upload them in the background.
   async addPicked( b , fileList ) {
-    const stacks = this.stacksIn( fileList );
     const progress = { reading: true , done: 0 , total: 0 };
     this.local.set( b.id , progress );
     let picked;
     try {
+      fileList = await this.expandZips( fileList , ( name ) => Dom.toast( I18n.get( "batches.zip_reading" ).replace( "{name}" , name ) ) );
+      const stacks = this.stacksIn( fileList );
       picked = await Ais.hashFiles( fileList , ( done , total ) => {
         progress.done = done;
         progress.total = total;
