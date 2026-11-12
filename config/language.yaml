@@ -401,7 +401,7 @@ batches:
   addfolder_drop: "Drag a folder here from Finder or Explorer (subfolders too)"
   addfolder_choose: "Choose a folder…"
   addfolder_files: "Choose files or a .zip…"
-  addfolder_help: "If choosing a folder only lets you pick files, drag the folder here instead, or select all the files in it (⌘A / Ctrl+A). A .zip of the folder works too (on a Mac: right-click the folder › Compress)."
+  addfolder_help: "Some browsers (DuckDuckGo, phones and tablets) only let you pick files when choosing a folder: drag the folder here instead, or select all the files in it (⌘A / Ctrl+A). A .zip of the folder works too (on a Mac: right-click the folder › Compress). Safari, Chrome, Edge and Firefox can choose the folder itself."
   zip_reading: "Opening {name}…"
   zip_bad: "{name} is not a ZIP file this app can open."
   randomize: "Randomize file names"
