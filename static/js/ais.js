@@ -2002,6 +2002,17 @@ const Ais = {
       row( "m_mid" , this.fmt( m.mid_um ) + " µm" );
       row( "m_max" , this.fmt( m.max_um ) + " µm" );
     }
+    // How much AIS there is (app/analysis/area.py): area two ways, and on a
+    // Z-stack volume two ways.
+    const two = ( v ) => ( v == null ? "" : this.fmt( Math.round( v * 100 ) / 100 ) );
+    const s = r.shape;
+    if ( s ) {
+      if ( s.width_um != null ) row( "m_width" , two( s.width_um ) + " µm" );
+      if ( s.area_blob_um2 != null ) row( "m_area_blob" , two( s.area_blob_um2 ) + " µm²" );
+      if ( s.area_width_um2 != null ) row( "m_area_width" , two( s.area_width_um2 ) + " µm²" );
+    }
+    if ( z && z.volume_voxel_um3 != null ) row( "m_volume_voxel" , two( z.volume_voxel_um3 ) + " µm³" );
+    if ( z && z.volume_tube_um3 != null ) row( "m_volume_tube" , two( z.volume_tube_um3 ) + " µm³" );
     if ( r.threshold != null ) {
       row( "m_threshold" , r.rethresholded ? this.fmt( r.threshold_initial ) + " → " + this.fmt( r.threshold ) : this.fmt( r.threshold ) );
     }

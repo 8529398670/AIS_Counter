@@ -242,6 +242,7 @@ def build_routes(static_server: StaticServer, cfg: Config) -> list[BaseRoute]:
         signed_in("/api/ais/batches/{batch_id}/channels", ais.batch_channels),
         signed_in("/api/ais/batches/{batch_id}/layouts", ais.batch_layouts),
         signed_in("/api/ais/batches/{batch_id}/layouts", ais.batch_layouts_set, ["POST"]),
+        signed_in("/api/ais/batches/{batch_id}/fill-areas", ais.batch_fill_areas, ["POST"]),
         signed_in("/api/ais/batches/{batch_id}/upload", ais.batch_add, ["POST"], max_body_size=ais.UPLOAD_LIMIT_BYTES),
         signed_in("/api/ais/batches/{batch_id}/rename", ais.batch_rename, ["POST"]),
         signed_in("/api/ais/batches/{batch_id}/archive", ais.batch_archive, ["POST"]),

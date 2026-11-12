@@ -51,6 +51,7 @@ from scipy import ndimage as ndi
 
 from app.analysis import ais_auto as aa
 from app.analysis import area
+from app.analysis import auto_params as ap
 from app.analysis import detect as auto
 from app.analysis import fast
 from app.analysis import mlcompat as ml
@@ -563,6 +564,34 @@ class Library:
         if raw_arr.shape[:2] != prep.pic.shape:
             raise ImageError("raw and processed images differ in size")
         return self._noted(auto.detect(prep, raw_arr, threshold, settings, used, exclude, soma=soma), start, used)
+
+    def remeasure(self, processed: str, raw: str | None, row: dict[str, Any]) -> dict[str, Any] | None:
+        """The area (and on a Z-stack the volume) of an AIS accepted before
+        they were measured (area.py): traced again from its saved clicks,
+        threshold and method settings. Only when the trace comes out on the
+        very same pixels; None otherwise (or when it can't be traced)."""
+        pixels = row.get("pixels") or []
+        if not pixels or row.get("click_x") is None or row.get("click_y") is None:
+            return None
+        known = {k: row[k] for k in ap.SETTING_COLS if row.get(k) is not None}
+        try:
+            settings = aa.Settings.from_dict(known)
+        except ValueError:
+            return None
+        click = (float(row["click_x"]), float(row["click_y"]))
+        last = (row.get("click2_x"), row.get("click2_y"))
+        click2 = (float(last[0]), float(last[1])) if None not in last and (float(last[0]), float(last[1])) != click else None
+        threshold = row.get("threshold_initial") if row.get("threshold_initial") is not None else row.get("threshold")
+        if threshold is None:
+            return None
+        out = self.trace(processed, raw, click, click2, float(threshold), settings, row.get("z_method") or None)
+        if not out.get("ok") or out.get("pixels") != pixels or not out.get("shape"):
+            return None
+        found = {k: out["shape"].get(k) for k in ("area_blob_um2", "area_width_um2")}
+        for k in ("volume_voxel_um3", "volume_tube_um3"):
+            if (out.get("z") or {}).get(k) is not None:
+                found[k] = out["z"][k]
+        return found if found["area_blob_um2"] is not None else None
 
     def trace_fast(self, processed: str, raw: str | None,
                    click: tuple[float, float], click2: tuple[float, float] | None,

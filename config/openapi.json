@@ -11671,6 +11671,82 @@
         "description": "The entry gone for good (admins).",
         "x-required-role": "admin"
       }
+    },
+    "/api/ais/batches/{batch_id}/fill-areas": {
+      "post": {
+        "summary": "Fill in missing AIS areas",
+        "operationId": "post_api_ais_batches_batch_id_fill_areas",
+        "tags": [
+          "AIS"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          }
+        ],
+        "description": "Body: {after?: result id, limit?: 1-50 (default 10)}: fill in the area (and on a Z-stack the volume) of the batch's accepted AIS that have none, tracing each again from its saved clicks, threshold and settings; only an AIS that comes out on the same pixels is filled in, and nothing else about it changes. A few at a time: call again with after until remaining is 0. {filled, failed: [result ids], after, remaining}.",
+        "parameters": [
+          {
+            "name": "batch_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "csrf_token": {
+                    "type": "string",
+                    "description": "From GET /api/me. Browser sessions only."
+                  },
+                  "after": {
+                    "type": "integer",
+                    "description": "Only results with a higher id: the after of the previous call."
+                  },
+                  "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 50
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "503": {
+            "$ref": "#/components/responses/E503"
+          }
+        }
+      }
     }
   },
   "components": {

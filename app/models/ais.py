@@ -1914,6 +1914,33 @@ def set_soma(store: Store, result_id: int, soma: Any, user_id: int, expect: int 
     return record
 
 
+# What remeasure (app/analysis/service.Library.remeasure) fills in on an AIS
+# accepted before area and volume were measured.
+REMEASURED = ("area_blob_um2", "area_width_um2", "volume_voxel_um3", "volume_tube_um3")
+
+
+def needs_area(row: Record) -> bool:
+    """Whether an accepted AIS lacks its area, or on a Z-stack its volume."""
+    return row.get("area_blob_um2") is None or bool(row.get("z_method") and row.get("volume_voxel_um3") is None)
+
+
+def set_measures(store: Store, result_id: int, values: dict[str, Any]) -> Record | None:
+    """Fill in an accepted AIS's area and volume (REMEASURED, numbers),
+    leaving everything else as it is; not an edit. None when it is gone."""
+    clean = {}
+    for k, v in values.items():
+        if k not in REMEASURED or not isinstance(v, (int, float)) or isinstance(v, bool) or not math.isfinite(v):
+            raise BatchError(f"{k} can't be set here")
+        clean[k] = v
+    with store.transaction() as tx:
+        record = tx.get(BUCKET_AIS_RESULTS, result_id)
+        if record is None:
+            return None
+        record = record | clean | {"rev": record.get("rev", 0) + 1}
+        tx.put(BUCKET_AIS_RESULTS, result_id, record)
+    return record
+
+
 def delete_result(store: Store, result_id: int, expect: int | None = None) -> list[dict[str, int]]:
     """Delete one, and renumber the rest of its image 1..k in their order.
     Returns the new numbers, [{id, n}], of the rows that changed."""

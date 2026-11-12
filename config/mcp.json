@@ -1196,6 +1196,39 @@
         "destructiveHint": false,
         "openWorldHint": false,
         "readOnlyHint": false,
+        "title": "Fill in missing AIS areas"
+      },
+      "description": "For a batch's accepted AIS saved before area (and on Z-stacks volume) was measured: trace each again from its saved clicks and settings and, when it comes out on the same pixels, fill in area_blob_um2, area_width_um2 (and volume_voxel_um3, volume_tube_um3); nothing else changes. A few at a time: call again with after until remaining is 0.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "after": {
+            "type": "integer"
+          },
+          "batch_id": {
+            "description": "The batch's id, from list_batches.",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "limit": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "batch_id"
+        ],
+        "type": "object"
+      },
+      "name": "fill_missing_areas",
+      "route": "POST /api/ais/batches/{batch_id}/fill-areas",
+      "title": "Fill in missing AIS areas"
+    },
+    {
+      "adminOnly": false,
+      "annotations": {
+        "destructiveHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false,
         "title": "Rename a batch"
       },
       "description": "Its accepted AIS carry the new name too. Whoever opened it, or an admin.",

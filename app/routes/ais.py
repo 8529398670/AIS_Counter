@@ -547,6 +547,57 @@ async def _own_batch(request: Request) -> tuple[dict[str, Any] | None, Response 
     return batch, None
 
 
+MAX_FILL = 50
+
+
+def _fill_areas(library: Library, store: Any, batch: dict[str, Any], after: int, limit: int) -> dict[str, Any]:
+    """Up to limit of a batch's accepted AIS with no area (batches.needs_area),
+    ids above after, traced again to fill it in (Library.remeasure)."""
+    images = {im["key"]: im for im in batch["images"]}
+    todo = sorted((r for r in batches.list_results(store, batch["id"]) if batches.needs_area(r) and r["id"] > after),
+                  key=lambda r: r["id"])
+    filled, failed, last = 0, [], after
+    for row in todo[:limit]:
+        last = row["id"]
+        image = images.get(row["image"])
+        values = None
+        if image is not None:
+            files = image["files"]
+            processed = batches.traced_sha(image, ap.traced(files))
+            raw = batches.traced_sha(image, "raw") if ap.kind(files) == "pair" else None
+            try:
+                values = library.remeasure(processed, raw, row)
+            except (ImageError, NotStored, ValueError):
+                values = None
+        if values and batches.set_measures(store, row["id"], values) is not None:
+            filled += 1
+        else:
+            failed.append(row["id"])
+    return {"filled": filled, "failed": failed, "after": last, "remaining": max(len(todo) - limit, 0)}
+
+
+async def batch_fill_areas(request: Request) -> Response:
+    """Body: {after?: result id, limit?: 1-50}: fill in the area (and on a
+    Z-stack the volume) of the batch's accepted AIS that have none, by
+    tracing each again from its saved clicks and settings; only one that
+    comes out on the same pixels is filled in. A few at a time: call again
+    with after until remaining is 0. {filled, failed: [ids], after, remaining}."""
+    body, refused = await _body(request)
+    if refused:
+        return refused
+    batch_id = parse_id(request.path_params["batch_id"])
+    store = get_store(request)
+    batch = await run(batches.get_batch, store, batch_id) if batch_id else None
+    if batch is None:
+        return not_found("no such batch")
+    after, limit = body.get("after", 0), body.get("limit", 10)
+    if not isinstance(after, int) or isinstance(after, bool) or after < 0:
+        return bad_request("after must be a result id")
+    if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= MAX_FILL:
+        return bad_request(f"limit must be 1 to {MAX_FILL}")
+    return JSONResponse(await run(_fill_areas, _library(request), store, batch, after, limit))
+
+
 async def batch_rename(request: Request) -> Response:
     """Body: {name}. Its accepted AIS carry the new name too."""
     body, refused = await _body(request)

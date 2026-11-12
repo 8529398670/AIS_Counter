@@ -176,3 +176,40 @@ def test_the_channels_dialog_shows_and_corrects_a_stack_s_calibration(h):
     traced = json.loads(post(h, "/api/ais/trace", ann, processed=image["files"]["stack"]["sha"], **CLICK).data)
     assert traced["ok"] and traced["z"]["z_step_um"] == 0.25
     assert post(h, path, ann, channels=[], stack={"z_step_um": -1, "pixel_um": 0.2}).status == 400
+
+
+def _saved_without_area(h, who, batch, image, answer, **change):
+    """answer saved as a row from before area and volume were measured, its
+    clicks, threshold and settings kept as the browser keeps them."""
+    m = answer["measures"]
+    row = {"length_um": m["length_um"], "pixels": answer["pixels"], "click_x": answer["clicks"][0][0],
+           "click_y": answer["clicks"][0][1], "click2_x": answer["clicks"][-1][0], "click2_y": answer["clicks"][-1][1],
+           "threshold_initial": answer["threshold_initial"], "threshold": answer["threshold"]}
+    row |= {k: answer["settings"][k] for k in ("smooth", "pixconv", "f", "kernel", "sigma", "strel", "min_pixels",
+                                                 "max_path", "max_passes", "spline_p", "window_um")}
+    row |= {k: v for k, v in answer["z"].items() if not k.startswith("volume")} | change
+    response = post(h, "/api/ais/results", who, batch_id=batch["id"], image=image["key"], row=row)
+    assert response.status == 200, response.data
+    return json.loads(response.data)
+
+
+def test_ais_saved_before_areas_get_them_filled_in(h):
+    ann = h.user()
+    batch = added(h, ann, randomize=False)
+    image = batch["images"][0]
+    answer = json.loads(post(h, "/api/ais/trace", ann, processed=image["files"]["stack"]["sha"], **CLICK).data)
+    good = _saved_without_area(h, ann, batch, image, answer)
+    moved = _saved_without_area(h, ann, batch, image, answer, pixels=answer["pixels"][1:], z_path=answer["z"]["z_path"][1:])
+    path = f"/api/ais/batches/{batch['id']}/fill-areas"
+    out = json.loads(post(h, path, ann, limit=1).data)
+    assert (out["filled"], out["failed"], out["after"], out["remaining"]) == (1, [], good["id"], 1)
+    out = json.loads(post(h, path, ann, after=out["after"]).data)
+    assert (out["filled"], out["failed"], out["remaining"]) == (0, [moved["id"]], 0)   # traced again, it isn't the same
+    rows = {r["id"]: r for r in ais.list_results(h.store, batch["id"])}
+    filled = rows[good["id"]]
+    assert filled["area_blob_um2"] == answer["shape"]["area_blob_um2"]
+    assert filled["area_width_um2"] == answer["shape"]["area_width_um2"]
+    assert filled["volume_voxel_um3"] == answer["z"]["volume_voxel_um3"] and filled["volume_tube_um3"] > 0
+    assert filled["length_um"] == good["length_um"] and "edited_at" not in filled   # nothing else changed
+    assert rows[moved["id"]]["area_blob_um2"] is None
+    assert post(h, path, ann, limit=0).status == 400

@@ -832,6 +832,43 @@ const Batches = {
     return Object.assign( {} , asked.channels.length ? { channels: asked.channels } : {} , asked.stack ? { stack: asked.stack } : {} );
   },
 
+  // Fill in the area (and Z-stack volume) of this batch's AIS saved without
+  // one, a few at a time (POST fill-areas), its progress on the line above
+  // the cards. An AIS whose new trace differs from its saved one is left as
+  // it is, and counted.
+  async fillAreas( b ) {
+    if ( this.filling ) return;
+    this.filling = true;
+    const line = Dom.get( "batches-export-status" );
+    const say = ( text ) => {
+      Dom.text( line , text );
+      Dom.show( line , Boolean( text ) );
+    };
+    let after = 0;
+    let filled = 0;
+    let failed = 0;
+    try {
+      for ( ;; ) {
+        const out = await Api.post( "/api/ais/batches/" + b.id + "/fill-areas" , { after: after , limit: 10 } );
+        filled += out.filled;
+        failed += out.failed.length;
+        after = out.after;
+        say( I18n.get( "batches.fill_areas_progress" ).replace( "{name}" , b.name ).replace( "{done}" , filled + failed )
+          .replace( "{total}" , filled + failed + out.remaining ) );
+        if ( !out.remaining ) break;
+      }
+      say( "" );
+      Dom.toast( I18n.get( filled + failed ? "batches.fill_areas_done" : "batches.fill_areas_none" )
+        .replace( "{filled}" , filled ).replace( "{failed}" , failed ).replace( "{name}" , b.name ) );
+      if ( Ais.batch && Ais.batch.id === b.id ) await Ais.loadBatchRows();
+    } catch ( error ) {
+      say( "" );
+      App.showError( error.message );
+    } finally {
+      this.filling = false;
+    }
+  },
+
   async editChannels( b ) {
     try {
       if ( await Channels.edit( b.id , null ) ) await this.refresh( true );
@@ -1128,6 +1165,8 @@ const Batches = {
       if ( items.length ) items.push( divider() );
       items.push( this.menuItem( "bi-palette" , I18n.get( "channels.edit" ) , () => this.editChannels( b ) ) );
     }
+    // AIS saved before area and volume were measured: trace them again for it.
+    if ( b.ais ) items.push( this.menuItem( "bi-bounding-box" , I18n.get( "batches.fill_areas" ) , () => this.fillAreas( b ) ) );
     if ( canChange ) {
       items.push( divider() );
       items.push( b.archived_at
