@@ -444,14 +444,14 @@ def test_auto_mode_lifts_every_candidate(tmp_path):
         assert found and all("z" in c for c in found)
 
 
-def test_a_soma_start_on_a_stack_says_it_needs_a_czi(tmp_path):
-    from app.analysis.images import ImageError
+def test_a_soma_start_on_a_stack_without_cell_bodies_falls_back_to_both_ends(tmp_path):
+    from app.analysis.service import NO_SOMA_NOTE
 
     lib, sha, _ = stored_stack(tmp_path)
-    for run in (lib.detect, lib.detect_fast):
-        with pytest.raises(ImageError, match="soma"):
-            run(sha, None, 0.01, aa.DEFAULT, "soma")
     assert lib.soma(sha) is None
+    for run in (lib.detect, lib.detect_fast):
+        found = run(sha, None, 0.01, aa.DEFAULT, "soma")["candidates"]
+        assert found and all(NO_SOMA_NOTE in c["notes"] and "z" in c for c in found)
 
 
 def test_a_trace_that_can_not_be_lifted_still_counts(tmp_path, monkeypatch):
@@ -504,3 +504,32 @@ def test_a_stack_exports_like_a_czi_with_one_channel(tmp_path):
     assert lib.processed_tiff(sha)[:2] in (b"II", b"MM")
     traced, raw = lib.matlab_pair(sha, None)
     assert traced[:2] in (b"II", b"MM") and raw[:2] in (b"II", b"MM")
+
+
+def soma_stack_planes(slices=5, depth=3):
+    """stack_planes' axon in plane 1, and a soma in plane 0 sharpest at slice
+    index depth: its stain fades a slice either side."""
+    out = stack_planes(1, slices)
+    yy, xx = np.mgrid[0:out[0].shape[0], 0:out[0].shape[1]]
+    body = np.exp(-(((xx - 200) ** 2 + (yy - 160) ** 2) / (2 * 22.0 ** 2)) ** 2)
+    for z, rgb in enumerate(out):
+        rgb[..., 0] = (20 + 220 * body * np.exp(-((z - depth) ** 2) / 1.0)).astype(np.uint8)
+    return out
+
+
+def test_a_stack_finds_somata_in_its_other_plane_with_their_depth(tmp_path):
+    lib, sha, _ = stored_stack(tmp_path, soma_stack_planes())
+    found = lib.soma(sha)
+    assert found is not None and found.mask[160, 200]
+    depths = found.bodies(True).depths
+    assert depths and abs(depths[0] - 4) < 0.3          # slice index 3 is slice number 4
+    out = lib.pair(sha, [[[x, 110] for x in range(60, 120)]], OPTIONS["pixel_um"])
+    assert out["bodies"] and abs(out["bodies"][0]["z"] - 4) < 0.3
+
+
+def test_a_stack_trace_has_area_and_volume_two_ways(tmp_path):
+    lib, sha, _ = stored_stack(tmp_path)
+    out = lib.trace(sha, None, (38.0, 101.0), None, 0.01)
+    assert out["ok"] and out["z"] is not None
+    assert out["shape"]["area_blob_um2"] > 0 and out["shape"]["area_width_um2"] > 0
+    assert out["z"]["volume_voxel_um3"] > 0 and out["z"]["volume_tube_um3"] > 0

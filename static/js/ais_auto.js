@@ -361,16 +361,16 @@ const AisAuto = {
     return run.pending.get( index );
   },
 
-  // "soma" on a Z-stack (no somata) is traced from both ends instead; any
-  // other image's somata come from whichever channel shows cell bodies, and
-  // the server starts from both ends itself when none does.
+  // Any image's somata come from whichever channel shows cell bodies (a
+  // Z-stack's from its slices'), and the server starts from both ends itself
+  // when none does.
   startFor( entry , start ) {
-    return start === "soma" && !this.hasSoma( entry ) ? "both" : start;
+    return start;
   },
 
-  // As app/analysis/auto_params.has_soma: any image but a Z-stack may have somata.
+  // As app/analysis/auto_params.has_soma: any image may have somata.
   hasSoma( entry ) {
-    return Ais.kind( entry ) !== "stack";
+    return Boolean( entry );
   },
 
   // Settings > Auto mode's filters: long, bright and wide enough, and (a

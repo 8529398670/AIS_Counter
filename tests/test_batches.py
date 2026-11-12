@@ -143,6 +143,16 @@ def test_soma_distance_is_set_cleared_and_dropped_by_an_edit(store):
     edited = ais.update_result(store, first["id"], row(2.0), 2)
     assert all(edited[k] is None for k in SOMA) and "soma_at" not in edited
     assert ais.set_soma(store, 999, SOMA, 1) is None
+    # A Z-stack's distance is 3D, with how it splits; an ordinary one has no split at all.
+    deep = ais.set_soma(store, first["id"], SOMA | {"soma_xy_um": 4.0, "soma_dz_um": 2.7}, 2)
+    assert (deep["soma_xy_um"], deep["soma_dz_um"]) == (4.0, 2.7)
+    flat = ais.set_soma(store, first["id"], SOMA, 2)
+    assert "soma_xy_um" not in flat and "soma_dz_um" not in flat
+    with pytest.raises(ais.BatchError):
+        ais.set_soma(store, first["id"], SOMA | {"soma_dz_um": "2"}, 2)
+    stacked = ais.update_result(store, first["id"], row(2.0) | {"area_blob_um2": 3.5, "volume_tube_um3": 1.25,
+                                                                 "z_method": "lift"}, 2)
+    assert (stacked["area_blob_um2"], stacked["volume_tube_um3"]) == (3.5, 1.25)
 
 
 @pytest.mark.parametrize("soma", [SOMA | {"soma_um": "4"}, SOMA | {"soma_x": True}, SOMA | {"soma_px": -1},

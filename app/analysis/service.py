@@ -50,6 +50,7 @@ import numpy as np
 from scipy import ndimage as ndi
 
 from app.analysis import ais_auto as aa
+from app.analysis import area
 from app.analysis import detect as auto
 from app.analysis import fast
 from app.analysis import mlcompat as ml
@@ -201,15 +202,8 @@ class Library:
         manifest = self._manifest(sha)
         if manifest is None:
             raise ImageError("not a Z-stack")
-        planes = []
-        for part in manifest["slices"]:
-            arr = read_planes(self.file_path(part["sha"]).read_bytes())
-            if arr.shape[2] > 1 and manifest["plane"] >= arr.shape[2]:
-                raise ImageError("a slice has no such channel")
-            planes.append(arr[:, :, 0 if arr.shape[2] == 1 else manifest["plane"]])
-        if len({(p.shape, p.dtype) for p in planes}) != 1:
-            raise ImageError("the slices of a stack differ in size")
-        stack = np.stack(planes)
+        every = self._stack_planes(manifest)
+        stack = np.ascontiguousarray(every[..., 0 if every.shape[3] == 1 else manifest["plane"]])
         with self._lock:
             self._stacks[sha] = stack
             while len(self._stacks) > STACK_CACHE_SIZE:
@@ -228,6 +222,36 @@ class Library:
         """settings with a Z-stack's own pixel size, which beats any in Settings."""
         manifest = self._manifest(sha)
         return settings if manifest is None else dataclasses.replace(settings, pixconv=manifest["pixel_um"])
+
+    def _stack_planes(self, manifest: dict[str, Any]) -> np.ndarray:
+        """Every plane of a stack's slices, (slices, height, width, planes)."""
+        planes = []
+        for part in manifest["slices"]:
+            arr = read_planes(self.file_path(part["sha"]).read_bytes())
+            if arr.shape[2] > 1 and manifest["plane"] >= arr.shape[2]:
+                raise ImageError("a slice has no such channel")
+            planes.append(arr)
+        if len({(p.shape, p.dtype) for p in planes}) != 1:
+            raise ImageError("the slices of a stack differ in size")
+        return np.stack(planes)
+
+    def _stack_soma(self, sha: str) -> somata.Somata | None:
+        """A Z-stack's somata: from whichever plane's max projection shows cell
+        bodies (soma.best; the AIS plane only when no other does), each body
+        with its depth (soma.depths) in the stack's slice numbers."""
+        manifest = self._manifest(sha)
+        every = self._stack_planes(manifest)
+        count = every.shape[3]
+        projections = [every[..., p].max(axis=0) for p in range(count)]
+        picked = somata.best(projections, manifest["pixel_um"], manifest["plane"] if count > 1 else 0)
+        if picked is None:
+            return None
+        index, found = picked
+        zs = [s["z"] for s in manifest["slices"]]
+        for bodies in (found.split, found.whole):
+            if bodies is not None:
+                bodies.depths = somata.depths(every[..., index], bodies, zs)
+        return found
 
     def _lifted(self, sha: str, answer: dict[str, Any], z_method: str | None) -> dict[str, Any]:
         """answer (run_click's) with, on a Z-stack, its 3D measures as z: None
@@ -248,6 +272,12 @@ class Library:
                                manifest["pixel_um"], manifest["z_step_um"])
         except (ValueError, IndexError, ArithmeticError, ml.MatlabError):
             found = None
+        if found is not None and found.get("z_path"):
+            try:
+                found |= area.volumes(stack, levels, answer, found["z_path"], manifest["pixel_um"],
+                                      manifest["z_step_um"]) or {}
+            except (ValueError, IndexError, ArithmeticError):
+                pass
         answer["z"] = None if found is None else found | {"z_method": chosen.id}
         if found is None:
             answer.setdefault("notes", []).append(UNLIFTED_NOTE)
@@ -328,14 +358,20 @@ class Library:
         """An image's somata (soma.py), kept per image: from the soma channel
         a view names, else a .czi's soma stain (Czi.soma_name), when it shows
         cell bodies well enough; else from whichever channel shows them best
-        (soma.best; the AIS channel only when no other does). None when none
-        does, and always for a Z-stack."""
-        if self.is_stack(sha):
-            return None
+        (soma.best; the AIS channel only when no other does), a Z-stack's
+        from its slices' planes with each body's depth (_stack_soma). None
+        when none does."""
         with self._lock:
             if sha in self._somata:
                 self._somata.move_to_end(sha)
                 return self._somata[sha]
+        if self.is_stack(sha):
+            found = self._stack_soma(sha)
+            with self._lock:
+                self._somata[sha] = found
+                while len(self._somata) > CACHE_SIZE:
+                    self._somata.popitem(last=False)
+            return found
         view = self._view(sha)
         data = self.file_path(sha).read_bytes()
         if is_czi(data):
@@ -365,12 +401,9 @@ class Library:
 
     def _soma_for(self, sha: str, start: str) -> tuple[somata.Somata | None, str]:
         """The somata detect starts from, and the start to use: "soma" falls
-        back to "both" (with NO_SOMA_NOTE) when no channel shows cell bodies.
-        A Z-stack has none to find, so it is told so."""
+        back to "both" (with NO_SOMA_NOTE) when no channel shows cell bodies."""
         found = self.soma(sha)
         if start == "soma" and found is None:
-            if self.is_stack(sha):
-                raise ImageError("start \"soma\" needs a .czi or TIFF whose channels show cell bodies; a Z-stack has none")
             return None, "both"
         return found, start
 
@@ -510,10 +543,11 @@ class Library:
         CZI, with the somata it found (start "soma" needs them)."""
         settings = self._calibrated(processed, settings)
         prep = self.prepared(processed, settings)
-        if not raw and self.is_stack(processed) and start != "soma":
-            out = auto.detect(prep, self.array(processed), threshold, settings, start, exclude)
+        if not raw and self.is_stack(processed):
+            soma, used = self._soma_for(processed, start)
+            out = auto.detect(prep, self.array(processed), threshold, settings, used, exclude, soma=soma)
             out["candidates"] = [self._lifted(processed, c, z_method) for c in out["candidates"]]
-            return out
+            return self._noted(out, start, used)
         if not raw and self.is_czi(processed):
             soma, used = self._soma_for(processed, start)
             out = auto.detect(prep, self.array(processed), threshold, settings, used, exclude, soma=soma)
@@ -555,10 +589,11 @@ class Library:
         """detect on Settings' Method "ais_auto.m (fast)" (fast.py)."""
         settings = self._calibrated(processed, settings)
         prep = self.prepared(processed, settings)
-        if not raw and self.is_stack(processed) and start != "soma":
-            out = fast.detect(prep, self.array(processed), threshold, settings, start, exclude)
+        if not raw and self.is_stack(processed):
+            soma, used = self._soma_for(processed, start)
+            out = fast.detect(prep, self.array(processed), threshold, settings, used, exclude, soma=soma)
             out["candidates"] = [self._lifted(processed, c, z_method) for c in out["candidates"]]
-            return out
+            return self._noted(out, start, used)
         if not raw and self.is_czi(processed):
             soma, used = self._soma_for(processed, start)
             out = fast.detect(prep, self.array(processed), threshold, settings, used, exclude, soma=soma)
@@ -608,7 +643,8 @@ def shape(sel: np.ndarray, raw: np.ndarray, pixels: list[list[int]], ais_start: 
     is, which auto mode filters specks by. width_um: the median of twice the
     distance to the blob's edge (from the 3x3 around each point, as the spline
     can run beside the blob); brightness: the mean raw intensity there over
-    bright_ref."""
+    bright_ref. With the AIS's area two ways, and its width at each point
+    (area.areas)."""
     n = len(pixels)
     a, b = max(int(ais_start), 1), min(int(ais_end), n)
     section = np.array(pixels[a - 1:b] if b - a >= 1 else pixels)
@@ -621,7 +657,8 @@ def shape(sel: np.ndarray, raw: np.ndarray, pixels: list[list[int]], ais_start: 
     if raw.ndim == 3:
         raw = raw[:, :, 0]
     level = raw[section[:, 1] - 1, section[:, 0] - 1].astype(np.float64).mean()
-    return {"width_um": float(np.median(2 * near[r, c]) * pixconv), "brightness": float(level / bright_ref)}
+    return ({"width_um": float(np.median(2 * near[r, c]) * pixconv), "brightness": float(level / bright_ref)}
+            | area.areas(sel, 0, 0, pixels, ais_start, ais_end, pixconv))
 
 
 def _xy(points) -> list[list[int]]:

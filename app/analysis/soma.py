@@ -67,6 +67,7 @@ class Bodies:
     labels: np.ndarray          # int32 at the working size: 0 outside, k + 1 in body k
     hotspots: list[list[float]] # per body, its hotspot as a full-size 1-based [x, y]
     step: int                   # full-size pixels per working pixel
+    depths: list[float] | None = None   # Z-stacks: each body's depth in slice numbers (depths)
 
 
 @dataclass
@@ -203,6 +204,27 @@ def _keep_pieces(region: np.ndarray, local: np.ndarray, seeds: list[tuple[int, i
             break
         seeds = [q for i, q in enumerate(seeds) if i != small[-1]]
     return seeds
+
+
+def depths(volume: np.ndarray, bodies: Bodies, zs: list[float]) -> list[float]:
+    """Each body's depth in a Z-stack: volume (slices, height, width) of the
+    plane the somata were found in; zs each slice's number. The centre of the
+    body's brightness through the slices, above its dimmest slice, squared so
+    the in-focus slices lead."""
+    small = volume[:, ::bodies.step, ::bodies.step].astype(np.float64)
+    h, w = min(small.shape[1], bodies.labels.shape[0]), min(small.shape[2], bodies.labels.shape[1])
+    labels = bodies.labels[:h, :w]
+    z = np.asarray(zs, np.float64)
+    out = []
+    for k in range(1, len(bodies.hotspots) + 1):
+        inside = labels == k
+        if not inside.any():
+            out.append(float(np.median(z)))
+            continue
+        means = small[:, :h, :w][:, inside].mean(axis=1)
+        weight = (means - means.min()) ** 2
+        out.append(float((z * weight).sum() / weight.sum()) if weight.sum() > 0 else float(z[int(np.argmax(means))]))
+    return [round(v, 3) for v in out]
 
 
 def _width(piece: np.ndarray) -> float:

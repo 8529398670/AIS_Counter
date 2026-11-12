@@ -107,6 +107,8 @@ RESULT_NUMBERS = ("length_um", "start_um", "end_um", "mid_um", "max_um", "arc_um
                   "spline_p", "window_um",
                   # how wide and bright the measured AIS is (app/analysis/service.shape)
                   "width_um", "brightness",
+                  # its area, two ways (app/analysis/area.py)
+                  "area_blob_um2", "area_width_um2",
                   # how far its start is from the soma, measured by hand (set_soma)
                   *SOMA_NUMBERS)
 # origin: "auto" for one auto mode found, empty for a click.
@@ -123,7 +125,11 @@ MAX_TYPES = 50
 # What a row measured on a Z-stack adds (app/analysis/zlength.py). Kept apart
 # from RESULT_NUMBERS so a row on an ordinary image stays exactly as it was:
 # these are written only when present. z_clipped is 0 or 1.
-Z_NUMBERS = ("length_3d_um", "length_xy_um", "z_start", "z_end", "z_span_um", "z_step_um", "z_confidence", "z_clipped")
+Z_NUMBERS = ("length_3d_um", "length_xy_um", "z_start", "z_end", "z_span_um", "z_step_um", "z_confidence", "z_clipped",
+             "volume_voxel_um3", "volume_tube_um3")
+# On a Z-stack the soma distance is 3D (soma_um); these say how it splits:
+# across the image and in depth. Optional, as Z_NUMBERS.
+SOMA_Z_NUMBERS = ("soma_xy_um", "soma_dz_um")
 # The auto mode settings a row auto mode saved was found with (static/js/
 # ais_auto.js autoFields): its checking (each / end / all), method and start
 # end, then the method's filters in Settings' units (µm, %, ratio; 0 is off).
@@ -1719,7 +1725,7 @@ def _clean_z(row: dict[str, Any], pixels: int) -> dict[str, Any]:
     on an ordinary image. z_path is the z of each of pixels, None outside the
     AIS, so a length can be worked out again if the z step was wrong."""
     out: dict[str, Any] = {}
-    for k in Z_NUMBERS:
+    for k in Z_NUMBERS + SOMA_Z_NUMBERS:
         v = row.get(k)
         if v is not None:
             if not isinstance(v, (int, float)) or isinstance(v, bool) or not math.isfinite(v):
@@ -1853,6 +1859,12 @@ def set_soma(store: Store, result_id: int, soma: Any, user_id: int, expect: int 
             if not isinstance(v, (int, float)) or isinstance(v, bool) or v != v or v < 0:
                 raise BatchError(f"{k} must be a number")
             values[k] = v
+        for k in SOMA_Z_NUMBERS:
+            v = soma.get(k)
+            if v is not None:
+                if not isinstance(v, (int, float)) or isinstance(v, bool) or v != v or v < 0:
+                    raise BatchError(f"{k} must be a number")
+                values[k] = v
     else:
         raise BatchError("soma must be an object or null")
     with store.transaction() as tx:
@@ -1860,7 +1872,8 @@ def set_soma(store: Store, result_id: int, soma: Any, user_id: int, expect: int 
         if record is None:
             return None
         _check_rev(record, expect)
-        record = record | values | {"soma_at": to_iso(utc_now()) if soma is not None else None,
+        # The 3D split only when given, so a row on an ordinary image stays as it was.
+        record = {k: v for k, v in record.items() if k not in SOMA_Z_NUMBERS} | values | {"soma_at": to_iso(utc_now()) if soma is not None else None,
                                     "soma_by": user_id if soma is not None else None,
                                     "rev": record.get("rev", 0) + 1}
         tx.put(BUCKET_AIS_RESULTS, result_id, record)

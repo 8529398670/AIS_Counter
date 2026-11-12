@@ -218,16 +218,15 @@ def kind(files: dict[str, Any]) -> str:
 
 
 def has_soma(image: dict[str, Any]) -> bool:
-    """AisAuto.hasSoma: whether the image may have somata -- any but a
-    Z-stack, as any channel showing cell bodies gives them (soma.best); the
-    server starts from both ends when none does."""
-    return not (image.get("files") or {}).get("stack")
+    """AisAuto.hasSoma: whether the image may have somata -- any, as any
+    channel showing cell bodies gives them (soma.best; a Z-stack's from its
+    slices); the server starts from both ends when none does."""
+    return bool(image)
 
 
 def start_for(image_kind: str, start: str, soma: bool = True) -> str:
-    """AisAuto.startFor: "soma" on an image that can have no somata (a
-    Z-stack; soma: has_soma) is "both"."""
-    return "both" if start == "soma" and (image_kind == "stack" or not soma) else start
+    """AisAuto.startFor: "soma" as asked, unless the image can have no somata."""
+    return "both" if start == "soma" and not soma else start
 
 
 def _js_round(x: float) -> float:
@@ -291,6 +290,8 @@ def row_for(files: dict[str, Any], r: dict[str, Any], origin: str, source: str,
         "notes": "; ".join(r.get("notes") or []), "pixels": r["pixels"], "origin": origin,
         "width_um": shape.get("width_um") if shape else None,
         "brightness": shape.get("brightness") if shape else None,
+        "area_blob_um2": shape.get("area_blob_um2") if shape else None,
+        "area_width_um2": shape.get("area_width_um2") if shape else None,
     }
     for key in SETTING_COLS:
         if key != "smooth":

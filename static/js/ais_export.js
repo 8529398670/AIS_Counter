@@ -14,10 +14,11 @@ const AisExport = {
   cols: [ "batch_name" , "batch_id" , "image" , "n" , "file" , "source" , "length_um" , "start_um" , "end_um" , "mid_um" , "max_um" , "arc_um" ,
     "threshold_initial" , "threshold" , "click_x" , "click_y" , "click2_x" , "click2_y" , "profile_points" ,
     "smooth" , "pixconv" , "f" , "kernel" , "sigma" , "strel" , "min_pixels" , "max_path" , "max_passes" , "spline_p" , "window_um" ,
-    "width_um" , "brightness" , "soma_um" , "soma_px" , "soma_ais_x" , "soma_ais_y" , "soma_x" , "soma_y" , "origin" , "accepted_at" , "edited_at" , "notes" ],
+    "width_um" , "brightness" , "area_blob_um2" , "area_width_um2" , "soma_um" , "soma_px" , "soma_ais_x" , "soma_ais_y" , "soma_x" , "soma_y" , "origin" , "accepted_at" , "edited_at" , "notes" ],
   // What a row measured on a Z-stack adds, at the end so nothing else moves,
   // and only when there are such rows (colsFor).
-  zCols: [ "length_3d_um" , "length_xy_um" , "z_start" , "z_end" , "z_span_um" , "z_step_um" , "z_confidence" , "z_clipped" , "z_method" ],
+  zCols: [ "length_3d_um" , "length_xy_um" , "z_start" , "z_end" , "z_span_um" , "z_step_um" , "z_confidence" , "z_clipped" ,
+    "volume_voxel_um3" , "volume_tube_um3" , "soma_xy_um" , "soma_dz_um" , "z_method" ],
   // The auto mode settings a row auto mode saved was found with (ais_auto.js
   // autoFields), after those, and only when there are such rows (colsFor).
   autoCols: [ "auto_method" , "auto_review" , "auto_start" , "auto_min_length" , "auto_min_length_shown" ,

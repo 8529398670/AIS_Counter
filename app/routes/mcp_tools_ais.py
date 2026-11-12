@@ -598,7 +598,7 @@ def _specs() -> list[Spec]:
              props={"result_id": RESULT_ID, "row": ROW, "expect": EXPECT}, required=("result_id", "row"),
              path_args=("result_id",)),
         Spec("set_result_soma", "Set an AIS's soma distance",
-             "soma: {soma_um, soma_px, soma_ais_x, soma_ais_y, soma_x, soma_y}, or null to clear it. The trace stays as it is.",
+             "soma: {soma_um, soma_px, soma_ais_x, soma_ais_y, soma_x, soma_y}, plus on a Z-stack soma_xy_um and soma_dz_um (soma_um is then the 3D distance), or null to clear it. The trace stays as it is.",
              ais.result_soma, "/api/ais/results/{result_id}/soma", "POST",
              props={"result_id": RESULT_ID, "soma": {"type": ["object", "null"]}, "expect": EXPECT},
              required=("result_id", "soma"), path_args=("result_id",)),

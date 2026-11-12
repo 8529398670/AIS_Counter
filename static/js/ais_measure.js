@@ -493,6 +493,41 @@ const AisMeasure = {
     return { px: Math.round( px * 1000 ) / 1000 , um: Math.round( px * Ais.pixconvFor( Ais.images[ Ais.index ] ) * 10000 ) / 10000 };
   },
 
+  // A Z-stack's soma distance in 3D, or null when A's or B's depth is not
+  // known: A's from the row's lifted path (the nearest point that has one:
+  // the trace's own ends lie just outside the measured section), B's from
+  // the soma it is on, else the nearest (AisSomata.bodies' z).
+  distance3d( row , a , b , xyUm ) {
+    const path = row && row.z_path;
+    if ( !path || !row.z_step_um || !row.pixels ) return null;
+    let best = null;
+    row.pixels.forEach( ( p , i ) => {
+      if ( path[ i ] == null ) return;
+      const d = Math.hypot( p[ 0 ] - a[ 0 ] , p[ 1 ] - a[ 1 ] );
+      if ( !best || d < best.d ) best = { d: d , z: path[ i ] };
+    } );
+    const zb = this.somaDepth( b );
+    if ( !best || zb == null ) return null;
+    const dz = Math.abs( best.z - zb ) * row.z_step_um;
+    return { um: Math.round( Math.hypot( xyUm , dz ) * 10000 ) / 10000 , dz: Math.round( dz * 10000 ) / 10000 };
+  },
+
+  // The depth of the soma b is on (inside its ellipse), else of the nearest one.
+  somaDepth( b ) {
+    const bodies = ( AisSomata.bodies() || [] ).filter( ( e ) => e.z != null );
+    let best = null;
+    bodies.forEach( ( e ) => {
+      const t = e.angle_deg * Math.PI / 180;
+      const dx = b[ 0 ] - e.cx;
+      const dy = b[ 1 ] - e.cy;
+      const u = ( dx * Math.cos( t ) + dy * Math.sin( t ) ) / Math.max( e.a , 1e-6 );
+      const v = ( -dx * Math.sin( t ) + dy * Math.cos( t ) ) / Math.max( e.b , 1e-6 );
+      const score = Math.hypot( u , v );   // 1 on the edge: within a little of it counts as on it
+      if ( !best || score < best.score ) best = { score: score , z: e.z };
+    } );
+    return best ? best.z : null;
+  },
+
   // Whether what is placed is not what the row has saved.
   changed() {
     const r = this.row;
@@ -505,8 +540,12 @@ const AisMeasure = {
     if ( this.saving || !this.row ) return;
     if ( this.changed() ) {
       const d = this.distance( this.a , this.b );
-      const ok = await this.post( { soma_um: d.um , soma_px: d.px , soma_ais_x: this.a[ 0 ] , soma_ais_y: this.a[ 1 ] ,
-        soma_x: this.b[ 0 ] , soma_y: this.b[ 1 ] } );
+      const soma = { soma_um: d.um , soma_px: d.px , soma_ais_x: this.a[ 0 ] , soma_ais_y: this.a[ 1 ] ,
+        soma_x: this.b[ 0 ] , soma_y: this.b[ 1 ] };
+      // On a Z-stack: through the slices, from A's depth to the soma's.
+      const deep = this.distance3d( this.row , this.a , this.b , d.um );
+      if ( deep ) Object.assign( soma , { soma_um: deep.um , soma_xy_um: d.um , soma_dz_um: deep.dz } );
+      const ok = await this.post( soma );
       if ( !ok ) return;
     }
     this.go( 1 );

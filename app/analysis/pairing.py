@@ -302,6 +302,8 @@ def pair_image(smooth: np.ndarray, bodies: Bodies | None, traces: list[list[list
         for k in range(len(bodies.hotspots)):
             e = fit_ellipse(bodies, k, shape, pixel_um)
             if e is not None:
+                if bodies.depths is not None:
+                    e["z"] = bodies.depths[k]      # a Z-stack's: the soma's depth, in slice numbers
                 ellipses.append(e)
                 outlines.append(edges[k])
     background = float(np.median(smooth))

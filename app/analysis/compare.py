@@ -7,7 +7,10 @@ several measures, never mixed:
 
 - "ais_length": each accepted AIS's length_um;
 - "ais_soma": each accepted AIS's distance to its soma (the Measure tool's AIS
-  modes, soma_um), where one was measured;
+  modes, soma_um; 3D on a Z-stack), where one was measured;
+- "ais_area_blob" / "ais_area_width": its area two ways (app/analysis/area.py);
+- "ais_length_3d": on a Z-stack, its length through the slices;
+- "ais_volume_voxel" / "ais_volume_tube": on a Z-stack, its volume two ways;
 - "type:<name>": each line the Measure tool recorded with that type ("type:"
   for lines with none). A "Soma distance" line stays apart from ais_soma.
 
@@ -57,9 +60,15 @@ from app.models import ais as batches
 
 AIS_LENGTH = "ais_length"
 AIS_SOMA = "ais_soma"
+# Each measure with the row field it comes from, in the order they are shown.
+ROW_MEASURES = ((AIS_LENGTH, "length_um"), (AIS_SOMA, "soma_um"), ("ais_area_blob", "area_blob_um2"),
+                ("ais_area_width", "area_width_um2"), ("ais_length_3d", "length_3d_um"),
+                ("ais_volume_voxel", "volume_voxel_um3"), ("ais_volume_tube", "volume_tube_um3"))
 TYPE_PREFIX = "type:"
 # The names a measure has in the plots when the page sends none.
-DEFAULT_LABELS = {AIS_LENGTH: "AIS length", AIS_SOMA: "AIS to soma"}
+DEFAULT_LABELS = {AIS_LENGTH: "AIS length", AIS_SOMA: "AIS to soma", "ais_area_blob": "AIS area (blob)",
+                  "ais_area_width": "AIS area (widths)", "ais_length_3d": "AIS length 3D",
+                  "ais_volume_voxel": "AIS volume (voxels)", "ais_volume_tube": "AIS volume (tube)"}
 
 
 class CompareError(ValueError):
@@ -115,8 +124,7 @@ def collect(store: Store, batch_ids: list[int]) -> dict[str, Any]:
                 continue
             given = im.get("treatment", "").strip()
             treatment = spelling.setdefault(given.casefold(), given) if given else ""
-            mine = [(AIS_LENGTH, r.get("length_um")) for r in rows.get(im["key"], [])]
-            mine += [(AIS_SOMA, r.get("soma_um")) for r in rows.get(im["key"], [])]
+            mine = [(measure, r.get(field)) for measure, field in ROW_MEASURES for r in rows.get(im["key"], [])]
             mine += [(TYPE_PREFIX + (m.get("type") or ""), m.get("length_um")) for m in lines.get(im["key"], [])]
             mine = [(measure, float(v)) for measure, v in mine if _number(v)]
             lengths = [v for measure, v in mine if measure == AIS_LENGTH]
@@ -131,9 +139,9 @@ def collect(store: Store, batch_ids: list[int]) -> dict[str, Any]:
 
 
 def _measures(values: list[dict[str, Any]]) -> list[str]:
-    """AIS length, AIS to soma, then the line types by name."""
+    """The AIS measures (ROW_MEASURES' order), then the line types by name."""
     found = {v["measure"] for v in values}
-    fixed = [m for m in (AIS_LENGTH, AIS_SOMA) if m in found]
+    fixed = [m for m, _ in ROW_MEASURES if m in found]
     return fixed + sorted(found - set(fixed), key=str.casefold)
 
 

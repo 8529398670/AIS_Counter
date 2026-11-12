@@ -21,6 +21,7 @@ import numpy as np
 from scipy import ndimage as ndi
 
 from app.analysis import ais_auto as aa
+from app.analysis import area
 from app.analysis import detect as auto
 from app.analysis import learned
 from app.analysis import mlcompat as ml
@@ -293,7 +294,8 @@ def shape(sel: np.ndarray, top: int, left: int, raw: np.ndarray, pixels: list[li
     if raw.ndim == 3:
         raw = raw[:, :, 0]
     level = raw[section[:, 1] - 1, section[:, 0] - 1].astype(np.float64).mean()
-    return {"width_um": float(np.median(2 * near[r, c]) * pixconv), "brightness": float(level / bright_ref)}
+    return ({"width_um": float(np.median(2 * near[r, c]) * pixconv), "brightness": float(level / bright_ref)}
+            | area.areas(sel, top, left, pixels, ais_start, ais_end, pixconv))
 
 
 def run_click(prep: aa.PreparedImage, raw: np.ndarray | None, click: tuple[float, float],

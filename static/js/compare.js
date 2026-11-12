@@ -19,7 +19,9 @@ const Compare = {
   // The names the measure ids get, in sheets and the plots' titles.
   labels() {
     return { ais_length: I18n.get( "compare.ais_length" ) , ais_soma: I18n.get( "compare.ais_soma" ) ,
-      "type:": I18n.get( "ais.measure_type_none" ) };
+      ais_area_blob: I18n.get( "compare.ais_area_blob" ) , ais_area_width: I18n.get( "compare.ais_area_width" ) ,
+      ais_length_3d: I18n.get( "compare.ais_length_3d" ) , ais_volume_voxel: I18n.get( "compare.ais_volume_voxel" ) ,
+      ais_volume_tube: I18n.get( "compare.ais_volume_tube" ) , "type:": I18n.get( "ais.measure_type_none" ) };
   },
 
   measureName( id ) {

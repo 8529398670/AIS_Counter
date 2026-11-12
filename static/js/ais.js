@@ -2113,6 +2113,8 @@ const Ais = {
       origin: origin,
       width_um: r.shape ? r.shape.width_um : null,
       brightness: r.shape ? r.shape.brightness : null,
+      area_blob_um2: r.shape ? r.shape.area_blob_um2 : null,
+      area_width_um2: r.shape ? r.shape.area_width_um2 : null,
     };
     // The constants it was measured with (app/analysis/ais_auto.py Settings).
     AisExport.settingCols.forEach( ( key ) => { if ( key !== "smooth" ) row[ key ] = r.settings[ key ]; } );
@@ -2509,6 +2511,7 @@ const Ais = {
         Dom.el( "td" , { text: this.fmt( row.start_um ) } ),
         Dom.el( "td" , { text: this.fmt( row.end_um ) } ),
         Dom.el( "td" , { text: this.fmt( row.max_um ) } ),
+        this.areaCell( row ),
         Dom.el( "td" , { children: [ this.somaCell( row ) ] } ),
         Dom.el( "td" , { text: this.fmt( row.threshold ) } ),
         Dom.el( "td" , { text: "(" + row.click_x + ", " + row.click_y + ")" } ),
@@ -2524,6 +2527,19 @@ const Ais = {
     Dom.get( "ais-clear" ).disabled = !this.clearable().length;
     Dom.show( Dom.get( "ais-export-measurements-item" ) , Boolean( lines ) );
     AisMeasure.render();
+  },
+
+  // The AIS's area (blob pixels); its hover shows the other way of
+  // measuring it and, on a Z-stack, the volume both ways (app/analysis/area.py).
+  areaCell( row ) {
+    const n = ( v ) => ( v == null ? "—" : this.fmt( Math.round( v * 100 ) / 100 ) );
+    const help = [ I18n.get( "ais.area_blob" ) + ": " + n( row.area_blob_um2 ) + " µm²" ,
+      I18n.get( "ais.area_width" ) + ": " + n( row.area_width_um2 ) + " µm²" ];
+    if ( row.volume_voxel_um3 != null || row.volume_tube_um3 != null ) {
+      help.push( I18n.get( "ais.volume_voxel" ) + ": " + n( row.volume_voxel_um3 ) + " µm³" ,
+        I18n.get( "ais.volume_tube" ) + ": " + n( row.volume_tube_um3 ) + " µm³" );
+    }
+    return Dom.el( "td" , { text: n( row.area_blob_um2 ) , attrs: { title: help.join( "\n" ) } } );
   },
 
   // The AIS -> soma distance (Measure tool); on this batch's rows, a link
