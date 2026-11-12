@@ -348,7 +348,7 @@ const AisAuto = {
           processed: Ais.sha( entry ),
           raw: Ais.kind( entry ) === "pair" ? Ais.sha( entry , "raw" ) : null,
           threshold: run.params.threshold,
-          settings: run.params.settings,
+          settings: Ais.settingsFor( entry , run.params.settings ),
           start: this.startFor( entry , run.params.start ),
           exclude: Ais.savedRows( entry ).map( ( row ) => row.pixels ),
         } , run.params.engine , Ais.zBody( entry ) ) );

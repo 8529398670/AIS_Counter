@@ -15,6 +15,7 @@ and the last FINISHED_KEPT finished ones can still be asked about.
 """
 from __future__ import annotations
 
+import dataclasses
 import secrets
 import threading
 from collections import OrderedDict
@@ -228,6 +229,9 @@ class AutoRuns:
         raw = batches.traced_sha(image, "raw") if kind == "pair" else None
         rows = [r for r in batches.list_results(self.store, run["batch_id"]) if r["image"] == image["key"]]
         z_method = run["choices"]["general"]["z_method"] if files.get("stack") else None
+        if image.get("pixel_um") and not files.get("stack"):
+            # Its own pixel size (Channels…), not Settings'.
+            settings = dataclasses.replace(settings, pixconv=image["pixel_um"])
         out = detect(processed, raw, run["choices"]["threshold"], settings, ap.start_for(kind, p["start"], ap.has_soma(image)),
                      [r["pixels"] for r in rows if r.get("pixels")], z_method)
         candidates = out.get("candidates", [])

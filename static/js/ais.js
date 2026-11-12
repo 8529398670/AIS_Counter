@@ -617,8 +617,16 @@ const Ais = {
   },
 
   // µm per pixel on entry: a Z-stack came with its own.
+  // The microns per pixel an image is measured with: a Z-stack's own, an
+  // image's set in Channels… (another objective than 40x), else Settings'.
   pixconvFor( entry ) {
-    return entry && entry.z_stack ? entry.z_stack.pixel_um : Settings.pixconv();
+    if ( entry && entry.z_stack ) return entry.z_stack.pixel_um;
+    return entry && entry.pixel_um ? entry.pixel_um : Settings.pixconv();
+  },
+
+  // settings (Settings.methodSettings' by default) with the image's pixel size.
+  settingsFor( entry , settings ) {
+    return Object.assign( {} , settings || Settings.methodSettings() , { pixconv: this.pixconvFor( entry ) } );
   },
 
   // What the trace and detect bodies add for a Z-stack.
@@ -1176,7 +1184,7 @@ const Ais = {
       raw: this.kind( entry ) === "pair" ? this.sha( entry , "raw" ) : null,
       cell: entry.cell,
       threshold: threshold ?? Settings.threshold(),
-      settings: Object.assign( {} , settings || Settings.methodSettings() , entry.z_stack ? { pixconv: entry.z_stack.pixel_um } : {} ),
+      settings: this.settingsFor( entry , settings ),
       clicks: clicks || null,
     };
   },
@@ -1894,7 +1902,7 @@ const Ais = {
         processed: this.sha( entry ),
         raw: this.kind( entry ) === "pair" ? this.sha( entry , "raw" ) : null,
         threshold: Settings.threshold(),
-        settings: Settings.methodSettings(),
+        settings: this.settingsFor( entry ),
       } , Settings.engine() , this.zBody( entry ) , body ) );
       if ( this.images[ this.index ] !== entry ) return;
       const twoClicks = Settings.twoClicks() === "manual";

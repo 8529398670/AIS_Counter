@@ -1174,7 +1174,7 @@ def _batch_layouts(library: Library, store: Any, batch: dict[str, Any], add_id: 
         entry["results"] = sum(1 for (layout, _), key in zip(found, keys)
                                if views.same(layout, entry["layout"]) and key in with_results)
     return {"layouts": out, "images": len(images), "unread": len(images) - len(found),
-            "stacks": batches.stack_calibration(images)}
+            "stacks": batches.stack_calibration(images), "pixel": batches.image_pixel_size(images)}
 
 
 async def batch_layouts(request: Request) -> Response:
@@ -1192,8 +1192,10 @@ async def batch_layouts(request: Request) -> Response:
 
 async def batch_layouts_set(request: Request) -> Response:
     """Body: {add?, channels: [{layout, roles}], stack?: {z_step_um,
-    pixel_um}}: new channel roles for the images of a batch (or one add)
-    with those layouts, and for its Z-stacks a new z step and pixel size.
+    pixel_um}, pixel_um?: number or null}: new channel roles for the images
+    of a batch (or one add) with those layouts, for its Z-stacks a new z step
+    and pixel size, and for its other images the microns per pixel they are
+    measured with (null: back to Settings', 40x by default).
     Answers with the batch and the keys of the images now traced from other
     channels or calibration."""
     body, refused = await _body(request)
@@ -1210,7 +1212,7 @@ async def batch_layouts_set(request: Request) -> Response:
     layouts = await run(_image_layouts, _library(request), batches.channel_scope(batch, add_id))
     try:
         found = await run(batches.set_channels, store, batch_id, add_id, body.get("channels"), layouts,
-                          body.get("stack"))
+                          body.get("stack"), body["pixel_um"] if "pixel_um" in body else ...)
     except batches.BatchError as exc:
         return bad_request(str(exc))
     if found is None:

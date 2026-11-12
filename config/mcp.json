@@ -1141,7 +1141,7 @@
         "readOnlyHint": false,
         "title": "Set channel roles"
       },
-      "description": "Which channel is the AIS, soma/dendrite or other, for a batch's (or one add's) images with those layouts; stack: {z_step_um, pixel_um} also sets its Z-stacks' slice spacing and pixel size (the files don't record them). Images now traced from other channels or calibration are no longer done; their results stay (3D measures as measured), so look at them again.",
+      "description": "Which channel is the AIS, soma/dendrite or other, for a batch's (or one add's) images with those layouts; stack: {z_step_um, pixel_um} also sets its Z-stacks' slice spacing and pixel size (the files don't record them); pixel_um sets the microns per pixel its other images are measured with (null: back to the 40x default). Images now traced from other channels or calibration are no longer done; their results stay (3D measures as measured), so look at them again.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
@@ -1167,6 +1167,12 @@
               "type": "object"
             },
             "type": "array"
+          },
+          "pixel_um": {
+            "type": [
+              "number",
+              "null"
+            ]
           },
           "stack": {
             "properties": {

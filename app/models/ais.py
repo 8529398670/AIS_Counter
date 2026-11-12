@@ -1660,6 +1660,17 @@ def stack_calibration(images: list[dict[str, Any]]) -> dict[str, Any] | None:
     return {"count": len(stacks), "z_step_um": first["z_step_um"], "pixel_um": first["pixel_um"], "mixed": mixed}
 
 
+def image_pixel_size(images: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """The pixel size the images that aren't Z-stacks are measured with, for
+    the Channels dialog: {count, pixel_um (the first's; None: Settings'
+    microns per pixel, 40x by default), mixed}; None when all are stacks."""
+    flat = [im for im in images if not im["files"].get("stack")]
+    if not flat:
+        return None
+    first = flat[0].get("pixel_um")
+    return {"count": len(flat), "pixel_um": first, "mixed": any(im.get("pixel_um") != first for im in flat)}
+
+
 def _calibrate(image: dict[str, Any], calibration: dict[str, Any]) -> None:
     """A stack image's new z step and pixel size: a new manifest and sha, as a
     new plane gives (apply_channels)."""
@@ -1671,24 +1682,36 @@ def _calibrate(image: dict[str, Any], calibration: dict[str, Any]) -> None:
 
 
 def set_channels(store: Store, batch_id: int, add_id: int | None, choices: Any,
-                 layouts: dict[str, tuple[str, dict[str, Any]]], stack: Any = None) -> tuple[Record, list[str]] | None:
+                 layouts: dict[str, tuple[str, dict[str, Any]]], stack: Any = None,
+                 pixel: Any = ...) -> tuple[Record, list[str]] | None:
     """New channel roles for a batch's images (or one add's): each image whose
     layout (its own, else layouts[key] as read from its file) has a choice gets
     it; with stack ({z_step_um, pixel_um}), every Z-stack among them gets that
     z step and pixel size too. Those that are now traced from another sha are
     no longer done by hand, and are returned by key; their results stay, 3D
-    measures as they were measured. None when the batch is gone."""
+    measures as they were measured. pixel: the microns per pixel its images
+    that aren't Z-stacks are measured with from now on (None: back to
+    Settings'), left as it is when not given; it changes no sha, so nothing
+    is unmarked, and AIS already measured keep the pixel size they were
+    measured with. None when the batch is gone."""
     cleaned = _choices(choices)
     calibration = None
     if stack is not None:
         if not isinstance(stack, dict):
             raise BatchError("stack must be an object")
         calibration = _stack_options({"plane": 0, "z_step_um": stack.get("z_step_um"), "pixel_um": stack.get("pixel_um")})
+    if pixel is not ... and pixel is not None:
+        pixel = _stack_options({"plane": 0, "z_step_um": 1, "pixel_um": pixel})["pixel_um"]
     changed: list[str] = []
 
     def mutate(record: Record) -> None:
         changed.clear()
         for image in channel_scope(record, add_id):
+            if pixel is not ... and not image["files"].get("stack"):
+                if pixel is None:
+                    image.pop("pixel_um", None)
+                else:
+                    image["pixel_um"] = pixel
             if calibration and image["files"].get("stack") and image.get("z_stack"):
                 before = image["files"]["stack"]["sha"]
                 _calibrate(image, calibration)

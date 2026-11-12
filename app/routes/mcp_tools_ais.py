@@ -340,7 +340,8 @@ def _image_body(image: dict[str, Any], settings: dict[str, Any], threshold: floa
     kind = ap.kind(files)
     body = {"processed": batches.traced_sha(image, ap.traced(files)),
             "raw": batches.traced_sha(image, "raw") if kind == "pair" else None,
-            "threshold": threshold, "settings": settings}
+            "threshold": threshold, "settings": settings | ({"pixconv": image["pixel_um"]}
+                                                             if image.get("pixel_um") and not files.get("stack") else {})}
     if engine:
         body["engine"] = engine
     if files.get("stack"):
@@ -521,10 +522,11 @@ def _specs() -> list[Spec]:
              ais.batch_layouts, "/api/ais/batches/{batch_id}/layouts", props=b | {"add": {"type": "integer"}},
              required=("batch_id",), path_args=("batch_id",), query_args=("add",), read_only=True),
         Spec("set_channel_roles", "Set channel roles",
-             "Which channel is the AIS, soma/dendrite or other, for a batch's (or one add's) images with those layouts; stack: {z_step_um, pixel_um} also sets its Z-stacks' slice spacing and pixel size (the files don't record them). Images now traced from other channels or calibration are no longer done; their results stay (3D measures as measured), so look at them again.",
+             "Which channel is the AIS, soma/dendrite or other, for a batch's (or one add's) images with those layouts; stack: {z_step_um, pixel_um} also sets its Z-stacks' slice spacing and pixel size (the files don't record them); pixel_um sets the microns per pixel its other images are measured with (null: back to the 40x default). Images now traced from other channels or calibration are no longer done; their results stay (3D measures as measured), so look at them again.",
              ais.batch_layouts_set, "/api/ais/batches/{batch_id}/layouts", "POST",
              props=b | {"add": {"type": "integer"}, "channels": CHANNELS,
-                        "stack": {"type": "object", "properties": {"z_step_um": {"type": "number"}, "pixel_um": {"type": "number"}}}},
+                        "stack": {"type": "object", "properties": {"z_step_um": {"type": "number"}, "pixel_um": {"type": "number"}}},
+                        "pixel_um": {"type": ["number", "null"]}},
              required=("batch_id", "channels"), path_args=("batch_id",)),
         Spec("fill_missing_areas", "Fill in missing AIS areas",
              "For a batch's accepted AIS saved before area (and on Z-stacks volume) was measured: trace each again from its saved clicks and settings and, when it comes out on the same pixels, fill in area_blob_um2, area_width_um2 (and volume_voxel_um3, volume_tube_um3); nothing else changes. A few at a time: call again with after until remaining is 0.",

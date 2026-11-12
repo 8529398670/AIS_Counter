@@ -15,6 +15,11 @@ const Channels = {
   tiffColors: [ "#ff0000" , "#00ff00" , "#0000ff" , "#ffffff" ],
   answer: null,
   blocks: [],
+  // The images' pixel size at 40x, the lab's default (ais_auto.Settings.pixconv),
+  // and the objectives the Channels dialog offers, scaled from it (same camera).
+  pixel40x: 0.161,
+  objectives: [ 10 , 20 , 40 , 63 , 100 ],
+  pixelShown: null,     // what the pixel field showed when the dialog opened
 
   init() {
     const element = Dom.get( "channels-modal" );
@@ -206,7 +211,7 @@ const Channels = {
     // Its Z-stacks' z step and pixel size, which the files don't record:
     // shown filled in, to correct.
     const stacks = out.stacks || null;
-    if ( !layouts.length && !stacks ) {
+    if ( !layouts.length && !stacks && !out.pixel ) {
       Dom.toast( I18n.get( out.unread ? "channels.none_yet" : "channels.none" ) );
       return null;
     }
@@ -214,19 +219,23 @@ const Channels = {
     const notes = [];
     if ( out.unread ) notes.push( I18n.get( "channels.unread" ).replace( "{n}" , out.unread ) );
     if ( stacks ) notes.push( I18n.get( stacks.mixed ? "channels.stack_mixed" : "channels.stack_edit" ).replace( "{n}" , stacks.count ) );
+    const pixel = out.pixel || null;
+    if ( pixel && pixel.mixed ) notes.push( I18n.get( "channels.pixel_mixed" ).replace( "{n}" , pixel.count ) );
     const chosen = await this.open( {
       title: I18n.get( "channels.title" ),
       found: [ I18n.get( "channels.edit_found" ) , ...notes ].join( " " ),
       layouts: layouts,
       stacks: Boolean( stacks ),
       stackValues: stacks,
+      pixel: pixel,
       submit: I18n.get( "channels.save" ),
       warning: results ? I18n.get( "channels.results_warning" ).replace( "{n}" , results ) : "",
     } );
     if ( !chosen ) return null;
     const saved = await Api.post( "/api/ais/batches/" + batchId + "/layouts" ,
       Object.assign( { channels: chosen.channels } , addId ? { add: addId } : {} ,
-        chosen.stack ? { stack: { z_step_um: chosen.stack.z_step_um , pixel_um: chosen.stack.pixel_um } } : {} ) );
+        chosen.stack ? { stack: { z_step_um: chosen.stack.z_step_um , pixel_um: chosen.stack.pixel_um } } : {} ,
+        chosen.pixel_um !== undefined ? { pixel_um: chosen.pixel_um } : {} ) );
     Ais.batchChanged( saved.batch );
     Dom.toast( I18n.get( saved.changed.length === 1 ? "channels.saved_one" : "channels.saved" ).replace( "{n}" , saved.changed.length ) );
     return saved;
@@ -247,6 +256,7 @@ const Channels = {
       Dom.get( "batches-stack-pixel" ).value = known ? known.pixel_um : Settings.methods[ 0 ].defaults.pixconv;
       if ( known ) Dom.get( "batches-stack-z" ).value = known.z_step_um;
     }
+    this.openPixel( options.pixel || null );
     this.showError( "" );
     const holder = Dom.get( "channels-layouts" );
     Dom.clear( holder );
@@ -257,6 +267,30 @@ const Channels = {
       this.answer = resolve;
       this.modal.show();
     } );
+  },
+
+  // The images' pixel size (Channels.edit only): the one they have, else
+  // 40x; a button per objective fills it in.
+  openPixel( pixel ) {
+    const box = Dom.get( "channels-pixel" );
+    Dom.show( box , Boolean( pixel ) );
+    const input = Dom.get( "channels-pixel-um" );
+    input.disabled = !pixel;
+    this.pixelShown = pixel ? ( pixel.pixel_um || this.pixel40x ) : null;
+    input.value = this.pixelShown ?? "";
+    const presets = Dom.get( "channels-pixel-presets" );
+    presets.replaceChildren( ...this.objectives.map( ( x ) => {
+      const um = Math.round( this.pixel40x * 40 / x * 10000 ) / 10000;
+      return Dom.el( "button" , { class: "btn btn-outline-secondary" , text: x + "x" ,
+        attrs: { type: "button" , title: um + " µm/px" } , on: { click: () => { input.value = um; } } } );
+    } ) );
+  },
+
+  // The pixel size to send: undefined when unchanged (or not asked).
+  pixelAnswer() {
+    if ( this.pixelShown == null ) return undefined;
+    const value = Number( Dom.get( "channels-pixel-um" ).value );
+    return value === this.pixelShown ? undefined : value;
   },
 
   // One layout's rows: a swatch, the channel's name, its role, and a label
@@ -332,7 +366,12 @@ const Channels = {
         return;
       }
     }
-    if ( this.stacksAsked && !Dom.get( "channels-form" ).reportValidity() ) return;
+    if ( ( this.stacksAsked || this.pixelShown != null ) && !Dom.get( "channels-form" ).reportValidity() ) return;
+    const pixelUm = this.pixelAnswer();
+    if ( pixelUm !== undefined && !( pixelUm > 0 ) ) {
+      this.showError( I18n.get( "channels.pixel_bad" ) );
+      return;
+    }
     const answer = this.answer;
     this.answer = null;
     answer( {
@@ -341,6 +380,7 @@ const Channels = {
       // applies; 0 stands for greyscale slices, which have only one.
       stack: this.stacksAsked ? { plane: 0 , z_step_um: Number( Dom.get( "batches-stack-z" ).value ) ,
         pixel_um: Number( Dom.get( "batches-stack-pixel" ).value ) } : null,
+      pixel_um: pixelUm,
     } );
     this.modal.hide();
   },

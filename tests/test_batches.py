@@ -1222,3 +1222,22 @@ def test_a_stack_s_z_step_and_pixel_size_can_be_corrected_later(store):
         with pytest.raises(ais.BatchError):
             ais.set_channels(store, batch["id"], None, [], {}, bad)
     assert ais.stack_calibration(ais.get_batch(store, batch["id"])["images"])["z_step_um"] == 0.3
+
+
+def test_images_can_be_given_another_objective_s_pixel_size(store):
+    batch = ais.create_batch(store, "f", "upload", files(("f/a" + P, "a"), ("f/b" + P, "b")), 1)
+    assert ais.image_pixel_size(batch["images"]) == {"count": 2, "pixel_um": None, "mixed": False}   # 40x: Settings'
+    record, changed = ais.set_channels(store, batch["id"], None, [], {}, None, 0.1022)
+    assert changed == [] and all(im["pixel_um"] == 0.1022 for im in record["images"])   # same sha: still done
+    assert ais.image_pixel_size(record["images"])["pixel_um"] == 0.1022
+    left = ais.set_channels(store, batch["id"], None, [], {})[0]                          # not given: kept
+    assert all(im["pixel_um"] == 0.1022 for im in left["images"])
+    back = ais.set_channels(store, batch["id"], None, [], {}, None, None)[0]               # null: back to 40x
+    assert all("pixel_um" not in im for im in back["images"])
+    for bad in (0, -1, "0.1", True):
+        with pytest.raises(ais.BatchError):
+            ais.set_channels(store, batch["id"], None, [], {}, None, bad)
+    stacks = stack_batch(store)
+    assert ais.image_pixel_size(stacks["images"]) is None                                 # stacks have their own
+    kept = ais.set_channels(store, stacks["id"], None, [], {}, None, 0.2)[0]
+    assert all("pixel_um" not in im for im in kept["images"])

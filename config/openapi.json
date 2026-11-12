@@ -7927,7 +7927,7 @@
             "$ref": "#/components/responses/E503"
           }
         },
-        "description": "?add=<id>: the channel layouts of a batch's images, or one add's: each with its channel names, colours, how many images, the roles in use and how many already have results; stacks: its Z-stacks' {count, z_step_um, pixel_um, mixed}, or null."
+        "description": "?add=<id>: the channel layouts of a batch's images, or one add's: each with its channel names, colours, how many images, the roles in use and how many already have results; stacks: its Z-stacks' {count, z_step_um, pixel_um, mixed}, or null; pixel: its other images' {count, pixel_um (null: Settings', 40x by default), mixed}, or null."
       },
       "post": {
         "summary": "Set a batch's channel roles",
@@ -7943,7 +7943,7 @@
             "apiKey": []
           }
         ],
-        "description": "Body: {add?, channels: [{layout, roles}], stack?: {z_step_um, pixel_um}}: which channel is the AIS, soma/dendrite or other, for the images of a batch (or one add) with those layouts, and its Z-stacks' slice spacing and pixel size. Answers with the batch and the keys of the images now traced from other channels or calibration.",
+        "description": "Body: {add?, channels: [{layout, roles}], stack?: {z_step_um, pixel_um}, pixel_um?: number or null}: which channel is the AIS, soma/dendrite or other, for the images of a batch (or one add) with those layouts, its Z-stacks' slice spacing and pixel size, and the microns per pixel its other images are measured with (null: back to the 40x default; left out: unchanged). Answers with the batch and the keys of the images now traced from other channels or calibration.",
         "parameters": [
           {
             "name": "batch_id",

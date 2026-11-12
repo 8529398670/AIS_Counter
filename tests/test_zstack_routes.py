@@ -213,3 +213,22 @@ def test_ais_saved_before_areas_get_them_filled_in(h):
     assert filled["length_um"] == good["length_um"] and "edited_at" not in filled   # nothing else changed
     assert rows[moved["id"]]["area_blob_um2"] is None
     assert post(h, path, ann, limit=0).status == 400
+
+
+def test_a_batch_s_images_get_their_pixel_size_from_the_channels_dialog(h):
+    from app.routes import mcp_tools_ais
+
+    ann = h.user()
+    data = _tiff_bytes(synthetic()[0])
+    files = [{"name": "a.tif", "rel": "root/f/a.tif", "sha": h.library.add(data)["sha256"], "size": len(data)}]
+    batch = json.loads(post(h, "/api/ais/batches/upload", ann, name="flat", files=files, randomize=False).data)
+    path = f"/api/ais/batches/{batch['id']}/layouts"
+    assert json.loads(h.get("GET", path, session=ann).data)["pixel"] == {"count": 1, "pixel_um": None, "mixed": False}
+    out = json.loads(post(h, path, ann, channels=[], pixel_um=0.1022).data)
+    image = out["batch"]["images"][0]
+    assert image["pixel_um"] == 0.1022 and out["changed"] == []
+    body = mcp_tools_ais._image_body(image, {"pixconv": 0.161, "f": 0.33}, 0.01, None, "trace_lift")
+    assert body["settings"]["pixconv"] == 0.1022 and body["settings"]["f"] == 0.33
+    assert post(h, path, ann, channels=[], pixel_um=0).status == 400
+    back = json.loads(post(h, path, ann, channels=[], pixel_um=None).data)["batch"]["images"][0]
+    assert "pixel_um" not in back

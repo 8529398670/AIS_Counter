@@ -650,6 +650,16 @@
                       <div id="batches-stack-pixel-help" class="form-text" data-i18n="batches.stack_pixel_help"></div>
                     </div>
                   </div>
+                  <!-- The images' pixel size (not Z-stacks'): 40x unless changed (Channels.edit). -->
+                  <div id="channels-pixel" class="mt-3" hidden>
+                    <label for="channels-pixel-um" class="form-label" data-i18n="channels.pixel_label"></label>
+                    <div class="input-group">
+                      <input id="channels-pixel-um" class="form-control" type="number" min="0.0001" max="100" step="any" aria-describedby="channels-pixel-help" />
+                      <span class="input-group-text">µm/px</span>
+                    </div>
+                    <div id="channels-pixel-presets" class="btn-group btn-group-sm mt-2" role="group"></div>
+                    <div id="channels-pixel-help" class="form-text" data-i18n="channels.pixel_help"></div>
+                  </div>
                   <div id="channels-warning" class="alert alert-warning small mt-3 mb-0" role="status" hidden></div>
                   <div id="channels-error" class="alert alert-danger small mt-3 mb-0" role="alert" hidden></div>
                 </div>
