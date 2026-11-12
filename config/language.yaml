@@ -328,7 +328,7 @@ ais:
   scope_batch: "This batch"
   scope_all: "All batches"
   clear: "Clear all"
-  clear_confirm: "Remove the {n} accepted AIS listed in this batch? Undo puts them back."
+  clear_confirm: "Remove the {n} accepted AIS listed in this batch?"
   col_image: "Image"
   col_length: "Length (µm)"
   col_start: "Start"
