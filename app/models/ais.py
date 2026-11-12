@@ -1648,18 +1648,52 @@ def channel_file(image: dict[str, Any]) -> tuple[str, str] | None:
     return None
 
 
+def stack_calibration(images: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """The Z-stacks among images and how they are calibrated, for the
+    Channels dialog: {count, z_step_um, pixel_um (the first stack's), mixed
+    (whether the others differ)}; None when there are none."""
+    stacks = [im["z_stack"] for im in images if im["files"].get("stack") and im.get("z_stack")]
+    if not stacks:
+        return None
+    first = stacks[0]
+    mixed = any((s["z_step_um"], s["pixel_um"]) != (first["z_step_um"], first["pixel_um"]) for s in stacks)
+    return {"count": len(stacks), "z_step_um": first["z_step_um"], "pixel_um": first["pixel_um"], "mixed": mixed}
+
+
+def _calibrate(image: dict[str, Any], calibration: dict[str, Any]) -> None:
+    """A stack image's new z step and pixel size: a new manifest and sha, as a
+    new plane gives (apply_channels)."""
+    f = image["files"]["stack"]
+    options = {"plane": image["z_stack"]["plane"], "z_step_um": calibration["z_step_um"],
+               "pixel_um": calibration["pixel_um"]}
+    f["sha"] = zstack.sha(zstack.manifest(f["slices"], options))
+    image["z_stack"] = image["z_stack"] | {"z_step_um": options["z_step_um"], "pixel_um": options["pixel_um"]}
+
+
 def set_channels(store: Store, batch_id: int, add_id: int | None, choices: Any,
-                 layouts: dict[str, tuple[str, dict[str, Any]]]) -> tuple[Record, list[str]] | None:
+                 layouts: dict[str, tuple[str, dict[str, Any]]], stack: Any = None) -> tuple[Record, list[str]] | None:
     """New channel roles for a batch's images (or one add's): each image whose
     layout (its own, else layouts[key] as read from its file) has a choice gets
-    it. Those that are now traced from another sha are no longer done by hand,
-    and are returned by key; their results stay. None when the batch is gone."""
+    it; with stack ({z_step_um, pixel_um}), every Z-stack among them gets that
+    z step and pixel size too. Those that are now traced from another sha are
+    no longer done by hand, and are returned by key; their results stay, 3D
+    measures as they were measured. None when the batch is gone."""
     cleaned = _choices(choices)
+    calibration = None
+    if stack is not None:
+        if not isinstance(stack, dict):
+            raise BatchError("stack must be an object")
+        calibration = _stack_options({"plane": 0, "z_step_um": stack.get("z_step_um"), "pixel_um": stack.get("pixel_um")})
     changed: list[str] = []
 
     def mutate(record: Record) -> None:
         changed.clear()
         for image in channel_scope(record, add_id):
+            if calibration and image["files"].get("stack") and image.get("z_stack"):
+                before = image["files"]["stack"]["sha"]
+                _calibrate(image, calibration)
+                if image["files"]["stack"]["sha"] != before:
+                    changed.append(image["key"])
             found = ((image["channels"]["role"], image["channels"]["layout"]) if image.get("channels")
                      else layouts.get(image["key"]))
             if not found:
@@ -1671,7 +1705,7 @@ def set_channels(store: Store, batch_id: int, add_id: int | None, choices: Any,
             before = image["files"]["stack"]["sha"] if role == "stack" else traced_sha(image, role)
             apply_channels(image, role, found[1], choice["roles"])
             after = image["files"]["stack"]["sha"] if role == "stack" else traced_sha(image, role)
-            if after != before:
+            if after != before and image["key"] not in changed:
                 changed.append(image["key"])
         record["skipped"] = [k for k in record["skipped"] if k not in changed]
         _stamp(record)

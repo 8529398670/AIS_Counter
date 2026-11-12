@@ -1200,3 +1200,25 @@ def test_each_edit_raises_rev_and_a_stale_expect_is_refused(store):
         ais.delete_measurement(store, line["id"], expect=0)
     ais.delete_measurement(store, line["id"], expect=1)
     assert ais.list_measurements(store, batch["id"]) == []
+
+
+def test_a_stack_s_z_step_and_pixel_size_can_be_corrected_later(store):
+    from app.analysis import zstack
+
+    batch = stack_batch(store)
+    assert ais.stack_calibration(batch["images"]) == {"count": 2, "z_step_um": 0.5, "pixel_um": 0.161, "mixed": False}
+    before = {im["key"]: im["files"]["stack"]["sha"] for im in batch["images"]}
+    record, changed = ais.set_channels(store, batch["id"], None, [], {}, {"z_step_um": 0.3, "pixel_um": 0.2})
+    assert sorted(changed) == sorted(before)
+    for image in record["images"]:
+        assert (image["z_stack"]["z_step_um"], image["z_stack"]["pixel_um"], image["z_stack"]["plane"]) == (0.3, 0.2, 0)
+        f = image["files"]["stack"]
+        assert f["sha"] != before[image["key"]]
+        assert f["sha"] == zstack.sha(zstack.manifest(f["slices"], image["z_stack"]))   # the stack is read with them
+        assert ais.manifest_for(store, f["sha"])["z_step_um"] == 0.3
+    # The same again changes nothing; nonsense is refused.
+    assert ais.set_channels(store, batch["id"], None, [], {}, {"z_step_um": 0.3, "pixel_um": 0.2})[1] == []
+    for bad in ({"z_step_um": 0, "pixel_um": 0.2}, {"z_step_um": "x", "pixel_um": 0.2}, [1]):
+        with pytest.raises(ais.BatchError):
+            ais.set_channels(store, batch["id"], None, [], {}, bad)
+    assert ais.stack_calibration(ais.get_batch(store, batch["id"])["images"])["z_step_um"] == 0.3

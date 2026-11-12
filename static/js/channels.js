@@ -203,24 +203,30 @@ const Channels = {
     const query = addId ? "?add=" + addId : "";
     const out = await Api.request( "/api/ais/batches/" + batchId + "/layouts" + query );
     const layouts = this.choosable( out.layouts );
-    if ( !layouts.length ) {
+    // Its Z-stacks' z step and pixel size, which the files don't record:
+    // shown filled in, to correct.
+    const stacks = out.stacks || null;
+    if ( !layouts.length && !stacks ) {
       Dom.toast( I18n.get( out.unread ? "channels.none_yet" : "channels.none" ) );
       return null;
     }
     const results = layouts.reduce( ( n , o ) => n + o.results , 0 );
     const notes = [];
     if ( out.unread ) notes.push( I18n.get( "channels.unread" ).replace( "{n}" , out.unread ) );
+    if ( stacks ) notes.push( I18n.get( stacks.mixed ? "channels.stack_mixed" : "channels.stack_edit" ).replace( "{n}" , stacks.count ) );
     const chosen = await this.open( {
       title: I18n.get( "channels.title" ),
       found: [ I18n.get( "channels.edit_found" ) , ...notes ].join( " " ),
       layouts: layouts,
-      stacks: false,
+      stacks: Boolean( stacks ),
+      stackValues: stacks,
       submit: I18n.get( "channels.save" ),
       warning: results ? I18n.get( "channels.results_warning" ).replace( "{n}" , results ) : "",
     } );
     if ( !chosen ) return null;
     const saved = await Api.post( "/api/ais/batches/" + batchId + "/layouts" ,
-      Object.assign( { channels: chosen.channels } , addId ? { add: addId } : {} ) );
+      Object.assign( { channels: chosen.channels } , addId ? { add: addId } : {} ,
+        chosen.stack ? { stack: { z_step_um: chosen.stack.z_step_um , pixel_um: chosen.stack.pixel_um } } : {} ) );
     Ais.batchChanged( saved.batch );
     Dom.toast( I18n.get( saved.changed.length === 1 ? "channels.saved_one" : "channels.saved" ).replace( "{n}" , saved.changed.length ) );
     return saved;
@@ -236,7 +242,11 @@ const Channels = {
     Dom.get( "channels-form" ).reset();
     Dom.show( Dom.get( "channels-stack" ) , options.stacks );
     Dom.all( "#channels-stack input" ).forEach( ( input ) => { input.disabled = !options.stacks; } );
-    if ( options.stacks ) Dom.get( "batches-stack-pixel" ).value = Settings.methods[ 0 ].defaults.pixconv;
+    if ( options.stacks ) {
+      const known = options.stackValues;
+      Dom.get( "batches-stack-pixel" ).value = known ? known.pixel_um : Settings.methods[ 0 ].defaults.pixconv;
+      if ( known ) Dom.get( "batches-stack-z" ).value = known.z_step_um;
+    }
     this.showError( "" );
     const holder = Dom.get( "channels-layouts" );
     Dom.clear( holder );

@@ -1122,7 +1122,8 @@ def _batch_layouts(library: Library, store: Any, batch: dict[str, Any], add_id: 
     for entry in out:
         entry["results"] = sum(1 for (layout, _), key in zip(found, keys)
                                if views.same(layout, entry["layout"]) and key in with_results)
-    return {"layouts": out, "images": len(images), "unread": len(images) - len(found)}
+    return {"layouts": out, "images": len(images), "unread": len(images) - len(found),
+            "stacks": batches.stack_calibration(images)}
 
 
 async def batch_layouts(request: Request) -> Response:
@@ -1139,9 +1140,11 @@ async def batch_layouts(request: Request) -> Response:
 
 
 async def batch_layouts_set(request: Request) -> Response:
-    """Body: {add?, channels: [{layout, roles}]}: new channel roles for the
-    images of a batch (or one add) with those layouts. Answers with the batch
-    and the keys of the images now traced from other channels."""
+    """Body: {add?, channels: [{layout, roles}], stack?: {z_step_um,
+    pixel_um}}: new channel roles for the images of a batch (or one add)
+    with those layouts, and for its Z-stacks a new z step and pixel size.
+    Answers with the batch and the keys of the images now traced from other
+    channels or calibration."""
     body, refused = await _body(request)
     if refused:
         return refused
@@ -1155,7 +1158,8 @@ async def batch_layouts_set(request: Request) -> Response:
         return bad_request("add must be an add's id")
     layouts = await run(_image_layouts, _library(request), batches.channel_scope(batch, add_id))
     try:
-        found = await run(batches.set_channels, store, batch_id, add_id, body.get("channels"), layouts)
+        found = await run(batches.set_channels, store, batch_id, add_id, body.get("channels"), layouts,
+                          body.get("stack"))
     except batches.BatchError as exc:
         return bad_request(str(exc))
     if found is None:

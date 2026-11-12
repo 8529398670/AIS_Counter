@@ -159,3 +159,20 @@ def test_the_settings_list_follows_the_methods():
 def test_the_page_finds_slices_as_the_server_does():
     pattern = zstack.SLICE_RE.pattern.replace("\\Z", "$")
     assert f"stackRe: /{pattern}/i," in (ROOT / "static" / "js" / "ais.js").read_text()
+
+
+def test_the_channels_dialog_shows_and_corrects_a_stack_s_calibration(h):
+    ann = h.user()
+    batch = added(h, ann, randomize=False)
+    path = f"/api/ais/batches/{batch['id']}/layouts"
+    shown = json.loads(h.get("GET", path, session=ann).data)
+    assert shown["stacks"] == {"count": 1, "z_step_um": STACK["z_step_um"], "pixel_um": STACK["pixel_um"], "mixed": False}
+    saved = post(h, path, ann, channels=[], stack={"z_step_um": 0.25, "pixel_um": 0.2})
+    assert saved.status == 200, saved.data
+    out = json.loads(saved.data)
+    image = out["batch"]["images"][0]
+    assert out["changed"] == [image["key"]] and image["z_stack"]["z_step_um"] == 0.25
+    # A trace on the corrected stack is measured with the new step.
+    traced = json.loads(post(h, "/api/ais/trace", ann, processed=image["files"]["stack"]["sha"], **CLICK).data)
+    assert traced["ok"] and traced["z"]["z_step_um"] == 0.25
+    assert post(h, path, ann, channels=[], stack={"z_step_um": -1, "pixel_um": 0.2}).status == 400
