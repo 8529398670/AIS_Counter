@@ -1204,7 +1204,7 @@
         "readOnlyHint": false,
         "title": "Fill in missing AIS areas"
       },
-      "description": "For a batch's accepted AIS saved before area (and on Z-stacks volume) was measured: trace each again from its saved clicks and settings and, when it comes out on the same pixels, fill in area_blob_um2, area_width_um2 (and volume_voxel_um3, volume_tube_um3); nothing else changes. A few at a time: call again with after until remaining is 0.",
+      "description": "For a batch's accepted AIS saved before area (and on Z-stacks volume) was measured: trace each again from its saved clicks and settings and, when it comes out on the same pixels, fill in area_blob_um2, area_width_um2 (and volume_voxel_um3, volume_tube_um3); nothing else changes. with_soma: only AIS whose soma distance has been measured. A few at a time: call again with after until remaining is 0.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
@@ -1218,6 +1218,9 @@
           },
           "limit": {
             "type": "integer"
+          },
+          "with_soma": {
+            "type": "boolean"
           }
         },
         "required": [

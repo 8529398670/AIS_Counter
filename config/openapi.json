@@ -11687,7 +11687,7 @@
             "apiKey": []
           }
         ],
-        "description": "Body: {after?: result id, limit?: 1-50 (default 10)}: fill in the area (and on a Z-stack the volume) of the batch's accepted AIS that have none, tracing each again from its saved clicks, threshold and settings; only an AIS that comes out on the same pixels is filled in, and nothing else about it changes. A few at a time: call again with after until remaining is 0. {filled, failed: [result ids], after, remaining}.",
+        "description": "Body: {after?: result id, limit?: 1-50 (default 10), with_soma?: only AIS whose soma distance has been measured}: fill in the area (and on a Z-stack the volume) of the batch's accepted AIS that have none, tracing each again from its saved clicks, threshold and settings; only an AIS that comes out on the same pixels is filled in, and nothing else about it changes. A few at a time: call again with after until remaining is 0. {filled, failed: [result ids], after, remaining}.",
         "parameters": [
           {
             "name": "batch_id",
@@ -11717,6 +11717,9 @@
                     "type": "integer",
                     "minimum": 1,
                     "maximum": 50
+                  },
+                  "with_soma": {
+                    "type": "boolean"
                   }
                 }
               }

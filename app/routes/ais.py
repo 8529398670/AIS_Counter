@@ -550,12 +550,14 @@ async def _own_batch(request: Request) -> tuple[dict[str, Any] | None, Response 
 MAX_FILL = 50
 
 
-def _fill_areas(library: Library, store: Any, batch: dict[str, Any], after: int, limit: int) -> dict[str, Any]:
+def _fill_areas(library: Library, store: Any, batch: dict[str, Any], after: int, limit: int,
+                with_soma: bool = False) -> dict[str, Any]:
     """Up to limit of a batch's accepted AIS with no area (batches.needs_area),
-    ids above after, traced again to fill it in (Library.remeasure)."""
+    ids above after, traced again to fill it in (Library.remeasure); with_soma:
+    only those whose soma distance has been measured."""
     images = {im["key"]: im for im in batch["images"]}
-    todo = sorted((r for r in batches.list_results(store, batch["id"]) if batches.needs_area(r) and r["id"] > after),
-                  key=lambda r: r["id"])
+    todo = sorted((r for r in batches.list_results(store, batch["id"]) if batches.needs_area(r) and r["id"] > after
+                   and (not with_soma or r.get("soma_um") is not None)), key=lambda r: r["id"])
     filled, failed, last = 0, [], after
     for row in todo[:limit]:
         last = row["id"]
@@ -577,7 +579,8 @@ def _fill_areas(library: Library, store: Any, batch: dict[str, Any], after: int,
 
 
 async def batch_fill_areas(request: Request) -> Response:
-    """Body: {after?: result id, limit?: 1-50}: fill in the area (and on a
+    """Body: {after?: result id, limit?: 1-50, with_soma?: only AIS with a
+    soma distance}: fill in the area (and on a
     Z-stack the volume) of the batch's accepted AIS that have none, by
     tracing each again from its saved clicks and settings; only one that
     comes out on the same pixels is filled in. A few at a time: call again
@@ -595,7 +598,10 @@ async def batch_fill_areas(request: Request) -> Response:
         return bad_request("after must be a result id")
     if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= MAX_FILL:
         return bad_request(f"limit must be 1 to {MAX_FILL}")
-    return JSONResponse(await run(_fill_areas, _library(request), store, batch, after, limit))
+    with_soma = body.get("with_soma", False)
+    if not isinstance(with_soma, bool):
+        return bad_request("with_soma must be true or false")
+    return JSONResponse(await run(_fill_areas, _library(request), store, batch, after, limit, with_soma))
 
 
 async def batch_rename(request: Request) -> Response:

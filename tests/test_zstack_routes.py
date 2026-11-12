@@ -213,6 +213,23 @@ def test_ais_saved_before_areas_get_them_filled_in(h):
     assert filled["length_um"] == good["length_um"] and "edited_at" not in filled   # nothing else changed
     assert rows[moved["id"]]["area_blob_um2"] is None
     assert post(h, path, ann, limit=0).status == 400
+    assert post(h, path, ann, with_soma="yes").status == 400
+
+
+def test_filling_areas_can_be_kept_to_ais_with_a_soma_distance(h):
+    ann = h.user()
+    batch = added(h, ann, randomize=False)
+    image = batch["images"][0]
+    answer = json.loads(post(h, "/api/ais/trace", ann, processed=image["files"]["stack"]["sha"], **CLICK).data)
+    plain = _saved_without_area(h, ann, batch, image, answer)
+    measured = _saved_without_area(h, ann, batch, image, answer)
+    ais.set_soma(h.store, measured["id"], {"soma_um": 4.0, "soma_px": 20.0, "soma_ais_x": 1, "soma_ais_y": 1,
+                                           "soma_x": 2, "soma_y": 2}, 1)
+    out = json.loads(post(h, f"/api/ais/batches/{batch['id']}/fill-areas", ann, with_soma=True).data)
+    assert (out["filled"], out["failed"], out["remaining"]) == (1, [], 0)
+    rows = {r["id"]: r for r in ais.list_results(h.store, batch["id"])}
+    assert rows[measured["id"]]["area_blob_um2"] is not None and rows[measured["id"]]["soma_um"] == 4.0
+    assert rows[plain["id"]]["area_blob_um2"] is None
 
 
 def test_a_batch_s_images_get_their_pixel_size_from_the_channels_dialog(h):
