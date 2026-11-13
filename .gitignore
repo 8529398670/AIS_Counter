@@ -5,7 +5,7 @@
 .DS_Store
 .claude/
 .pytest_cache/
-gitPushOriginMaster.sh
+gitPushUpdate.sh
 # Runtime state -- never commit these. config/secret.key is the key that reads
 # the database; config/config.yaml is this deployment's settings (and, until the
 # server first starts on the new code, the old copy of the key).
