@@ -18,7 +18,7 @@ from app.models import passwords
 from app.models import pins
 from app.models import themes
 from app.models import two_factor
-from app.routes.admin import checked_link_options, link_response
+from app.routes.admin import link_options, link_response
 from app.routes.helpers import Refused, bad_request, forbidden, get_config, get_store, read_json, run, server_error
 from app.routes.logs import audit
 
@@ -210,28 +210,33 @@ async def create_my_login_link(request: Request) -> Response:
     has the same effect: any link the account could still use stops working,
     and existing sessions stay signed in.
 
-    An API key may call this too (and the MCP create_my_login_link tool), but
-    the link it gets works once and expires within a day: a login link
-    becomes a session, so a key must not be able to make a lasting way in
-    (see admin.checked_link_options)."""
+    An API key may ask too, but only one that carries the account's full
+    role: the link becomes a session, and a session acts with the account's
+    role, so a key scoped down to "user" on an admin's account would otherwise
+    climb. The link a key gets works once and expires within a day (see
+    admin.checked_link_options), and revoking the key voids it while it can
+    still be used."""
     body = await read_json(request)
     if body is None:
         return bad_request("malformed request body")
     if not check_csrf(request, body.get("csrf_token")):
         return forbidden("invalid csrf token")
     try:
-        return JSONResponse(await run(create_my_login_link_checked, request, body.get("max_uses"), body.get("expires_in_minutes")))
+        return JSONResponse(await run(create_my_login_link_checked, request, body))
     except Refused as refused:
         return refused.response(request)
 
 
-def create_my_login_link_checked(request: Request, max_uses: object, expires_in_minutes: object) -> dict[str, Any]:
+def create_my_login_link_checked(request: Request, body: dict) -> dict[str, Any]:
     """create_my_login_link after the request is read, for it and the MCP
-    tool. Synchronous: it runs in a worker thread."""
-    options = checked_link_options(request, max_uses, expires_in_minutes)
-    credential, info = login_tokens.issue_login_link(get_store(request), actor_from(request).user.id, options)
+    create_my_login_link tool. Synchronous: it runs in a worker thread."""
+    actor = actor_from(request)
+    if actor.via_api_key and actor.role != actor.user.role:
+        raise Refused(403, "this key acts with less than your account's role, so it cannot make a login link")
+    options = link_options(request, body)
+    credential, info = login_tokens.issue_login_link(get_store(request), actor.user.id, options)
     detail = {"max_uses": info["max_uses"], "expires_at": info["expires_at"]}
-    if actor_from(request).via_api_key:
+    if actor.via_api_key:
         detail["via"] = "api_key"
     audit(request, KIND_AUTH, "own login link created", detail)
     return link_response(credential, info, get_config(request).url)
@@ -248,7 +253,8 @@ async def cancel_my_login_link(request: Request) -> Response:
 
 
 def cancel_my_login_link_checked(request: Request) -> dict[str, Any]:
-    """cancel_my_login_link after the request is read, for it and the MCP tool."""
+    """cancel_my_login_link after the request is read, for it and the MCP
+    cancel_my_login_link tool."""
     removed = login_tokens.cancel_login_link(get_store(request), actor_from(request).user.id)
     audit(request, KIND_AUTH, "own login link cancelled", {"removed": removed})
     return {"ok": True, "removed": removed}

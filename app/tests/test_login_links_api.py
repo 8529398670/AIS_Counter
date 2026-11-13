@@ -1,6 +1,9 @@
 """Login links made with an API key, over HTTP and MCP: allowed, but held to
-once and a day (admin.checked_link_options). A browser session keeps every
-choice. Both keys in RoutesTestCase belong to the owner."""
+once and a day (admin.checked_link_options), and revoking the key voids them
+(see test_admin_users). A browser session keeps every choice. Both keys in
+RoutesTestCase belong to the owner, an admin: admin_key carries the owner's
+full role, user_key is scoped down to user, so it may not make the owner a
+login link at all (account.create_my_login_link_checked)."""
 from __future__ import annotations
 
 from typing import Any
@@ -40,7 +43,7 @@ class LoginLinksWithKeysTest(RoutesTestCase):
     # -- HTTP --------------------------------------------------------------
 
     def test_a_key_makes_its_own_link_once_and_short(self) -> None:
-        status, reply = self.call("POST", "/api/account/login-link", key=self.user_key, body={})
+        status, reply = self.call("POST", "/api/account/login-link", key=self.admin_key, body={})
         self.assertEqual(status, 200, reply)
         self.assertEqual((reply["max_uses"], reply["unlimited"]), (1, False))
         self.assertEqual(reply["expires_in_seconds"], 1800)
@@ -50,15 +53,15 @@ class LoginLinksWithKeysTest(RoutesTestCase):
 
     def test_a_key_default_expiry_is_held_to_a_day(self) -> None:
         self.set_config(login_token_ttl_seconds=3 * 86400)
-        status, reply = self.call("POST", "/api/account/login-link", key=self.user_key, body={})
+        status, reply = self.call("POST", "/api/account/login-link", key=self.admin_key, body={})
         self.assertEqual(status, 200, reply)
         self.assertLessEqual(reply["expires_in_seconds"], 86400)
 
     def test_a_key_may_not_ask_for_more(self) -> None:
         for body in [{"max_uses": 3}, {"max_uses": 0}, {"expires_in_minutes": 0}, {"expires_in_minutes": 1441}]:
-            status, reply = self.call("POST", "/api/account/login-link", key=self.user_key, body=body)
+            status, reply = self.call("POST", "/api/account/login-link", key=self.admin_key, body=body)
             self.assertEqual((status, reply.get("error")), (400, KEY_LINK_MESSAGE), body)
-        status, reply = self.call("POST", "/api/account/login-link", key=self.user_key, body={"max_uses": 1, "expires_in_minutes": 1440})
+        status, reply = self.call("POST", "/api/account/login-link", key=self.admin_key, body={"max_uses": 1, "expires_in_minutes": 1440})
         self.assertEqual(status, 200, reply)
 
     def test_a_session_still_makes_long_reusable_links(self) -> None:
@@ -77,37 +80,41 @@ class LoginLinksWithKeysTest(RoutesTestCase):
         self.assertIn(self.call("POST", path, key=self.user_key, body={})[0], (403, 404))
         self.assertEqual(self.sign_in_with(reply), 200)
 
-    def test_a_key_still_cannot_create_users(self) -> None:
-        status, _ = self.call("POST", "/api/admin/users", key=self.admin_key, body={"display_name": "Bea", "role": "user"})
-        self.assertNotIn(status, (200, 201))
+    def test_an_admin_key_creates_users_with_a_short_link(self) -> None:
+        body = {"display_name": "Bea", "role": "user"}
+        status, reply = self.call("POST", "/api/admin/users", key=self.admin_key, body=body)
+        self.assertEqual((status, reply["max_uses"]), (201, 1), reply)
+        self.assertLessEqual(reply["expires_in_seconds"], 86400)
+        status, reply = self.call("POST", "/api/admin/users", key=self.admin_key, body={**body, "max_uses": 0})
+        self.assertEqual((status, reply.get("error")), (400, KEY_LINK_MESSAGE))
 
     # -- MCP ---------------------------------------------------------------
 
     def test_mcp_own_link_and_cancel(self) -> None:
-        made = self.tool(self.user_key, "create_my_login_link", {"expires_in_minutes": 30})["result"]
+        made = self.tool(self.admin_key, "create_my_login_link", {"expires_in_minutes": 30})["result"]
         self.assertFalse(made["isError"], made)
         link = made["structuredContent"]
         self.assertEqual(link["max_uses"], 1)
         self.assertTrue(link["login_url"].endswith(link["login_path"]))
-        cancelled = self.tool(self.user_key, "cancel_my_login_link", {})["result"]["structuredContent"]
+        cancelled = self.tool(self.admin_key, "cancel_my_login_link", {})["result"]["structuredContent"]
         self.assertEqual(cancelled, {"ok": True, "removed": True})
         self.assertNotEqual(self.sign_in_with(link), 200)
 
     def test_mcp_refuses_too_long(self) -> None:
-        result = self.tool(self.user_key, "create_my_login_link", {"expires_in_minutes": 5000})
+        result = self.tool(self.admin_key, "create_my_login_link", {"expires_in_minutes": 5000})
         self.assertTrue("error" in result or result["result"]["isError"], result)
 
     def test_mcp_admin_tools(self) -> None:
-        made = self.tool(self.admin_key, "admin_reissue_login_link", {"user_id": self.user.id})["result"]
+        made = self.tool(self.admin_key, "admin_reissue_login", {"user_id": self.user.id})["result"]
         self.assertFalse(made["isError"], made)
-        missing = self.tool(self.admin_key, "admin_reissue_login_link", {"user_id": 9999})["result"]
+        missing = self.tool(self.admin_key, "admin_reissue_login", {"user_id": 9999})["result"]
         self.assertTrue(missing["isError"])
         cancelled = self.tool(self.admin_key, "admin_cancel_login_link", {"user_id": self.user.id})["result"]["structuredContent"]
         self.assertEqual(cancelled, {"ok": True, "removed": True})
         self.assertNotEqual(self.sign_in_with(made["structuredContent"]), 200)
 
     def test_mcp_admin_tools_are_hidden_from_a_user_key(self) -> None:
-        self.assertTrue({"admin_reissue_login_link", "admin_cancel_login_link"} <= self.tool_names(self.admin_key))
+        self.assertTrue({"admin_reissue_login", "admin_cancel_login_link"} <= self.tool_names(self.admin_key))
         names = self.tool_names(self.user_key)
         self.assertIn("create_my_login_link", names)
-        self.assertFalse({"admin_reissue_login_link", "admin_cancel_login_link"} & names)
+        self.assertFalse({"admin_reissue_login", "admin_cancel_login_link"} & names)

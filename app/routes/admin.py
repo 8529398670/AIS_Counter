@@ -63,26 +63,26 @@ def user_rows(store: Store, query: str = "") -> list[dict[str, Any]]:
 
 # A login link becomes a session, so one made with an API key is held short:
 # it works once and dies within a day. A leaked key can still make one, but
-# not a reusable or long-lived way in that outlasts revoking the key.
-# Browser sessions keep every choice (see routes/__init__.py).
+# not a reusable or long-lived way in, and revoking or deleting the key voids
+# the ones still usable (login_tokens.void_links_minted_by_key). Browser
+# sessions keep every choice (see routes/__init__.py).
 KEY_LINK_MAX_MINUTES = 1440
 KEY_LINK_MESSAGE = f"a login link made with an API key works once and expires within {KEY_LINK_MAX_MINUTES} minutes"
 
 
-def link_options(request: Request, body: dict) -> login_tokens.LinkOptions | None:
-    """What the body asked a new login link to allow, with the configured
-    defaults filling the gaps (see login_tokens.resolve_link). None when it is
-    out of range. For create_user, which only a browser session reaches."""
-    try:
-        return checked_link_options(request, body.get("max_uses"), body.get("expires_in_minutes"))
-    except Refused:
-        return None
+def link_options(request: Request, body: dict) -> login_tokens.LinkOptions:
+    """What the body asked a new login link to allow: checked_link_options
+    on its max_uses and expires_in_minutes. Raises Refused when it is out of
+    range."""
+    return checked_link_options(request, body.get("max_uses"), body.get("expires_in_minutes"))
 
 
 def checked_link_options(request: Request, max_uses: object, expires_in_minutes: object) -> login_tokens.LinkOptions:
-    """link_options for the routes and MCP tools that mint a link, with the
-    API key limit applied: refused (400) rather than quietly narrowed, so a
-    caller never holds a link that does less than it asked for."""
+    """What a new login link may allow, with the configured defaults filling
+    the gaps (see login_tokens.resolve_link), the API key limit applied, and
+    the key asking, if one is, recorded so revoking that key voids the link.
+    Refused (400) rather than quietly narrowed, so a caller never holds a link
+    that does less than it asked for."""
     cfg = get_config(request)
     try:
         options = login_tokens.resolve_link(
@@ -99,7 +99,7 @@ def checked_link_options(request: Request, max_uses: object, expires_in_minutes:
         options = replace(options, ttl_seconds=min(options.ttl_seconds, limit))
     if options.unlimited or options.max_uses != 1 or not 0 < options.ttl_seconds <= limit:
         raise Refused(400, KEY_LINK_MESSAGE)
-    return options
+    return replace(options, minted_by_key=actor.key_id)
 
 
 def _via(request: Request) -> dict[str, Any]:
@@ -139,20 +139,26 @@ async def create_user(request: Request) -> Response:
         return bad_request("malformed request body")
     if not check_csrf(request, body.get("csrf_token")):
         return forbidden("invalid csrf token")
+    try:
+        return JSONResponse(await run(create_user_checked, request, body), status_code=201)
+    except Refused as refused:
+        return refused.response(request)
+
+
+def create_user_checked(request: Request, body: dict) -> dict[str, Any]:
+    """create_user after the request is read, for it and the MCP
+    admin_create_user tool. Synchronous: it runs in a worker thread."""
     display_name, role = body.get("display_name"), body.get("role")
     if not users.valid_display_name(display_name):
-        return bad_request("display name must be 1-80 characters")
+        raise Refused(400, "display name must be 1-80 characters")
     if not users.valid_role(role):
-        return bad_request("role must be admin or user")
+        raise Refused(400, "role must be admin or user")
     options = link_options(request, body)
-    if options is None:
-        return bad_request(str(login_tokens.BadLoginLinkError()))
-
     store = get_store(request)
-    user = await run(users.create_user, store, display_name, role)
-    credential, info = await run(login_tokens.issue_login_link, store, user.id, options)
+    user = users.create_user(store, display_name, role)
+    credential, info = login_tokens.issue_login_link(store, user.id, options)
     audit(request, KIND_ADMIN, "user created", {"user_id": user.id, "name": user.display_name, "role": user.role})
-    return JSONResponse({"user_id": user.id, **link_response(credential, info, get_config(request).url)}, status_code=201)
+    return {"user_id": user.id, **link_response(credential, info, get_config(request).url)}
 
 
 async def reissue_login(request: Request) -> Response:
@@ -176,18 +182,18 @@ async def reissue_login(request: Request) -> Response:
     if user_id is None:
         return bad_request("invalid user id")
     try:
-        return JSONResponse(await run(reissue_login_checked, request, user_id, body.get("max_uses"), body.get("expires_in_minutes")))
+        return JSONResponse(await run(reissue_login_checked, request, user_id, body))
     except Refused as refused:
         return refused.response(request)
 
 
-def reissue_login_checked(request: Request, user_id: int, max_uses: object, expires_in_minutes: object) -> dict[str, Any]:
-    """reissue_login after the request is read, for it and the MCP tool.
-    Synchronous: it runs in a worker thread."""
+def reissue_login_checked(request: Request, user_id: int, body: dict) -> dict[str, Any]:
+    """reissue_login after the request is read, for it and the MCP
+    admin_reissue_login tool."""
     store = get_store(request)
     if users.get_user(store, user_id) is None:
         raise Refused(404, "no such user")
-    options = checked_link_options(request, max_uses, expires_in_minutes)
+    options = link_options(request, body)
     credential, info = login_tokens.issue_login_link(store, user_id, options)
     audit(request, KIND_ADMIN, "login link reissued", {"user_id": user_id, "max_uses": info["max_uses"], "expires_at": info["expires_at"], **_via(request)})
     return link_response(credential, info, get_config(request).url)
@@ -214,7 +220,8 @@ async def cancel_login_link(request: Request) -> Response:
 
 
 def cancel_login_link_checked(request: Request, user_id: int) -> dict[str, Any]:
-    """cancel_login_link after the request is read, for it and the MCP tool."""
+    """cancel_login_link after the request is read, for it and the MCP
+    admin_cancel_login_link tool."""
     store = get_store(request)
     if users.get_user(store, user_id) is None:
         raise Refused(404, "no such user")
@@ -266,8 +273,7 @@ async def revoke_access(request: Request) -> Response:
 
 async def rename_user(request: Request) -> Response:
     """An admin renaming someone else. Who may rename whom lives in
-    credentials.rename_user_as. It needs a browser session, like making an
-    account: a name is how people tell who they are dealing with."""
+    credentials.rename_user_as."""
     body = await read_json(request)
     if body is None:
         return bad_request("malformed request body")
@@ -276,28 +282,34 @@ async def rename_user(request: Request) -> Response:
     user_id = parse_id(request.path_params["user_id"])
     if user_id is None:
         return bad_request("invalid user id")
-    name = body.get("display_name")
-    if not users.valid_display_name(name):
-        return bad_request("display name must be 1-80 characters")
-    expect = body.get("expect")
-    if expect is not None and not isinstance(expect, str):
-        return bad_request("expect must be a string")
     try:
-        found = await run(credentials.rename_user_as, get_store(request), user_id, actor_from(request).user.id, name, expect)
+        return JSONResponse(await run(rename_user_checked, request, user_id, body.get("display_name"), body.get("expect")))
+    except Refused as refused:
+        return refused.response(request)
+
+
+def rename_user_checked(request: Request, user_id: int, name: Any, expect: Any) -> dict[str, Any]:
+    """rename_user after the request is read, for it and the MCP
+    admin_rename_user tool."""
+    if not users.valid_display_name(name):
+        raise Refused(400, "display name must be 1-80 characters")
+    if expect is not None and not isinstance(expect, str):
+        raise Refused(400, "expect must be a string")
+    try:
+        found = credentials.rename_user_as(get_store(request), user_id, actor_from(request).user.id, name, expect)
     except users.RenameConflictError as stale:
-        return conflict(str(stale), display_name=stale.current)
+        raise Refused(409, str(stale), display_name=stale.current) from None
     except credentials.OwnerRequiredError:
-        return forbidden("only the owner can rename an admin")
+        raise Refused(403, "only the owner can rename an admin") from None
     if not found:
-        return not_found("no such user")
+        raise Refused(404, "no such user")
     audit(request, KIND_ADMIN, "user renamed", {"user_id": user_id, "name": name.strip()})
-    return JSONResponse({"ok": True, "display_name": name.strip()})
+    return {"ok": True, "display_name": name.strip()}
 
 
 async def set_user_role(request: Request) -> Response:
     """Make an account an admin or an ordinary user. Who may do what lives in
-    credentials.set_user_role. It needs a browser session, like making an
-    account, so a leaked admin key cannot hand out admin rights."""
+    credentials.set_user_role."""
     body = await read_json(request)
     if body is None:
         return bad_request("malformed request body")
@@ -306,22 +318,30 @@ async def set_user_role(request: Request) -> Response:
     user_id = parse_id(request.path_params["user_id"])
     if user_id is None:
         return bad_request("invalid user id")
-    role = body.get("role")
-    if not users.valid_role(role):
-        return bad_request("role must be admin or user")
     try:
-        changed = await run(credentials.set_user_role, get_store(request), user_id, actor_from(request).user.id, role)
+        return JSONResponse(await run(set_user_role_checked, request, user_id, body.get("role")))
+    except Refused as refused:
+        return refused.response(request)
+
+
+def set_user_role_checked(request: Request, user_id: int, role: Any) -> dict[str, Any]:
+    """set_user_role after the request is read, for it and the MCP
+    admin_set_user_role tool."""
+    if not users.valid_role(role):
+        raise Refused(400, "role must be admin or user")
+    try:
+        changed = credentials.set_user_role(get_store(request), user_id, actor_from(request).user.id, role)
     except credentials.SelfRoleError as refusal:
-        return bad_request(str(refusal))
+        raise Refused(400, str(refusal)) from None
     except credentials.OwnerProtectedError:
-        return forbidden("the owner is always an admin")
+        raise Refused(403, "the owner is always an admin") from None
     except credentials.OwnerRequiredError:
-        return forbidden("only the owner can take away an admin's rights")
+        raise Refused(403, "only the owner can take away an admin's rights") from None
     if changed is None:
-        return not_found("no such user")
+        raise Refused(404, "no such user")
     if changed:
         audit(request, KIND_ADMIN, "user role changed", {"user_id": user_id, "role": role})
-    return JSONResponse({"ok": True, "role": role})
+    return {"ok": True, "role": role}
 
 
 async def delete_user(request: Request) -> Response:
@@ -330,9 +350,8 @@ async def delete_user(request: Request) -> Response:
     account that should not exist at all.
 
     Who may delete whom lives in credentials.delete_user, checked inside its
-    transaction. The route also requires a browser session (see
-    app/routes/__init__.py): this cannot be undone, so a leaked admin-scoped
-    API key must not be able to do it."""
+    transaction. An admin-scoped API key may do it too, and the MCP tool is
+    marked destructive so a client asks first."""
     body = await read_json(request)
     if body is None:
         return bad_request("malformed request body")
@@ -341,26 +360,32 @@ async def delete_user(request: Request) -> Response:
     user_id = parse_id(request.path_params["user_id"])
     if user_id is None:
         return bad_request("invalid user id")
-
     try:
-        removed = await run(credentials.delete_user, get_store(request), user_id, actor_from(request).user.id)
+        return JSONResponse(await run(delete_user_checked, request, user_id))
+    except Refused as refused:
+        return refused.response(request)
+
+
+def delete_user_checked(request: Request, user_id: int) -> dict[str, Any]:
+    """delete_user after the request is read, for it and the MCP
+    admin_delete_user tool."""
+    try:
+        removed = credentials.delete_user(get_store(request), user_id, actor_from(request).user.id)
     except credentials.SelfDeleteError:
-        return bad_request("you cannot delete your own account")
+        raise Refused(400, "you cannot delete your own account") from None
     except credentials.OwnerProtectedError:
-        return forbidden("the owner account cannot be deleted")
+        raise Refused(403, "the owner account cannot be deleted") from None
     except credentials.OwnerRequiredError:
-        return forbidden("only the owner can delete an admin account")
+        raise Refused(403, "only the owner can delete an admin account") from None
     if removed is None:
-        return not_found("no such user")
+        raise Refused(404, "no such user")
     audit(request, KIND_ADMIN, "user deleted", {"user_id": user_id})
-    return JSONResponse({"ok": True, "removed": removed.to_dict()})
+    return {"ok": True, "removed": removed.to_dict()}
 
 
 async def reset_two_factor(request: Request) -> Response:
     """For someone who lost both the phone and the recovery codes. Who may
-    reset whom lives in credentials.reset_two_factor; it needs a browser
-    session, because it removes what stands between a login link and the
-    account."""
+    reset whom lives in credentials.reset_two_factor."""
     body = await read_json(request)
     if body is None:
         return bad_request("malformed request body")
@@ -370,17 +395,26 @@ async def reset_two_factor(request: Request) -> Response:
     if user_id is None:
         return bad_request("invalid user id")
     try:
-        found = await run(credentials.reset_two_factor, get_store(request), user_id, actor_from(request).user.id)
+        return JSONResponse(await run(reset_two_factor_checked, request, user_id))
+    except Refused as refused:
+        return refused.response(request)
+
+
+def reset_two_factor_checked(request: Request, user_id: int) -> dict[str, Any]:
+    """reset_two_factor after the request is read, for it and the MCP
+    admin_reset_two_factor tool."""
+    try:
+        found = credentials.reset_two_factor(get_store(request), user_id, actor_from(request).user.id)
     except credentials.SelfResetError:
-        return bad_request("you cannot reset your own two-factor sign-in")
+        raise Refused(400, "you cannot reset your own two-factor sign-in") from None
     except credentials.OwnerProtectedError:
-        return forbidden("the owner's two-factor sign-in can only be reset from a shell")
+        raise Refused(403, "the owner's two-factor sign-in can only be reset from a shell") from None
     except credentials.OwnerRequiredError:
-        return forbidden("only the owner can reset an admin's two-factor sign-in")
+        raise Refused(403, "only the owner can reset an admin's two-factor sign-in") from None
     if not found:
-        return not_found("no such user")
+        raise Refused(404, "no such user")
     audit(request, KIND_ADMIN, "two-factor reset", {"user_id": user_id})
-    return JSONResponse({"ok": True})
+    return {"ok": True}
 
 
 # ---------------------------------------------------------------------------

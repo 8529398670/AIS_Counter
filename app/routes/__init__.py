@@ -112,32 +112,26 @@ def build_routes(static_server: StaticServer, cfg: Config) -> list[BaseRoute]:
     # Joining through an invite link: holding the link is the permission.
     public_invites = group(RequireInviteLinks)
     signed_in = group(RequireLogin)
+    # This app's own session-only routes: the MATLAB path and the MATLAB helper.
     sessions_only = group(RequireLogin, RequireSession)
     pin_sessions = group(RequireInviteLinks, RequireLogin, RequireSession)
     # API keys: any signed-in user manages their own, from a browser session.
     my_keys = group(RequireAPIKeys, RequireLogin, RequireSession)
     # Admin only: deciding who gets in.
     admins = group(RequireAdmin)
-    # Creating an account requires a browser session. A login link becomes a
-    # session, and a session can mint API keys -- so if an admin-scoped key
-    # could create accounts, a leaked key could turn itself into a fresh
-    # session and a fresh key, and revoking the leaked one would not end the
-    # compromise. The rule is: an API key may use what an account can do, but
-    # it never creates credentials. See RequireSession.
+    # An admin-scoped key may do all of it, creating accounts and handing out
+    # login links included. A login link a key makes works once and expires
+    # within a day (admin.checked_link_options). Every link records the key
+    # that made it, and revoking or deleting that key voids the links it made
+    # that can still be used (models.void_links_minted_by_key), so revoking a
+    # leaked key still ends what it could hand out. Who may delete or demote
+    # whom (the owner rules) is enforced in the models.
     #
-    # The one exception is a login link for an existing account (your own,
-    # or anyone's for an admin): a key may make one, so an agent can hand a
-    # person a way in, but only one that works once and expires within a day
-    # (admin.checked_link_options). A leaked key can still do that much --
-    # which is why revoke_access voids live links as well as keys.
-    #
-    # Deleting an account requires a session too, for a different reason: it
-    # cannot be undone. A leaked admin key can disable accounts, which an
-    # admin can reverse; it must not be able to erase them. Who may delete
-    # whom (the owner rules) is enforced in credentials.delete_user.
+    # This app's own admin routes that reach folders and programs on this
+    # machine (ais.py's local_* and path routes) need a browser session: a
+    # leaked key must not be able to read or launch anything there.
     admin_sessions = group(RequireAdmin, RequireSession)
     admin_invites = group(RequireInviteLinks, RequireAdmin)
-    admin_invite_sessions = group(RequireInviteLinks, RequireAdmin, RequireSession)
     # Admin view of every key in the app -- "who has standing access" -- and
     # the ability to revoke or delete someone else's.
     admin_keys = group(RequireAPIKeys, RequireAdmin, RequireSession)
@@ -184,15 +178,17 @@ def build_routes(static_server: StaticServer, cfg: Config) -> list[BaseRoute]:
         pin_sessions("/api/account/pin", account.set_pin, ["POST"]),
         # A session only: this path decides what this person's zips execute.
         sessions_only("/api/account/matlab", account.set_matlab_path, ["POST"]),
-        # A key may make one, held to once and a day. See admin_sessions above.
+        # A key may make its owner a login link, but only a key carrying the
+        # account's full role (see account.create_my_login_link), held to once
+        # and a day, and revoking the key voids the link if it is still unused.
         signed_in("/api/account/login-link", account.create_my_login_link, ["POST"]),
         signed_in("/api/account/login-link/cancel", account.cancel_my_login_link, ["POST"]),
-        # The account's own sessions. A session only: a key has none, and
-        # signing devices out is a person's decision.
-        sessions_only("/api/account/sessions", sessions.list_my_sessions),
-        sessions_only("/api/account/sessions/revoke-others", sessions.revoke_others, ["POST"]),
-        sessions_only("/api/account/sessions/{session_id}/label", sessions.label_one, ["POST"]),
-        sessions_only("/api/account/sessions/{session_id}/revoke", sessions.revoke_one, ["POST"]),
+        # The account's own sessions. A key may list and end them too; through
+        # a key there is no current device, so revoke-others ends them all.
+        signed_in("/api/account/sessions", sessions.list_my_sessions),
+        signed_in("/api/account/sessions/revoke-others", sessions.revoke_others, ["POST"]),
+        signed_in("/api/account/sessions/{session_id}/label", sessions.label_one, ["POST"]),
+        signed_in("/api/account/sessions/{session_id}/revoke", sessions.revoke_one, ["POST"]),
         my_password("/api/account/password", passwords.set_password, ["POST"]),
         my_two_factor("/api/account/two-factor/start", two_factor.start_setup, ["POST"]),
         my_two_factor("/api/account/two-factor/confirm", two_factor.confirm_setup, ["POST"]),
@@ -310,35 +306,33 @@ def build_routes(static_server: StaticServer, cfg: Config) -> list[BaseRoute]:
         my_keys("/api/keys/{key_id}/delete", api_keys.delete_my_key, ["POST"]),
         my_keys("/api/keys/{key_id}/restore", api_keys.restore_my_key, ["POST"]),
         admins("/api/admin/users", admin.list_users),
-        admin_sessions("/api/admin/users", admin.create_user, ["POST"]),
+        admins("/api/admin/users", admin.create_user, ["POST"]),
         admins("/api/admin/users/{user_id}/reissue-login", admin.reissue_login, ["POST"]),
         admins("/api/admin/users/{user_id}/cancel-login-link", admin.cancel_login_link, ["POST"]),
         admins("/api/admin/users/{user_id}/disabled", admin.set_user_disabled, ["POST"]),
         admins("/api/admin/users/{user_id}/revoke-access", admin.revoke_access, ["POST"]),
-        admin_sessions("/api/admin/users/{user_id}/rename", admin.rename_user, ["POST"]),
-        admin_sessions("/api/admin/users/{user_id}/role", admin.set_user_role, ["POST"]),
-        admin_sessions("/api/admin/users/{user_id}/delete", admin.delete_user, ["POST"]),
-        admin_sessions("/api/admin/users/{user_id}/reset-two-factor", admin.reset_two_factor, ["POST"]),
-        # A session only, like your own devices list: a key that could end
-        # sessions could end the one that would revoke it.
-        admin_sessions("/api/admin/users/{user_id}/sessions", sessions.list_user_sessions),
-        admin_sessions("/api/admin/users/{user_id}/sessions/{session_id}/revoke", sessions.revoke_user_session, ["POST"]),
+        admins("/api/admin/users/{user_id}/rename", admin.rename_user, ["POST"]),
+        admins("/api/admin/users/{user_id}/role", admin.set_user_role, ["POST"]),
+        admins("/api/admin/users/{user_id}/delete", admin.delete_user, ["POST"]),
+        admins("/api/admin/users/{user_id}/reset-two-factor", admin.reset_two_factor, ["POST"]),
+        # An account's devices, like your own list above.
+        admins("/api/admin/users/{user_id}/sessions", sessions.list_user_sessions),
+        admins("/api/admin/users/{user_id}/sessions/{session_id}/revoke", sessions.revoke_user_session, ["POST"]),
         # The themes everyone starts from. Not a credential, so a key may.
         admins("/api/admin/theme-defaults", themes.get_theme_defaults),
         admins("/api/admin/theme-defaults", themes.set_theme_defaults, ["POST"]),
         # Invite links: one link for a group, each person who opens it joins
-        # as a new user (see invite_links.py). Creating one needs a session for
-        # the same reason as creating a user -- the link mints accounts and
-        # sessions. Deleting one needs a session like deleting a user. Listing
-        # and switching one off are safe for an admin key.
+        # as a new user (see invite_links.py). An admin key may manage them;
+        # like a login link, one a key made is switched off when that key is
+        # revoked.
         admin_invites("/api/admin/invite-links", invite_links.list_invite_links),
-        admin_invite_sessions("/api/admin/invite-links", invite_links.create_invite_link, ["POST"]),
-        admin_invite_sessions("/api/admin/invite-links/{link_id}/rename", invite_links.rename_invite_link, ["POST"]),
-        admin_invite_sessions("/api/admin/invite-links/{link_id}/limits", invite_links.set_invite_link_limits, ["POST"]),
-        admin_invite_sessions("/api/admin/invite-links/{link_id}/switch-on", invite_links.switch_on_invite_link, ["POST"]),
+        admin_invites("/api/admin/invite-links", invite_links.create_invite_link, ["POST"]),
+        admin_invites("/api/admin/invite-links/{link_id}/rename", invite_links.rename_invite_link, ["POST"]),
+        admin_invites("/api/admin/invite-links/{link_id}/limits", invite_links.set_invite_link_limits, ["POST"]),
+        admin_invites("/api/admin/invite-links/{link_id}/switch-on", invite_links.switch_on_invite_link, ["POST"]),
         admin_invites("/api/admin/invite-links/{link_id}/revoke", invite_links.revoke_invite_link, ["POST"]),
-        admin_invite_sessions("/api/admin/invite-links/{link_id}/delete", invite_links.delete_invite_link, ["POST"]),
-        admin_invite_sessions("/api/admin/invite-links/{link_id}/restore", invite_links.restore_invite_link, ["POST"]),
+        admin_invites("/api/admin/invite-links/{link_id}/delete", invite_links.delete_invite_link, ["POST"]),
+        admin_invites("/api/admin/invite-links/{link_id}/restore", invite_links.restore_invite_link, ["POST"]),
         admin_keys("/api/admin/keys", api_keys.list_all_keys),
         admin_keys("/api/admin/keys", api_keys.create_key_for_user, ["POST"]),
         admin_keys("/api/admin/keys/{key_id}/rename", api_keys.rename_any_key, ["POST"]),
