@@ -5,6 +5,10 @@
 #
 # Plain uvicorn, not uvicorn[standard]: uvloop and httptools would add speed
 # this app does not need, and more native code to trust.
+#
+# msgspec is each route's request and reply types: it parses and checks the
+# request, encodes the reply, and gives the JSON Schema the API docs and the
+# MCP tools are written from (app/apidocs/route.py).
 starlette==1.9.0
 uvicorn==0.54.0
 PyYAML==6.0.3
@@ -18,3 +22,4 @@ tifffile==2026.10.15
 # Decodes the LZW TIFFs ZEN exports. tifffile would use imagecodecs, which has
 # no musllinux wheel, so adding it would break the Docker build.
 Pillow==13.0.0
+msgspec==0.22.0

@@ -52,19 +52,19 @@ class MCPParity(RoutesTestCase):
         spec = operations(api_spec()[0])
         problems, covered = [], set()
         for tool in build_registry().tools():
-            operation = spec.get(tool.route)
-            if not tool.route:
+            operation = spec.get(tool.route_name())
+            if not tool.route_name():
                 problems.append(f"tool {tool.name} has no route")
             elif operation is None:
-                problems.append(f"tool {tool.name} names {tool.route}, which has no API docs")
+                problems.append(f"tool {tool.name} names {tool.route_name()}, which has no API docs")
             elif not operation["key_ok"]:
-                problems.append(f"tool {tool.name} names {tool.route}, which an API key may not call")
+                problems.append(f"tool {tool.name} names {tool.route_name()}, which an API key may not call")
             elif operation["http_only"]:
-                problems.append(f"{tool.route} has a tool ({tool.name}) and an x-mcp-http reason; drop one")
-            covered.add(tool.route)
+                problems.append(f"{tool.route_name()} has a tool ({tool.name}) and an x-mcp-http reason; drop one")
+            covered.add(tool.route_name())
         for name, operation in spec.items():
             if operation["key_ok"] and name not in covered and not operation["http_only"]:
-                problems.append(f"{name} takes an API key but has no MCP tool: add one in mcp_tools.py, or an mcp_http reason in its doc()")
+                problems.append(f"{name} takes an API key but has no MCP tool: add one in mcp_tools.py, or an mcp_http reason in its @route(...)")
             if not operation["key_ok"] and operation["http_only"]:
                 problems.append(f"{name} has an x-mcp-http reason but no key may call it; drop the reason")
         self.assertEqual(sorted(problems), [])
@@ -124,6 +124,21 @@ class MCPParity(RoutesTestCase):
         # The owner rules hold through the tools.
         self.assertTrue(tool("admin_set_user_role", {"user_id": self.owner.id, "role": "user"}, self.admin_key)[0])
         self.assertFalse(tool("admin_rename_user", {"user_id": self.user.id, "display_name": "Mem"}, self.admin_key)[0])
+
+        # S1: a non-owner admin's key gets neither the owner nor another admin
+        # a login link; the owner's key still may.
+        from app.models import api_keys, users
+
+        third = users.create_user(self.store, "Third", users.ROLE_ADMIN)
+        other_key, _ = api_keys.issue_api_key(self.store, self.admin.id, "ops", users.ROLE_ADMIN, 3600)
+        for name in ("admin_reissue_login", "admin_cancel_login_link"):
+            for target in (self.owner.id, third.id):
+                with self.subTest(tool=name, target=target):
+                    failed, reply = tool(name, {"user_id": target}, other_key)
+                    self.assertTrue(failed, reply)
+                    self.assertIn("owner", reply["error"])
+        failed, reply = tool("admin_reissue_login", {"user_id": third.id}, self.admin_key)
+        self.assertFalse(failed, reply)
 
 
 if __name__ == "__main__":

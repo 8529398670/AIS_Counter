@@ -438,7 +438,6 @@
           },
           "z_path": {
             "description": "The z of each pixel (a number), null outside the AIS. Z-stacks only.",
-            "items": {},
             "type": "array"
           },
           "z_span_um": {
@@ -529,6 +528,10 @@
             "type": "boolean"
           },
           "name": {
+            "type": "string"
+          },
+          "purpose": {
+            "description": "What the key is for, when it is a special one: matlab_helper for a MATLAB helper's key.",
             "type": "string"
           },
           "revoked": {
@@ -751,11 +754,19 @@
                   "type": "string"
                 }
               },
+              "required": [
+                "created_at",
+                "name",
+                "target"
+              ],
               "type": "object"
             },
             "type": "array"
           }
         },
+        "required": [
+          "names"
+        ],
         "type": "object"
       },
       "InviteLink": {
@@ -794,6 +805,7 @@
         },
         "required": [
           "created_by",
+          "expires_at",
           "id",
           "label",
           "live",
@@ -823,7 +835,10 @@
             "type": "string"
           },
           "last_ok": {
-            "type": "boolean"
+            "type": [
+              "boolean",
+              "null"
+            ]
           },
           "last_started": {
             "format": "date-time",
@@ -850,18 +865,6 @@
           "next_due",
           "running",
           "runs"
-        ],
-        "type": "object"
-      },
-      "JoinPath": {
-        "properties": {
-          "join_path": {
-            "description": "The link to hand out, shown in this response only. A credential: treat it like a password.",
-            "type": "string"
-          }
-        },
-        "required": [
-          "join_path"
         ],
         "type": "object"
       },
@@ -920,7 +923,8 @@
         },
         "required": [
           "date",
-          "entries"
+          "entries",
+          "next"
         ],
         "type": "object"
       },
@@ -943,7 +947,10 @@
           }
         },
         "required": [
-          "days"
+          "days",
+          "dropped",
+          "settings",
+          "total_bytes"
         ],
         "type": "object"
       },
@@ -1141,7 +1148,7 @@
             "oneOf": [
               {
                 "items": {
-                  "type": "object"
+                  "$ref": "#/components/schemas/Theme"
                 },
                 "type": "array"
               },
@@ -1170,12 +1177,37 @@
         },
         "required": [
           "account_role",
+          "announcement",
+          "api_keys_enabled",
+          "auth",
           "authenticated",
+          "description",
           "display_name",
+          "has_password",
+          "has_pin",
           "id",
+          "invite_links_enabled",
           "is_owner",
+          "login_link",
+          "logs_enabled",
+          "logs_ui_clicks",
           "maintenance",
-          "role"
+          "mcp_enabled",
+          "mcp_url",
+          "openapi_url",
+          "password_blocked",
+          "passwords_enabled",
+          "repo",
+          "role",
+          "shortcuts",
+          "show_about",
+          "theme_id",
+          "themes",
+          "themes_custom",
+          "two_factor",
+          "two_factor_enabled",
+          "username",
+          "version"
         ],
         "type": "object"
       },
@@ -1282,23 +1314,80 @@
         "type": "object"
       },
       "NewAPIKey": {
-        "allOf": [
-          {
-            "$ref": "#/components/schemas/APIKey"
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
           },
-          {
-            "properties": {
-              "credential": {
-                "description": "Shown in this response only, and never recoverable.",
-                "type": "string"
-              }
-            },
-            "required": [
-              "credential"
+          "created_by": {
+            "description": "The admin who made this key for its owner. Absent if the owner made it.",
+            "type": "integer"
+          },
+          "created_by_name": {
+            "type": "string"
+          },
+          "credential": {
+            "description": "Shown in this response only, and never recoverable.",
+            "type": "string"
+          },
+          "display_name": {
+            "description": "The key's owner. On the admin list only.",
+            "type": "string"
+          },
+          "expired": {
+            "type": "boolean"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "last_used_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "live": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "purpose": {
+            "description": "What the key is for, when it is a special one: matlab_helper for a MATLAB helper's key.",
+            "type": "string"
+          },
+          "revoked": {
+            "type": "boolean"
+          },
+          "revoked_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "role": {
+            "enum": [
+              "admin",
+              "user"
             ],
-            "type": "object"
+            "type": "string"
+          },
+          "user_id": {
+            "type": "integer"
           }
-        ]
+        },
+        "required": [
+          "created_at",
+          "credential",
+          "expired",
+          "id",
+          "live",
+          "name",
+          "revoked",
+          "role",
+          "user_id"
+        ],
+        "type": "object"
       },
       "PruneResult": {
         "properties": {
@@ -1315,6 +1404,12 @@
             "type": "integer"
           }
         },
+        "required": [
+          "bytes_after",
+          "bytes_before",
+          "compressed",
+          "deleted"
+        ],
         "type": "object"
       },
       "Revoked": {
@@ -1332,6 +1427,12 @@
             "type": "integer"
           }
         },
+        "required": [
+          "api_keys",
+          "login_links",
+          "passwords",
+          "sessions"
+        ],
         "type": "object"
       },
       "Session": {
@@ -1448,6 +1549,14 @@
             "type": "string"
           }
         },
+        "required": [
+          "applied",
+          "changes",
+          "restart",
+          "scripts",
+          "unchanged",
+          "version"
+        ],
         "type": "object"
       },
       "SettingsSnapshot": {
@@ -1467,6 +1576,11 @@
                     "type": "string"
                   }
                 },
+                "required": [
+                  "at",
+                  "message",
+                  "origin"
+                ],
                 "type": "object"
               },
               {
@@ -1496,6 +1610,10 @@
                         "type": "string"
                       },
                       "default": {},
+                      "file_only": {
+                        "description": "A path: change it in config.yaml, never here.",
+                        "type": "boolean"
+                      },
                       "help": {
                         "type": "string"
                       },
@@ -1520,6 +1638,20 @@
                       },
                       "value": {}
                     },
+                    "required": [
+                      "apply",
+                      "default",
+                      "file_only",
+                      "help",
+                      "in_file",
+                      "key",
+                      "locked",
+                      "name",
+                      "pending_restart",
+                      "running",
+                      "type",
+                      "value"
+                    ],
                     "type": "object"
                   },
                   "type": "array"
@@ -1528,6 +1660,11 @@
                   "type": "string"
                 }
               },
+              "required": [
+                "help",
+                "keys",
+                "name"
+              ],
               "type": "object"
             },
             "type": "array"
@@ -1543,6 +1680,16 @@
             "type": "boolean"
           }
         },
+        "required": [
+          "error",
+          "file",
+          "in_container",
+          "secret_file",
+          "sections",
+          "stale",
+          "version",
+          "writable"
+        ],
         "type": "object"
       },
       "SignIn": {
@@ -1589,74 +1736,88 @@
           },
           "button": {
             "description": "How the theme's buttons look. A choice left out is the default (rounded, normal, raised, normal).",
-            "properties": {
-              "case": {
-                "enum": [
-                  "normal",
-                  "upper"
-                ],
-                "type": "string"
+            "oneOf": [
+              {
+                "properties": {
+                  "case": {
+                    "enum": [
+                      "normal",
+                      "upper"
+                    ],
+                    "type": "string"
+                  },
+                  "depth": {
+                    "enum": [
+                      "flat",
+                      "raised",
+                      "glossy"
+                    ],
+                    "type": "string"
+                  },
+                  "shape": {
+                    "enum": [
+                      "square",
+                      "soft",
+                      "rounded",
+                      "pill"
+                    ],
+                    "type": "string"
+                  },
+                  "weight": {
+                    "enum": [
+                      "normal",
+                      "medium",
+                      "bold"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "type": "object"
               },
-              "depth": {
-                "enum": [
-                  "flat",
-                  "raised",
-                  "glossy"
-                ],
-                "type": "string"
-              },
-              "shape": {
-                "enum": [
-                  "square",
-                  "soft",
-                  "rounded",
-                  "pill"
-                ],
-                "type": "string"
-              },
-              "weight": {
-                "enum": [
-                  "normal",
-                  "medium",
-                  "bold"
-                ],
-                "type": "string"
+              {
+                "type": "null"
               }
-            },
-            "type": "object"
+            ]
           },
           "dark": {
             "description": "A light theme's colors for dark mode, kept while it is light. Switching the theme to dark swaps them in. A light theme's light (or a dark theme's dark) is dropped.",
-            "properties": {
-              "accent": {
-                "description": "The main color: what you can press.",
-                "type": "string"
-              },
-              "background": {
-                "description": "The page. Left out: the mode's own.",
-                "type": "string"
-              },
-              "overrides": {
-                "additionalProperties": {
-                  "type": "string"
+            "oneOf": [
+              {
+                "properties": {
+                  "accent": {
+                    "description": "The main color: what you can press.",
+                    "type": "string"
+                  },
+                  "background": {
+                    "description": "The page. Left out: the mode's own.",
+                    "type": "string"
+                  },
+                  "overrides": {
+                    "additionalProperties": {
+                      "type": "string"
+                    },
+                    "description": "Worked-out colors replaced by name: text, accent, accentFg, second, secondFg, secondText, link, navLink, background, surface, nested, chrome, info, infoBorder, border, and for each button variant V (Secondary, Success, Danger, Warning, Info, Light, Dark) btnV, btnVFg and btnVText. Leaving one out puts the readable color back.",
+                    "type": "object"
+                  },
+                  "second": {
+                    "description": "Says where you are: active nav item, headings, info.",
+                    "type": "string"
+                  },
+                  "surface": {
+                    "description": "Cards. Left out: the mode's own.",
+                    "type": "string"
+                  }
                 },
-                "description": "Worked-out colors replaced by name: text, accent, accentFg, second, secondFg, secondText, link, navLink, background, surface, nested, chrome, info, infoBorder, border, and for each button variant V (Secondary, Success, Danger, Warning, Info, Light, Dark) btnV, btnVFg and btnVText. Leaving one out puts the readable color back.",
+                "required": [
+                  "accent",
+                  "second"
+                ],
                 "type": "object"
               },
-              "second": {
-                "description": "Says where you are: active nav item, headings, info.",
-                "type": "string"
-              },
-              "surface": {
-                "description": "Cards. Left out: the mode's own.",
-                "type": "string"
+              {
+                "type": "null"
               }
-            },
-            "required": [
-              "accent",
-              "second"
-            ],
-            "type": "object"
+            ]
           },
           "id": {
             "description": "Lower-case letters, digits, - and _, up to 32.",
@@ -1664,36 +1825,43 @@
           },
           "light": {
             "description": "A dark theme's colors for light mode, kept while it is dark. Switching the theme to light swaps them in.",
-            "properties": {
-              "accent": {
-                "description": "The main color: what you can press.",
-                "type": "string"
-              },
-              "background": {
-                "description": "The page. Left out: the mode's own.",
-                "type": "string"
-              },
-              "overrides": {
-                "additionalProperties": {
-                  "type": "string"
+            "oneOf": [
+              {
+                "properties": {
+                  "accent": {
+                    "description": "The main color: what you can press.",
+                    "type": "string"
+                  },
+                  "background": {
+                    "description": "The page. Left out: the mode's own.",
+                    "type": "string"
+                  },
+                  "overrides": {
+                    "additionalProperties": {
+                      "type": "string"
+                    },
+                    "description": "Worked-out colors replaced by name: text, accent, accentFg, second, secondFg, secondText, link, navLink, background, surface, nested, chrome, info, infoBorder, border, and for each button variant V (Secondary, Success, Danger, Warning, Info, Light, Dark) btnV, btnVFg and btnVText. Leaving one out puts the readable color back.",
+                    "type": "object"
+                  },
+                  "second": {
+                    "description": "Says where you are: active nav item, headings, info.",
+                    "type": "string"
+                  },
+                  "surface": {
+                    "description": "Cards. Left out: the mode's own.",
+                    "type": "string"
+                  }
                 },
-                "description": "Worked-out colors replaced by name: text, accent, accentFg, second, secondFg, secondText, link, navLink, background, surface, nested, chrome, info, infoBorder, border, and for each button variant V (Secondary, Success, Danger, Warning, Info, Light, Dark) btnV, btnVFg and btnVText. Leaving one out puts the readable color back.",
+                "required": [
+                  "accent",
+                  "second"
+                ],
                 "type": "object"
               },
-              "second": {
-                "description": "Says where you are: active nav item, headings, info.",
-                "type": "string"
-              },
-              "surface": {
-                "description": "Cards. Left out: the mode's own.",
-                "type": "string"
+              {
+                "type": "null"
               }
-            },
-            "required": [
-              "accent",
-              "second"
-            ],
-            "type": "object"
+            ]
           },
           "mode": {
             "enum": [
@@ -1782,11 +1950,17 @@
           }
         },
         "required": [
+          "created_at",
           "disabled",
           "display_name",
+          "has_password",
           "id",
+          "login_link",
           "owner",
-          "role"
+          "password_blocked",
+          "role",
+          "two_factor",
+          "username"
         ],
         "type": "object"
       }
@@ -1866,27 +2040,35 @@
     },
     "/api/account/login-link": {
       "post": {
+        "description": "A link that signs your own account in on a browser or another device. Only a key with your account's full role may ask: one scoped down to user on an admin account is refused.",
         "operationId": "post_api_account_login_link",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
                     "type": "string"
                   },
                   "expires_in_minutes": {
-                    "description": "0 never expires. Default auth.login_token_ttl_seconds for a link that works once, auth.multi_use_login_token_ttl_seconds otherwise. Through an API key: 1-1440, and the default is held to a day.",
+                    "description": "0 never expires. Default auth.login_token_ttl_seconds for a link that works once, auth.multi_use_login_token_ttl_seconds otherwise.",
                     "maximum": 525600,
                     "minimum": 0,
-                    "type": "integer"
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
                   },
                   "max_uses": {
-                    "description": "Sign-ins the link allows: 1-1000, or 0 for unlimited. Default 1. Through an API key: 1 only.",
+                    "description": "Sign-ins the link allows: 1-1000, or 0 for unlimited. Default 1.",
                     "maximum": 1000,
                     "minimum": 0,
-                    "type": "integer"
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
                   }
                 },
                 "type": "object"
@@ -1975,11 +2157,13 @@
     },
     "/api/account/login-link/cancel": {
       "post": {
+        "description": "Void your account's live login link without making a new one. Devices it already signed in stay signed in. Answers with removed: 0 or 1.",
         "operationId": "post_api_account_login_link_cancel",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -2054,6 +2238,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -2131,6 +2316,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "code": {
                     "type": "string"
@@ -2220,6 +2406,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -2270,6 +2457,9 @@
           "403": {
             "$ref": "#/components/responses/E403"
           },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
           "429": {
             "$ref": "#/components/responses/E429"
           },
@@ -2291,17 +2481,21 @@
     },
     "/api/account/rename": {
       "post": {
+        "description": "Change your own display name (1-80 characters). expect, when given, is the name you think it has now; if someone changed it meanwhile the rename is refused with the current name, so nothing is overwritten unseen.",
         "operationId": "post_api_account_rename",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
                     "type": "string"
                   },
                   "display_name": {
+                    "maxLength": 80,
+                    "minLength": 1,
                     "type": "string"
                   },
                   "expect": {
@@ -2370,7 +2564,7 @@
             "apiKey": []
           }
         ],
-        "summary": "Change your display name",
+        "summary": "Rename your account",
         "tags": [
           "Account"
         ]
@@ -2378,6 +2572,7 @@
     },
     "/api/account/sessions": {
       "get": {
+        "description": "Where your account is signed in, a page at a time: id, when it started and was last seen, the browser, and the name you gave it. Through an API key no device is current. next is the offset of the following page, or null on the last one.",
         "operationId": "get_api_account_sessions",
         "parameters": [
           {
@@ -2385,12 +2580,14 @@
             "in": "query",
             "name": "limit",
             "schema": {
+              "default": 200,
               "maximum": 1000,
               "minimum": 1,
               "type": "integer"
             }
           },
           {
+            "description": "Rows to skip: the next value of the previous page.",
             "in": "query",
             "name": "offset",
             "schema": {
@@ -2471,6 +2668,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -2539,10 +2737,11 @@
     },
     "/api/account/sessions/{session_id}/label": {
       "post": {
-        "description": "This device included. Empty clears the name.",
+        "description": "Give one of your devices a name (at most 80 characters; empty clears it). expect, when given, is the name you think it has now.",
         "operationId": "post_api_account_sessions_session_id_label",
         "parameters": [
           {
+            "description": "The device's id, from GET /api/account/sessions or GET /api/admin/users/{user_id}/sessions (list_my_sessions or admin_list_user_sessions over MCP).",
             "in": "path",
             "name": "session_id",
             "required": true,
@@ -2555,6 +2754,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -2562,10 +2762,14 @@
                   },
                   "expect": {
                     "description": "The name you think it has. Answers 409 if it has another.",
-                    "type": "string"
+                    "type": [
+                      "string",
+                      "null"
+                    ]
                   },
                   "label": {
                     "description": "At most 80 characters.",
+                    "maxLength": 80,
                     "type": "string"
                   }
                 },
@@ -2640,9 +2844,11 @@
     },
     "/api/account/sessions/{session_id}/revoke": {
       "post": {
+        "description": "End one of your signed-in sessions; that browser has to sign in again.",
         "operationId": "post_api_account_sessions_session_id_revoke",
         "parameters": [
           {
+            "description": "The device's id, from GET /api/account/sessions or GET /api/admin/users/{user_id}/sessions (list_my_sessions or admin_list_user_sessions over MCP).",
             "in": "path",
             "name": "session_id",
             "required": true,
@@ -2655,6 +2861,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -2713,7 +2920,7 @@
             "apiKey": []
           }
         ],
-        "summary": "Sign out one device",
+        "summary": "Sign out one of your devices",
         "tags": [
           "Account"
         ]
@@ -2728,6 +2935,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -2804,11 +3012,13 @@
     },
     "/api/account/theme": {
       "post": {
+        "description": "Switch to another theme from your list (or the defaults), by its id.",
         "operationId": "post_api_account_theme",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -2875,7 +3085,7 @@
             "apiKey": []
           }
         ],
-        "summary": "Pick which theme you use",
+        "summary": "Pick your theme",
         "tags": [
           "Account"
         ]
@@ -2884,11 +3094,13 @@
     },
     "/api/account/themes": {
       "post": {
+        "description": "Replace your whole list of color themes (1 to 40) and pick the one you use. themes: null goes back to following the app's defaults. A theme is the Theme schema in the API reference (config/openapi.json): id, name, mode light|dark, accent, second, and optional colors as #rrggbb.",
         "operationId": "post_api_account_themes",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -2999,6 +3211,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "code": {
                     "type": "string"
@@ -3080,6 +3293,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "code": {
                     "type": "string"
@@ -3158,6 +3372,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -3225,6 +3440,7 @@
     },
     "/api/admin/invite-links": {
       "get": {
+        "description": "Group invite links, a page at a time: label, places used and left, expiry, and whether each still works. The links themselves are never shown again after creation. next is the offset of the following page, or null on the last one.",
         "operationId": "get_api_admin_invite_links",
         "parameters": [
           {
@@ -3232,12 +3448,14 @@
             "in": "query",
             "name": "limit",
             "schema": {
+              "default": 200,
               "maximum": 1000,
               "minimum": 1,
               "type": "integer"
             }
           },
           {
+            "description": "Rows to skip: the next value of the previous page.",
             "in": "query",
             "name": "offset",
             "schema": {
@@ -3322,6 +3540,9 @@
           "403": {
             "$ref": "#/components/responses/E403"
           },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
           "429": {
             "$ref": "#/components/responses/E429"
           },
@@ -3337,30 +3558,38 @@
             "apiKey": []
           }
         ],
-        "summary": "Every invite link",
+        "summary": "List invite links",
         "tags": [
           "Invite links"
         ],
         "x-required-role": "admin"
       },
       "post": {
+        "description": "One link for a group: each person who opens it joins as a new user, up to max_uses people, for days days.",
         "operationId": "post_api_admin_invite_links",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
                     "type": "string"
                   },
                   "days": {
+                    "maximum": 365,
+                    "minimum": 1,
                     "type": "integer"
                   },
                   "label": {
+                    "maxLength": 80,
+                    "minLength": 1,
                     "type": "string"
                   },
                   "max_uses": {
+                    "maximum": 1000,
+                    "minimum": 1,
                     "type": "integer"
                   }
                 },
@@ -3380,14 +3609,56 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "allOf": [
-                    {
-                      "$ref": "#/components/schemas/InviteLink"
+                  "properties": {
+                    "created_by": {
+                      "type": "integer"
                     },
-                    {
-                      "$ref": "#/components/schemas/JoinPath"
+                    "created_by_name": {
+                      "type": "string"
+                    },
+                    "expires_at": {
+                      "format": "date-time",
+                      "type": "string"
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "join_path": {
+                      "description": "The link to hand out, shown in this response only. A credential: treat it like a password.",
+                      "type": "string"
+                    },
+                    "label": {
+                      "type": "string"
+                    },
+                    "live": {
+                      "type": "boolean"
+                    },
+                    "max_uses": {
+                      "type": "integer"
+                    },
+                    "remaining": {
+                      "type": "integer"
+                    },
+                    "revoked": {
+                      "type": "boolean"
+                    },
+                    "used": {
+                      "type": "integer"
                     }
-                  ]
+                  },
+                  "required": [
+                    "created_by",
+                    "expires_at",
+                    "id",
+                    "join_path",
+                    "label",
+                    "live",
+                    "max_uses",
+                    "remaining",
+                    "revoked",
+                    "used"
+                  ],
+                  "type": "object"
                 }
               }
             },
@@ -3401,6 +3672,9 @@
           },
           "403": {
             "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
           },
           "429": {
             "$ref": "#/components/responses/E429"
@@ -3427,9 +3701,11 @@
     },
     "/api/admin/invite-links/{link_id}/delete": {
       "post": {
+        "description": "Take an invite link off the list and stop it working. The accounts it made stay.",
         "operationId": "post_api_admin_invite_links_link_id_delete",
         "parameters": [
           {
+            "description": "The link's id, from GET /api/admin/invite-links (admin_list_invite_links over MCP).",
             "in": "path",
             "name": "link_id",
             "required": true,
@@ -3442,6 +3718,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -3510,9 +3787,11 @@
     },
     "/api/admin/invite-links/{link_id}/limits": {
       "post": {
+        "description": "Set how many people the link may take in (never fewer than have joined) and, when days is given, a new expiry counted from now. The link then counts as this key's: revoking the key switches it off.",
         "operationId": "post_api_admin_invite_links_link_id_limits",
         "parameters": [
           {
+            "description": "The link's id, from GET /api/admin/invite-links (admin_list_invite_links over MCP).",
             "in": "path",
             "name": "link_id",
             "required": true,
@@ -3525,6 +3804,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -3534,7 +3814,10 @@
                     "description": "Counted from now. Leave out to keep the expiry.",
                     "maximum": 365,
                     "minimum": 1,
-                    "type": "integer"
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
                   },
                   "max_uses": {
                     "description": "Not fewer than have joined.",
@@ -3557,8 +3840,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "description": "The link, as in the list.",
-                  "type": "object"
+                  "$ref": "#/components/schemas/InviteLink"
                 }
               }
             },
@@ -3591,7 +3873,7 @@
             "apiKey": []
           }
         ],
-        "summary": "Change a link's places and expiry",
+        "summary": "Change an invite link's places and expiry",
         "tags": [
           "Invite links"
         ],
@@ -3601,9 +3883,11 @@
     },
     "/api/admin/invite-links/{link_id}/rename": {
       "post": {
+        "description": "Change the label people see on an invite link's join page (1-80 characters). expect, when given, is the label you think it has now.",
         "operationId": "post_api_admin_invite_links_link_id_rename",
         "parameters": [
           {
+            "description": "The link's id, from GET /api/admin/invite-links (admin_list_invite_links over MCP).",
             "in": "path",
             "name": "link_id",
             "required": true,
@@ -3616,6 +3900,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -3623,10 +3908,15 @@
                   },
                   "expect": {
                     "description": "The label you think it has. Answers 409 if it has another.",
-                    "type": "string"
+                    "type": [
+                      "string",
+                      "null"
+                    ]
                   },
                   "label": {
                     "description": "1-80 characters.",
+                    "maxLength": 80,
+                    "minLength": 1,
                     "type": "string"
                   }
                 },
@@ -3692,7 +3982,7 @@
             "apiKey": []
           }
         ],
-        "summary": "Rename a link",
+        "summary": "Rename an invite link",
         "tags": [
           "Invite links"
         ],
@@ -3702,9 +3992,11 @@
     },
     "/api/admin/invite-links/{link_id}/restore": {
       "post": {
+        "description": "Bring back an invite link deleted in the last few minutes, working as before. The link then counts as this key's: revoking the key switches it off.",
         "operationId": "post_api_admin_invite_links_link_id_restore",
         "parameters": [
           {
+            "description": "The link's id, from GET /api/admin/invite-links (admin_list_invite_links over MCP).",
             "in": "path",
             "name": "link_id",
             "required": true,
@@ -3717,6 +4009,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -3780,9 +4073,11 @@
     },
     "/api/admin/invite-links/{link_id}/revoke": {
       "post": {
+        "description": "Stop an invite link from letting anyone else join or sign in through it. Accounts it already made keep working. Cannot be switched back on.",
         "operationId": "post_api_admin_invite_links_link_id_revoke",
         "parameters": [
           {
+            "description": "The link's id, from GET /api/admin/invite-links (admin_list_invite_links over MCP).",
             "in": "path",
             "name": "link_id",
             "required": true,
@@ -3795,6 +4090,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -3853,7 +4149,7 @@
             "apiKey": []
           }
         ],
-        "summary": "Switch an invite link off",
+        "summary": "Switch off an invite link",
         "tags": [
           "Invite links"
         ],
@@ -3866,6 +4162,7 @@
         "operationId": "post_api_admin_invite_links_link_id_switch_on",
         "parameters": [
           {
+            "description": "The link's id, from GET /api/admin/invite-links (admin_list_invite_links over MCP).",
             "in": "path",
             "name": "link_id",
             "required": true,
@@ -3878,6 +4175,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -3895,8 +4193,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "description": "The link, as in the list.",
-                  "type": "object"
+                  "$ref": "#/components/schemas/InviteLink"
                 }
               }
             },
@@ -3929,7 +4226,7 @@
             "apiKey": []
           }
         ],
-        "summary": "Switch a link back on",
+        "summary": "Switch an invite link back on",
         "tags": [
           "Invite links"
         ],
@@ -3946,12 +4243,14 @@
             "in": "query",
             "name": "limit",
             "schema": {
+              "default": 200,
               "maximum": 1000,
               "minimum": 1,
               "type": "integer"
             }
           },
           {
+            "description": "Rows to skip: the next value of the previous page.",
             "in": "query",
             "name": "offset",
             "schema": {
@@ -4078,6 +4377,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -4106,6 +4406,7 @@
                     "type": "string"
                   },
                   "user_id": {
+                    "minimum": 1,
                     "type": "integer"
                   }
                 },
@@ -4167,6 +4468,7 @@
         "operationId": "post_api_admin_keys_key_id_delete",
         "parameters": [
           {
+            "description": "The key's id, from GET /api/keys (GET /api/admin/keys for anyone's).",
             "in": "path",
             "name": "key_id",
             "required": true,
@@ -4179,6 +4481,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -4247,6 +4550,7 @@
         "operationId": "post_api_admin_keys_key_id_expiry",
         "parameters": [
           {
+            "description": "The key's id, from GET /api/keys (GET /api/admin/keys for anyone's).",
             "in": "path",
             "name": "key_id",
             "required": true,
@@ -4259,6 +4563,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -4285,8 +4590,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "description": "The key, as in the list.",
-                  "type": "object"
+                  "$ref": "#/components/schemas/APIKey"
                 }
               }
             },
@@ -4329,6 +4633,7 @@
         "operationId": "post_api_admin_keys_key_id_rename",
         "parameters": [
           {
+            "description": "The key's id, from GET /api/keys (GET /api/admin/keys for anyone's).",
             "in": "path",
             "name": "key_id",
             "required": true,
@@ -4341,6 +4646,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -4348,10 +4654,15 @@
                   },
                   "expect": {
                     "description": "The name you think it has. Answers 409 if it has another.",
-                    "type": "string"
+                    "type": [
+                      "string",
+                      "null"
+                    ]
                   },
                   "name": {
                     "description": "1-80 characters.",
+                    "maxLength": 80,
+                    "minLength": 1,
                     "type": "string"
                   }
                 },
@@ -4427,6 +4738,7 @@
         "operationId": "post_api_admin_keys_key_id_restore",
         "parameters": [
           {
+            "description": "The key's id, from GET /api/keys (GET /api/admin/keys for anyone's).",
             "in": "path",
             "name": "key_id",
             "required": true,
@@ -4439,6 +4751,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -4502,6 +4815,7 @@
         "operationId": "post_api_admin_keys_key_id_revoke",
         "parameters": [
           {
+            "description": "The key's id, from GET /api/keys (GET /api/admin/keys for anyone's).",
             "in": "path",
             "name": "key_id",
             "required": true,
@@ -4514,6 +4828,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -4579,6 +4894,7 @@
     },
     "/api/admin/theme-defaults": {
       "get": {
+        "description": "The theme list everyone without their own list sees. themes is null while the built-in ones apply.",
         "operationId": "get_api_admin_theme_defaults",
         "responses": {
           "200": {
@@ -4634,18 +4950,20 @@
             "apiKey": []
           }
         ],
-        "summary": "The themes everyone without their own list sees",
+        "summary": "Default themes",
         "tags": [
           "Admin"
         ],
         "x-required-role": "admin"
       },
       "post": {
+        "description": "Replace the theme list everyone without their own list sees, 1 to 40 themes in the Theme schema of the API reference. null puts the built-in themes back.",
         "operationId": "post_api_admin_theme_defaults",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -4742,6 +5060,7 @@
     },
     "/api/admin/users": {
       "get": {
+        "description": "Accounts, a page at a time, including disabled ones, with each one's role and which is the owner. next is the offset of the following page, or null on the last one.",
         "operationId": "get_api_admin_users",
         "parameters": [
           {
@@ -4749,12 +5068,14 @@
             "in": "query",
             "name": "limit",
             "schema": {
+              "default": 200,
               "maximum": 1000,
               "minimum": 1,
               "type": "integer"
             }
           },
           {
+            "description": "Rows to skip: the next value of the previous page.",
             "in": "query",
             "name": "offset",
             "schema": {
@@ -4855,37 +5176,47 @@
             "apiKey": []
           }
         ],
-        "summary": "Every account",
+        "summary": "List users",
         "tags": [
           "Admin"
         ],
         "x-required-role": "admin"
       },
       "post": {
+        "description": "Make a new account and its first login link, to hand to the person. role is admin or user. Answers with user_id and the link.",
         "operationId": "post_api_admin_users",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
                     "type": "string"
                   },
                   "display_name": {
+                    "maxLength": 80,
+                    "minLength": 1,
                     "type": "string"
                   },
                   "expires_in_minutes": {
-                    "description": "0 never expires. Default auth.login_token_ttl_seconds for a link that works once, auth.multi_use_login_token_ttl_seconds otherwise. Through an API key: 1-1440, and the default is held to a day.",
+                    "description": "0 never expires. Default auth.login_token_ttl_seconds for a link that works once, auth.multi_use_login_token_ttl_seconds otherwise.",
                     "maximum": 525600,
                     "minimum": 0,
-                    "type": "integer"
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
                   },
                   "max_uses": {
-                    "description": "Sign-ins the link allows: 1-1000, or 0 for unlimited. Default 1. Through an API key: 1 only.",
+                    "description": "Sign-ins the link allows: 1-1000, or 0 for unlimited. Default 1.",
                     "maximum": 1000,
                     "minimum": 0,
-                    "type": "integer"
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
                   },
                   "role": {
                     "enum": [
@@ -4896,7 +5227,8 @@
                   }
                 },
                 "required": [
-                  "display_name"
+                  "display_name",
+                  "role"
                 ],
                 "type": "object"
               }
@@ -4980,7 +5312,7 @@
             "apiKey": []
           }
         ],
-        "summary": "Create an account and its login link",
+        "summary": "Create an account",
         "tags": [
           "Admin"
         ],
@@ -4989,14 +5321,17 @@
     },
     "/api/admin/users/{user_id}/cancel-login-link": {
       "post": {
+        "description": "Void an account's live login link without making a new one: a link that went somewhere it should not have.",
         "operationId": "post_api_admin_users_user_id_cancel_login_link",
         "parameters": [
           {
+            "description": "The account's id, from GET /api/admin/users (admin_list_users over MCP).",
             "in": "path",
             "name": "user_id",
             "required": true,
             "schema": {
-              "type": "string"
+              "minimum": 1,
+              "type": "integer"
             }
           }
         ],
@@ -5004,6 +5339,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -5076,14 +5412,17 @@
     },
     "/api/admin/users/{user_id}/delete": {
       "post": {
+        "description": "Remove an account for good, with its sessions, login link and API keys.",
         "operationId": "post_api_admin_users_user_id_delete",
         "parameters": [
           {
+            "description": "The account's id, from GET /api/admin/users (admin_list_users over MCP).",
             "in": "path",
             "name": "user_id",
             "required": true,
             "schema": {
-              "type": "string"
+              "minimum": 1,
+              "type": "integer"
             }
           }
         ],
@@ -5091,6 +5430,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -5162,14 +5502,17 @@
     },
     "/api/admin/users/{user_id}/disabled": {
       "post": {
+        "description": "Switch an account off (disabled: true) or back on (false). Disabling signs it out everywhere and voids its live login link; its API keys stop working while it is off. Reversible. The owner and your own account cannot be disabled.",
         "operationId": "post_api_admin_users_user_id_disabled",
         "parameters": [
           {
+            "description": "The account's id, from GET /api/admin/users (admin_list_users over MCP).",
             "in": "path",
             "name": "user_id",
             "required": true,
             "schema": {
-              "type": "string"
+              "minimum": 1,
+              "type": "integer"
             }
           }
         ],
@@ -5177,6 +5520,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -5241,7 +5585,7 @@
             "apiKey": []
           }
         ],
-        "summary": "Disable or enable an account",
+        "summary": "Disable or enable a user",
         "tags": [
           "Admin"
         ],
@@ -5250,14 +5594,17 @@
     },
     "/api/admin/users/{user_id}/reissue-login": {
       "post": {
+        "description": "For someone who lost their device or their link: a fresh login link for their account.",
         "operationId": "post_api_admin_users_user_id_reissue_login",
         "parameters": [
           {
+            "description": "The account's id, from GET /api/admin/users (admin_list_users over MCP).",
             "in": "path",
             "name": "user_id",
             "required": true,
             "schema": {
-              "type": "string"
+              "minimum": 1,
+              "type": "integer"
             }
           }
         ],
@@ -5265,22 +5612,29 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
                     "type": "string"
                   },
                   "expires_in_minutes": {
-                    "description": "0 never expires. Default auth.login_token_ttl_seconds for a link that works once, auth.multi_use_login_token_ttl_seconds otherwise. Through an API key: 1-1440, and the default is held to a day.",
+                    "description": "0 never expires. Default auth.login_token_ttl_seconds for a link that works once, auth.multi_use_login_token_ttl_seconds otherwise.",
                     "maximum": 525600,
                     "minimum": 0,
-                    "type": "integer"
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
                   },
                   "max_uses": {
-                    "description": "Sign-ins the link allows: 1-1000, or 0 for unlimited. Default 1. Through an API key: 1 only.",
+                    "description": "Sign-ins the link allows: 1-1000, or 0 for unlimited. Default 1.",
                     "maximum": 1000,
                     "minimum": 0,
-                    "type": "integer"
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
                   }
                 },
                 "type": "object"
@@ -5373,15 +5727,17 @@
     },
     "/api/admin/users/{user_id}/rename": {
       "post": {
-        "description": "Only the owner can rename an admin.",
+        "description": "Change another account's display name (1-80 characters). Only the owner renames an admin. expect, when given, is the name you think it has now; if it changed meanwhile the rename is refused with the current name.",
         "operationId": "post_api_admin_users_user_id_rename",
         "parameters": [
           {
+            "description": "The account's id, from GET /api/admin/users (admin_list_users over MCP).",
             "in": "path",
             "name": "user_id",
             "required": true,
             "schema": {
-              "type": "string"
+              "minimum": 1,
+              "type": "integer"
             }
           }
         ],
@@ -5389,6 +5745,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -5396,11 +5753,16 @@
                   },
                   "display_name": {
                     "description": "1-80 characters.",
+                    "maxLength": 80,
+                    "minLength": 1,
                     "type": "string"
                   },
                   "expect": {
                     "description": "The name you think they have. Answers 409 if it is another.",
-                    "type": "string"
+                    "type": [
+                      "string",
+                      "null"
+                    ]
                   }
                 },
                 "required": [
@@ -5465,7 +5827,7 @@
             "apiKey": []
           }
         ],
-        "summary": "Rename someone else",
+        "summary": "Rename someone",
         "tags": [
           "Admin"
         ],
@@ -5474,14 +5836,17 @@
     },
     "/api/admin/users/{user_id}/reset-two-factor": {
       "post": {
+        "description": "For someone who lost both their phone and their recovery codes: switches their two-factor sign-in off so a login link lets them in again. Only the owner resets an admin's; the owner's is reset from a shell.",
         "operationId": "post_api_admin_users_user_id_reset_two_factor",
         "parameters": [
           {
+            "description": "The account's id, from GET /api/admin/users (admin_list_users over MCP).",
             "in": "path",
             "name": "user_id",
             "required": true,
             "schema": {
-              "type": "string"
+              "minimum": 1,
+              "type": "integer"
             }
           }
         ],
@@ -5489,6 +5854,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -5557,14 +5923,17 @@
     },
     "/api/admin/users/{user_id}/revoke-access": {
       "post": {
+        "description": "For an account that may be compromised: ends every session and voids its live login link and every API key it holds, at once.",
         "operationId": "post_api_admin_users_user_id_revoke_access",
         "parameters": [
           {
+            "description": "The account's id, from GET /api/admin/users (admin_list_users over MCP).",
             "in": "path",
             "name": "user_id",
             "required": true,
             "schema": {
-              "type": "string"
+              "minimum": 1,
+              "type": "integer"
             }
           }
         ],
@@ -5572,6 +5941,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -5634,7 +6004,7 @@
             "apiKey": []
           }
         ],
-        "summary": "End every credential an account holds",
+        "summary": "Revoke a user's access",
         "tags": [
           "Admin"
         ],
@@ -5643,15 +6013,17 @@
     },
     "/api/admin/users/{user_id}/role": {
       "post": {
-        "description": "Only the owner can take an admin's rights away. Becoming an admin ends the account's sessions and live login link.",
+        "description": "Make an account an admin or an ordinary user. Only the owner takes an admin's rights away; the owner is always an admin, and nobody changes their own role. Becoming an admin ends the account's sessions and live login link.",
         "operationId": "post_api_admin_users_user_id_role",
         "parameters": [
           {
+            "description": "The account's id, from GET /api/admin/users (admin_list_users over MCP).",
             "in": "path",
             "name": "user_id",
             "required": true,
             "schema": {
-              "type": "string"
+              "minimum": 1,
+              "type": "integer"
             }
           }
         ],
@@ -5659,6 +6031,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -5740,14 +6113,16 @@
     },
     "/api/admin/users/{user_id}/sessions": {
       "get": {
-        "description": "The owner's are the owner's alone, and only the owner sees addresses.",
+        "description": "Where an account is signed in: every session, with when it started and was last seen. Addresses are shown to the owner only, and only the owner sees the owner's.",
         "operationId": "get_api_admin_users_user_id_sessions",
         "parameters": [
           {
+            "description": "The account's id, from GET /api/admin/users (admin_list_users over MCP).",
             "in": "path",
             "name": "user_id",
             "required": true,
             "schema": {
+              "minimum": 1,
               "type": "integer"
             }
           },
@@ -5756,12 +6131,14 @@
             "in": "query",
             "name": "limit",
             "schema": {
+              "default": 200,
               "maximum": 1000,
               "minimum": 1,
               "type": "integer"
             }
           },
           {
+            "description": "Rows to skip: the next value of the previous page.",
             "in": "query",
             "name": "offset",
             "schema": {
@@ -5844,14 +6221,17 @@
         "operationId": "post_api_admin_users_user_id_sessions_session_id_revoke",
         "parameters": [
           {
+            "description": "The account's id, from GET /api/admin/users (admin_list_users over MCP).",
             "in": "path",
             "name": "user_id",
             "required": true,
             "schema": {
+              "minimum": 1,
               "type": "integer"
             }
           },
           {
+            "description": "The device's id, from GET /api/account/sessions or GET /api/admin/users/{user_id}/sessions (list_my_sessions or admin_list_user_sessions over MCP).",
             "in": "path",
             "name": "session_id",
             "required": true,
@@ -5864,6 +6244,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -6006,7 +6387,6 @@
                   "properties": {
                     "engines": {
                       "description": "Each null (the original port) or fast (app/analysis/fast.py).",
-                      "items": {},
                       "type": "array"
                     },
                     "general": {
@@ -6115,6 +6495,9 @@
             },
             "description": "Success"
           },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
           "401": {
             "$ref": "#/components/responses/E401"
           },
@@ -6160,6 +6543,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -6376,7 +6760,6 @@
                             "type": "integer"
                           },
                           "mine": {
-                            "description": "Your own share, if you have one.",
                             "oneOf": [
                               {
                                 "properties": {
@@ -6452,7 +6835,6 @@
                           "treatments": {
                             "description": "Admins: [[name, images], ...], most images first.",
                             "items": {
-                              "items": {},
                               "type": "array"
                             },
                             "type": "array"
@@ -6583,6 +6965,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -6657,6 +7040,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "batch": {
                     "type": "object"
@@ -6760,6 +7144,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -6845,6 +7230,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -6933,6 +7319,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -7012,6 +7399,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "channels": {
                     "description": "Channel roles per layout.",
@@ -7067,7 +7455,6 @@
                     "type": "string"
                   },
                   "czi_stack": {
-                    "description": "For files with zstack: Z-stack .czi files.",
                     "oneOf": [
                       {
                         "properties": {
@@ -7096,7 +7483,6 @@
                     "type": "boolean"
                   },
                   "stack": {
-                    "description": "Group TIFF slices into Z-stacks.",
                     "oneOf": [
                       {
                         "properties": {
@@ -7182,6 +7568,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "channels": {
                     "description": "Channel roles per layout.",
@@ -7237,7 +7624,6 @@
                     "type": "string"
                   },
                   "czi_stack": {
-                    "description": "For files with zstack: Z-stack .czi files.",
                     "oneOf": [
                       {
                         "properties": {
@@ -7335,7 +7721,6 @@
                     "type": "boolean"
                   },
                   "stack": {
-                    "description": "Group TIFF slices into Z-stacks.",
                     "oneOf": [
                       {
                         "properties": {
@@ -7460,6 +7845,9 @@
             },
             "description": "The batch record: its images (each file with stored, and for admins the original names), adds, assignment, skipped, created_by_name, assignee_names, adder_names and excluded."
           },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
           "401": {
             "$ref": "#/components/responses/E401"
           },
@@ -7506,6 +7894,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -7658,6 +8047,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -7734,6 +8124,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "archived": {
                     "type": "boolean"
@@ -7815,6 +8206,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -7913,6 +8305,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -7922,10 +8315,7 @@
                     "enum": [
                       "fast"
                     ],
-                    "type": [
-                      "string",
-                      "null"
-                    ]
+                    "type": "string"
                   },
                   "general": {
                     "description": "Settings' general fields (auto_method, fitted_min_length, ...).",
@@ -8204,6 +8594,9 @@
             },
             "description": "{format, version, users, stored, batch, results, measurements}: what POST /api/ais/batches/import takes."
           },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
           "401": {
             "$ref": "#/components/responses/E401"
           },
@@ -8298,6 +8691,9 @@
             },
             "description": "Success"
           },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
           "401": {
             "$ref": "#/components/responses/E401"
           },
@@ -8343,6 +8739,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -8432,6 +8829,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -8530,6 +8928,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "after": {
                     "description": "A result id. Default 0.",
@@ -8645,6 +9044,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -8939,6 +9339,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "add": {
                     "description": "Only this add's images.",
@@ -9111,6 +9512,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "channels": {
                     "description": "Channel roles per layout.",
@@ -9166,7 +9568,6 @@
                     "type": "string"
                   },
                   "czi_stack": {
-                    "description": "For files with zstack: Z-stack .czi files.",
                     "oneOf": [
                       {
                         "properties": {
@@ -9195,7 +9596,6 @@
                     "type": "boolean"
                   },
                   "stack": {
-                    "description": "Group TIFF slices into Z-stacks.",
                     "oneOf": [
                       {
                         "properties": {
@@ -9295,6 +9695,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -9376,6 +9777,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -9576,6 +9978,9 @@
             },
             "description": "Success"
           },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
           "401": {
             "$ref": "#/components/responses/E401"
           },
@@ -9622,6 +10027,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -9711,6 +10117,9 @@
               }
             },
             "description": "Success"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
           },
           "401": {
             "$ref": "#/components/responses/E401"
@@ -9818,6 +10227,9 @@
             },
             "description": "Success"
           },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
           "401": {
             "$ref": "#/components/responses/E401"
           },
@@ -9866,6 +10278,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -10001,6 +10414,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "add_name": {
                     "type": "string"
@@ -10059,7 +10473,6 @@
                     "type": "string"
                   },
                   "czi_stack": {
-                    "description": "For files with zstack: Z-stack .czi files.",
                     "oneOf": [
                       {
                         "properties": {
@@ -10154,7 +10567,6 @@
                     "type": "boolean"
                   },
                   "stack": {
-                    "description": "Group TIFF slices into Z-stacks.",
                     "oneOf": [
                       {
                         "properties": {
@@ -10264,6 +10676,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "batch_ids": {
                     "items": {
@@ -10375,6 +10788,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -10384,10 +10798,7 @@
                     "enum": [
                       "fast"
                     ],
-                    "type": [
-                      "string",
-                      "null"
-                    ]
+                    "type": "string"
                   },
                   "exclude": {
                     "description": "The traces already accepted, each [[x, y], ...].",
@@ -10544,7 +10955,7 @@
         "operationId": "post_api_ais_files",
         "parameters": [
           {
-            "description": "With a raw body from a browser session: its CSRF token.",
+            "description": "From GET /api/me. Browser sessions only.",
             "in": "header",
             "name": "X-CSRF-Token",
             "schema": {
@@ -10664,6 +11075,9 @@
             },
             "description": "Success"
           },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
           "401": {
             "$ref": "#/components/responses/E401"
           },
@@ -10727,6 +11141,9 @@
               }
             },
             "description": "Success"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
           },
           "401": {
             "$ref": "#/components/responses/E401"
@@ -10810,6 +11227,9 @@
             },
             "description": "Success"
           },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
           "401": {
             "$ref": "#/components/responses/E401"
           },
@@ -10863,6 +11283,9 @@
               }
             },
             "description": "Success"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
           },
           "401": {
             "$ref": "#/components/responses/E401"
@@ -10919,6 +11342,9 @@
             },
             "description": "Success: image/tiff for a TIFF, else application/octet-stream."
           },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
           "401": {
             "$ref": "#/components/responses/E401"
           },
@@ -10966,6 +11392,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -11199,7 +11626,10 @@
                           "widths": {
                             "description": "[first, last] in um.",
                             "items": {
-                              "type": "number"
+                              "type": [
+                                "number",
+                                "null"
+                              ]
                             },
                             "type": "array"
                           }
@@ -11293,6 +11723,9 @@
             },
             "description": "Success"
           },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
           "401": {
             "$ref": "#/components/responses/E401"
           },
@@ -11356,6 +11789,9 @@
               }
             },
             "description": "Success"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
           },
           "401": {
             "$ref": "#/components/responses/E401"
@@ -11429,6 +11865,9 @@
             },
             "description": "Success"
           },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
           "401": {
             "$ref": "#/components/responses/E401"
           },
@@ -11482,6 +11921,9 @@
             },
             "description": "Success"
           },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
           "401": {
             "$ref": "#/components/responses/E401"
           },
@@ -11534,6 +11976,9 @@
               }
             },
             "description": "Success"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
           },
           "401": {
             "$ref": "#/components/responses/E401"
@@ -11654,6 +12099,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -11766,6 +12212,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -11864,6 +12311,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -11954,6 +12402,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -12076,6 +12525,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -12183,6 +12633,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -12335,6 +12786,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -12409,6 +12861,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -12519,6 +12972,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "cell": {
                     "description": "The cell's name as the browser shows it: a blinded name stays blind.",
@@ -12650,6 +13104,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -12723,6 +13178,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -12797,6 +13253,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -12959,6 +13416,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "cell": {
                     "description": "The cell's name as the browser shows it: a blinded name stays blind.",
@@ -13105,6 +13563,9 @@
             },
             "description": "Success"
           },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
           "401": {
             "$ref": "#/components/responses/E401"
           },
@@ -13131,7 +13592,8 @@
           "AIS"
         ],
         "x-mcp-http": "The MATLAB helper program itself, a download for a person's computer."
-      }
+      },
+      "x-feature": "matlab_helper"
     },
     "/api/ais/matlab/helper/jobs/{job_id}/bundle": {
       "get": {
@@ -13187,7 +13649,8 @@
           "AIS"
         ],
         "x-mcp-http": "Called by the MATLAB helper program, not by agents; the bundle is a zip."
-      }
+      },
+      "x-feature": "matlab_helper"
     },
     "/api/ais/matlab/helper/jobs/{job_id}/done": {
       "post": {
@@ -13207,7 +13670,12 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
+                  "csrf_token": {
+                    "description": "From GET /api/me. Browser sessions only.",
+                    "type": "string"
+                  },
                   "message": {
                     "description": "Why not, shown to the person. Cut to 500 characters.",
                     "type": "string"
@@ -13274,7 +13742,8 @@
           "AIS"
         ],
         "x-mcp-http": "Called by the MATLAB helper program, not by agents."
-      }
+      },
+      "x-feature": "matlab_helper"
     },
     "/api/ais/matlab/helper/key": {
       "post": {
@@ -13284,6 +13753,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -13325,6 +13795,9 @@
           "403": {
             "$ref": "#/components/responses/E403"
           },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
           "429": {
             "$ref": "#/components/responses/E429"
           },
@@ -13341,7 +13814,8 @@
         "tags": [
           "AIS"
         ]
-      }
+      },
+      "x-feature": "matlab_helper"
     },
     "/api/ais/matlab/helper/next": {
       "get": {
@@ -13387,6 +13861,9 @@
           "403": {
             "$ref": "#/components/responses/E403"
           },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
           "429": {
             "$ref": "#/components/responses/E429"
           },
@@ -13404,7 +13881,8 @@
           "AIS"
         ],
         "x-mcp-http": "Called by the MATLAB helper program, not by agents."
-      }
+      },
+      "x-feature": "matlab_helper"
     },
     "/api/ais/matlab/send": {
       "post": {
@@ -13414,6 +13892,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "cell": {
                     "description": "The cell's name as the browser shows it: a blinded name stays blind.",
@@ -13509,6 +13988,9 @@
           "403": {
             "$ref": "#/components/responses/E403"
           },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
           "409": {
             "$ref": "#/components/responses/E409"
           },
@@ -13528,7 +14010,8 @@
         "tags": [
           "AIS"
         ]
-      }
+      },
+      "x-feature": "matlab_helper"
     },
     "/api/ais/measure-types": {
       "get": {
@@ -13586,6 +14069,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -13699,6 +14183,9 @@
             },
             "description": "Success"
           },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
           "401": {
             "$ref": "#/components/responses/E401"
           },
@@ -13729,6 +14216,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "batch_id": {
                     "type": "integer"
@@ -13858,6 +14346,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -13968,6 +14457,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -14264,6 +14754,9 @@
             },
             "description": "Success"
           },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
           "401": {
             "$ref": "#/components/responses/E401"
           },
@@ -14294,6 +14787,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "batch_id": {
                     "type": "integer"
@@ -14375,6 +14869,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -14469,6 +14964,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -14579,6 +15075,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -14590,7 +15087,6 @@
                     "type": "integer"
                   },
                   "soma": {
-                    "description": "Every number 0 or more; null clears it.",
                     "oneOf": [
                       {
                         "properties": {
@@ -14711,6 +15207,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -14790,6 +15287,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "click": {
                     "description": "[x, y].",
@@ -14820,10 +15318,7 @@
                     "enum": [
                       "fast"
                     ],
-                    "type": [
-                      "string",
-                      "null"
-                    ]
+                    "type": "string"
                   },
                   "processed": {
                     "description": "The traced image's sha.",
@@ -15055,6 +15550,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -15140,6 +15636,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -15308,6 +15805,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "credential": {
                     "type": "string"
@@ -15373,6 +15871,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "credential": {
                     "type": "string"
@@ -15410,6 +15909,9 @@
           "400": {
             "$ref": "#/components/responses/E400"
           },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
           "404": {
             "$ref": "#/components/responses/E404"
           },
@@ -15438,6 +15940,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "credential": {
                     "type": "string"
@@ -15484,6 +15987,12 @@
             },
             "description": "Success"
           },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
           "404": {
             "$ref": "#/components/responses/E404"
           },
@@ -15509,6 +16018,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "credential": {
                     "type": "string"
@@ -15543,7 +16053,23 @@
                     },
                     "matches": {
                       "items": {
-                        "$ref": "#/components/schemas/Member"
+                        "properties": {
+                          "display_name": {
+                            "type": "string"
+                          },
+                          "has_pin": {
+                            "type": "boolean"
+                          },
+                          "id": {
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "display_name",
+                          "has_pin",
+                          "id"
+                        ],
+                        "type": "object"
                       },
                       "type": "array"
                     }
@@ -15560,6 +16086,9 @@
           },
           "400": {
             "$ref": "#/components/responses/E400"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
           },
           "404": {
             "$ref": "#/components/responses/E404"
@@ -15588,12 +16117,14 @@
             "in": "query",
             "name": "limit",
             "schema": {
+              "default": 200,
               "maximum": 1000,
               "minimum": 1,
               "type": "integer"
             }
           },
           {
+            "description": "Rows to skip: the next value of the previous page.",
             "in": "query",
             "name": "offset",
             "schema": {
@@ -15717,6 +16248,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -15801,6 +16333,7 @@
         "operationId": "post_api_keys_key_id_delete",
         "parameters": [
           {
+            "description": "The key's id, from GET /api/keys (GET /api/admin/keys for anyone's).",
             "in": "path",
             "name": "key_id",
             "required": true,
@@ -15813,6 +16346,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -15880,6 +16414,7 @@
         "operationId": "post_api_keys_key_id_expiry",
         "parameters": [
           {
+            "description": "The key's id, from GET /api/keys (GET /api/admin/keys for anyone's).",
             "in": "path",
             "name": "key_id",
             "required": true,
@@ -15892,6 +16427,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -15918,8 +16454,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "description": "The key, as in the list.",
-                  "type": "object"
+                  "$ref": "#/components/schemas/APIKey"
                 }
               }
             },
@@ -15961,6 +16496,7 @@
         "operationId": "post_api_keys_key_id_rename",
         "parameters": [
           {
+            "description": "The key's id, from GET /api/keys (GET /api/admin/keys for anyone's).",
             "in": "path",
             "name": "key_id",
             "required": true,
@@ -15973,6 +16509,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -15980,10 +16517,15 @@
                   },
                   "expect": {
                     "description": "The name you think it has. Answers 409 if it has another.",
-                    "type": "string"
+                    "type": [
+                      "string",
+                      "null"
+                    ]
                   },
                   "name": {
                     "description": "1-80 characters.",
+                    "maxLength": 80,
+                    "minLength": 1,
                     "type": "string"
                   }
                 },
@@ -16058,6 +16600,7 @@
         "operationId": "post_api_keys_key_id_restore",
         "parameters": [
           {
+            "description": "The key's id, from GET /api/keys (GET /api/admin/keys for anyone's).",
             "in": "path",
             "name": "key_id",
             "required": true,
@@ -16070,6 +16613,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -16132,6 +16676,7 @@
         "operationId": "post_api_keys_key_id_revoke",
         "parameters": [
           {
+            "description": "The key's id, from GET /api/keys (GET /api/admin/keys for anyone's).",
             "in": "path",
             "name": "key_id",
             "required": true,
@@ -16144,6 +16689,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -16241,6 +16787,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "credential": {
                     "type": "string"
@@ -16337,6 +16884,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "password_digest": {
                     "type": "string"
@@ -16397,6 +16945,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "challenge": {
                     "type": "string"
@@ -16462,6 +17011,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -16531,6 +17081,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -16655,6 +17206,7 @@
     },
     "/api/me": {
       "get": {
+        "description": "The account this API key belongs to, the role it acts with (role -- never higher than the key's own scope), and the account's own role.",
         "operationId": "get_api_me",
         "responses": {
           "200": {
@@ -16787,6 +17339,7 @@
         "operationId": "post_api_owner_jobs_name_run",
         "parameters": [
           {
+            "description": "The job's name, from GET /api/owner/jobs.",
             "in": "path",
             "name": "name",
             "required": true,
@@ -16799,6 +17352,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -16886,6 +17440,9 @@
             },
             "description": "Success"
           },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
           "404": {
             "$ref": "#/components/responses/E404"
           },
@@ -16914,6 +17471,7 @@
         "operationId": "get_api_owner_logs_days_date",
         "parameters": [
           {
+            "description": "The day's date, from GET /api/owner/logs/days.",
             "in": "path",
             "name": "date",
             "required": true,
@@ -16933,13 +17491,21 @@
             "in": "query",
             "name": "before",
             "schema": {
-              "type": "integer"
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
             }
           },
           {
+            "description": "Rows to return. Default 200.",
             "in": "query",
             "name": "limit",
             "schema": {
+              "default": 200,
+              "maximum": 1000,
+              "minimum": 1,
               "type": "integer"
             }
           }
@@ -16986,6 +17552,7 @@
         "operationId": "post_api_owner_logs_days_date_delete",
         "parameters": [
           {
+            "description": "The day's date, from GET /api/owner/logs/days.",
             "in": "path",
             "name": "date",
             "required": true,
@@ -16998,6 +17565,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -17066,6 +17634,7 @@
         "operationId": "get_api_owner_logs_days_date_download",
         "parameters": [
           {
+            "description": "The day's date, from GET /api/owner/logs/days.",
             "in": "path",
             "name": "date",
             "required": true,
@@ -17155,6 +17724,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -17162,6 +17732,7 @@
                   },
                   "name": {
                     "maxLength": 80,
+                    "minLength": 1,
                     "type": "string"
                   },
                   "target": {
@@ -17193,6 +17764,10 @@
                       "type": "string"
                     }
                   },
+                  "required": [
+                    "name",
+                    "target"
+                  ],
                   "type": "object"
                 }
               }
@@ -17235,6 +17810,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -17265,6 +17841,9 @@
                       "type": "boolean"
                     }
                   },
+                  "required": [
+                    "deleted"
+                  ],
                   "type": "object"
                 }
               }
@@ -17307,6 +17886,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "csrf_token": {
                     "description": "From GET /api/me. Browser sessions only.",
@@ -17383,6 +17963,9 @@
             },
             "description": "Success"
           },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
           "404": {
             "$ref": "#/components/responses/E404"
           },
@@ -17447,6 +18030,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "changes": {
                     "description": "Setting paths and their new values.",
@@ -17518,11 +18102,13 @@
         "operationId": "post_api_owner_users_user_id_password_access",
         "parameters": [
           {
+            "description": "The account's id, from GET /api/admin/users (admin_list_users over MCP).",
             "in": "path",
             "name": "user_id",
             "required": true,
             "schema": {
-              "type": "string"
+              "minimum": 1,
+              "type": "integer"
             }
           }
         ],
@@ -17530,6 +18116,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": false,
                 "properties": {
                   "allowed": {
                     "type": "boolean"
@@ -17638,6 +18225,7 @@
     },
     "/api/team": {
       "get": {
+        "description": "People with an active account, a page at a time: id and display name.",
         "operationId": "get_api_team",
         "parameters": [
           {
@@ -17645,12 +18233,14 @@
             "in": "query",
             "name": "limit",
             "schema": {
+              "default": 200,
               "maximum": 1000,
               "minimum": 1,
               "type": "integer"
             }
           },
           {
+            "description": "Rows to skip: the next value of the previous page.",
             "in": "query",
             "name": "offset",
             "schema": {
@@ -17714,7 +18304,7 @@
             "apiKey": []
           }
         ],
-        "summary": "Everyone's names",
+        "summary": "List team",
         "tags": [
           "Account"
         ]
@@ -17728,21 +18318,6 @@
             "$ref": "#/components/responses/E404"
           },
           "405": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "properties": {
-                    "ok": {
-                      "type": "boolean"
-                    }
-                  },
-                  "required": [
-                    "ok"
-                  ],
-                  "type": "object"
-                }
-              }
-            },
             "description": "Success"
           },
           "429": {
@@ -17765,21 +18340,6 @@
             "$ref": "#/components/responses/E404"
           },
           "405": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "properties": {
-                    "ok": {
-                      "type": "boolean"
-                    }
-                  },
-                  "required": [
-                    "ok"
-                  ],
-                  "type": "object"
-                }
-              }
-            },
             "description": "Success"
           },
           "429": {
@@ -17824,6 +18384,9 @@
           },
           "401": {
             "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
           },
           "404": {
             "$ref": "#/components/responses/E404"

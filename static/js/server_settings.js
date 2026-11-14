@@ -217,7 +217,8 @@ const ServerSettings = {
     if ( state.pending_restart ) {
       notes.appendChild( Dom.el( "div" , { class: "text-warning-emphasis" , text: I18n.get( "server_settings.pending_restart" ).replace( "{running}" , this.format( state.running ) ) } ) );
     }
-    if ( state.locked ) notes.appendChild( Dom.el( "div" , { text: I18n.get( "server_settings.locked" ) } ) );
+    if ( state.file_only ) notes.appendChild( Dom.el( "div" , { text: I18n.get( "server_settings.file_only" ) } ) );
+    else if ( state.locked ) notes.appendChild( Dom.el( "div" , { text: I18n.get( "server_settings.locked" ) } ) );
 
     const row = Dom.el( "div" , { class: "server-settings-key" , attrs: { "data-key": state.key } } );
     if ( state.type === "bool" ) {

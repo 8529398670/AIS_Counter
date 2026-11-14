@@ -19,6 +19,8 @@ from typing import Any, Callable
 from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse, Response
 
+from app.apidocs import ADMIN, KEY_ONLY, SESSION_ONLY, route
+from app.routes import ais_schemas as S
 from app.analysis import ais_auto as aa
 from app.analysis import detect as auto
 from app.analysis import auto_params as ap
@@ -72,7 +74,15 @@ def _stale(exc: batches.RevConflict) -> Response:
     return conflict(str(exc), current=exc.current)
 
 
-async def upload(request: Request) -> Response:
+@route(
+    "POST /api/ais/files",
+    summary='Upload an image (TIFF or .czi)',
+    tag='AIS',
+    description="The file's bytes as application/octet-stream with the CSRF token in X-CSRF-Token (what the page sends: no base64, no JSON parse of a 6 MB string), or JSON {data: base64} like every other POST.",
+    body_type='application/octet-stream',
+    errors=(400, 403),
+)
+async def upload(request: Request) -> S.UploadReply:
     """The file's bytes as application/octet-stream with the CSRF token in
     X-CSRF-Token (what the page sends: no base64, no JSON parse of a 6 MB
     string), written to disk as they arrive (Library.receive); or JSON
@@ -129,7 +139,14 @@ def _unshown(exc: ImageError) -> Response:
     return not_found(str(exc)) if isinstance(exc, NotStored) else error(422, str(exc))
 
 
-async def view(request: Request) -> Response:
+@route(
+    "GET /api/ais/files/{sha}/view.png",
+    summary='An image for the viewer',
+    tag='AIS',
+    reply_type='image/png',
+    errors=(404,),
+)
+async def view(request: Request, req: S.ViewRequest) -> Response:
     try:
         png = await run(_library(request).preview, request.path_params["sha"])
     except ImageError as exc:
@@ -137,7 +154,15 @@ async def view(request: Request) -> Response:
     return Response(png, media_type="image/png", headers={"Cache-Control": "private, max-age=86400"})
 
 
-async def channels(request: Request) -> Response:
+@route(
+    "GET /api/ais/files/{sha}/channels",
+    summary="A .czi's channels",
+    tag='AIS',
+    description="A .czi's channels [{index, name, color}] for the channel buttons; [] for a TIFF.",
+    mcp_http="Viewer detail for the Process screen's channel picker; get_batch names each image's files.",
+    errors=(404,),
+)
+async def channels(request: Request, req: S.ChannelsRequest) -> S.ChannelsReply:
     """A .czi's channels [{index, name, color}] for the channel buttons; [] for a TIFF."""
     try:
         found = await run(_library(request).channels, request.path_params["sha"])
@@ -146,7 +171,15 @@ async def channels(request: Request) -> Response:
     return JSONResponse({"channels": found}, headers={"Cache-Control": "private, max-age=86400"})
 
 
-async def somata(request: Request) -> Response:
+@route(
+    "GET /api/ais/files/{sha}/somata",
+    summary="A .czi's soma outlines",
+    tag='AIS',
+    description="A .czi's soma outlines (soma.py), each its edge pixels as 1-based [x, y], for the Soma button; [] for a TIFF.",
+    mcp_http='Viewer overlay for the Process screen; detect_image and trace_click give an agent the results.',
+    errors=(404,),
+)
+async def somata(request: Request, req: S.SomataRequest) -> S.SomataReply:
     """An image's soma outlines (soma.py), each its edge pixels as 1-based
     [x, y], for the Soma button: from its soma channel, else whichever channel
     shows cell bodies; [] when none does (and for a Z-stack)."""
@@ -191,7 +224,15 @@ def _soma_shape(value: Any) -> tuple[pairing.SomaShape | None, Response | None]:
     return out, None
 
 
-async def pair(request: Request) -> Response:
+@route(
+    "POST /api/ais/files/{sha}/pair",
+    summary="Guess each AIS's soma end and soma, and the soma ellipses",
+    tag='AIS',
+    description="Body {pixel_um, traces: [{id, pixels}], split?, soma?: {min_um, max_um, roundness}}: for each accepted AIS on the image, the Measure tool's guess (app/analysis/pairing.py): which end starts at the soma (the thicker), the soma in front of it, and B on that soma's ellipse (the largest inside it the soma size and roundness allow); and the image's soma ellipses (split, the default: one per hotspot, else one per outline). {pairs: [{id, end, by, widths, a, b, body, gap_um, angle_deg, confident, other}], bodies: [{cx, cy, a, b, angle_deg, ais}]}.",
+    mcp_http='A first guess for the Measure tool on the Process screen; it stores nothing.',
+    errors=(400, 403, 404),
+)
+async def pair(request: Request, req: S.PairRequest) -> S.PairReply:
     """Body {pixel_um, traces: [{id, pixels}], split?, soma?: {min_um, max_um,
     roundness}}: for each accepted AIS
     on the image, the Measure tool's guess (app/analysis/pairing.py): which
@@ -231,7 +272,15 @@ async def pair(request: Request) -> Response:
     return JSONResponse({"pairs": [{"id": i} | p for i, p in zip(ids, found["pairs"])], "bodies": bodies})
 
 
-async def channel(request: Request) -> Response:
+@route(
+    "GET /api/ais/files/{sha}/channel/{index}.png",
+    summary='One .czi channel, for the viewer',
+    tag='AIS',
+    mcp_http='Viewer images for the Process screen; get_image gives an agent the processed view.',
+    reply_type='image/png',
+    errors=(404,),
+)
+async def channel(request: Request, req: S.ChannelRequest) -> Response:
     try:
         index = int(request.path_params["index"])
         png = await run(_library(request).channel_png, request.path_params["sha"], index)
@@ -242,7 +291,16 @@ async def channel(request: Request) -> Response:
     return Response(png, media_type="image/png", headers={"Cache-Control": "private, max-age=86400"})
 
 
-async def slice_view(request: Request) -> Response:
+@route(
+    "GET /api/ais/files/{sha}/slice/{index}.png",
+    summary="One slice of a Z-stack, for the viewer's Z slider",
+    tag='AIS',
+    description="One slice of a Z-stack, for the viewer's Z slider.",
+    mcp_http="Viewer images for the Process screen's z-stack slider; get_image gives an agent the processed view.",
+    reply_type='image/png',
+    errors=(404,),
+)
+async def slice_view(request: Request, req: S.SliceViewRequest) -> Response:
     """One slice of a Z-stack, for the viewer's Z slider."""
     try:
         index = int(request.path_params["index"])
@@ -254,7 +312,16 @@ async def slice_view(request: Request) -> Response:
     return Response(png, media_type="image/png", headers={"Cache-Control": "private, max-age=86400"})
 
 
-async def composite(request: Request) -> Response:
+@route(
+    "GET /api/ais/files/{sha}/composite.png",
+    summary="A .czi's channels merged in their display colors, for exports",
+    tag='AIS',
+    description="A .czi's channels merged in their display colors, for exports.",
+    mcp_http='Reached through get_image with kind composite.',
+    reply_type='image/png',
+    errors=(404,),
+)
+async def composite(request: Request, req: S.CompositeRequest) -> Response:
     """A .czi's channels merged in their display colors, for exports."""
     try:
         png = await run(_library(request).composite_png, request.path_params["sha"])
@@ -263,7 +330,15 @@ async def composite(request: Request) -> Response:
     return Response(png, media_type="image/png", headers={"Cache-Control": "private, max-age=86400"})
 
 
-async def thumb(request: Request) -> Response:
+@route(
+    "GET /api/ais/files/{sha}/thumb.png",
+    summary="An image's thumbnail",
+    tag='AIS',
+    mcp_http='Reached through get_image with kind thumb.',
+    reply_type='image/png',
+    errors=(404,),
+)
+async def thumb(request: Request, req: S.ThumbRequest) -> Response:
     try:
         png = await run(_library(request).thumbnail, request.path_params["sha"])
     except ImageError as exc:
@@ -271,7 +346,17 @@ async def thumb(request: Request) -> Response:
     return Response(png, media_type="image/png", headers={"Cache-Control": "private, max-age=86400"})
 
 
-async def file_bytes(request: Request) -> Response:
+@route(
+    "GET /api/ais/files/{sha}/file",
+    summary='The stored file itself (a .czi or TIFF as it was added), for exports',
+    tag='AIS',
+    description='The stored file itself (a .czi or TIFF as it was added), for exports.',
+    mcp_http='File bytes: MCP messages are JSON, and clients cap their size. Fetch it over HTTP with the same key.',
+    reply_type='application/octet-stream',
+    reply_description='Success: image/tiff for a TIFF, else application/octet-stream.',
+    errors=(404,),
+)
+async def file_bytes(request: Request, req: S.FileBytesRequest) -> Response:
     """The stored file itself (a .czi or TIFF as it was added), for exports."""
     try:
         path = await run(_library(request).file_path, request.path_params["sha"])
@@ -282,7 +367,16 @@ async def file_bytes(request: Request) -> Response:
     return FileResponse(path, media_type=kind, headers={"Cache-Control": "private, max-age=86400"})
 
 
-async def processed_tif(request: Request) -> Response:
+@route(
+    "GET /api/ais/files/{sha}/processed.tif",
+    summary="A .czi's processed AIS channel as a TIFF (what tracing uses), for exports",
+    tag='AIS',
+    description="A .czi's processed AIS channel as a TIFF (what tracing uses), for exports.",
+    mcp_http='File bytes: MCP messages are JSON, and clients cap their size. Fetch it over HTTP with the same key.',
+    reply_type='image/tiff',
+    errors=(404,),
+)
+async def processed_tif(request: Request, req: S.ProcessedTifRequest) -> Response:
     """A .czi's processed AIS channel as a TIFF (what tracing uses), for exports."""
     try:
         data = await run(_library(request).processed_tiff, request.path_params["sha"])
@@ -291,7 +385,16 @@ async def processed_tif(request: Request) -> Response:
     return Response(data, media_type="image/tiff", headers={"Cache-Control": "private, max-age=86400"})
 
 
-async def channel_tif(request: Request) -> Response:
+@route(
+    "GET /api/ais/files/{sha}/channel/{index}.tif",
+    summary='One .czi channel, its data as a 16-bit TIFF, for exports',
+    tag='AIS',
+    description='One .czi channel, its data as a 16-bit TIFF, for exports.',
+    mcp_http='File bytes: MCP messages are JSON, and clients cap their size. Fetch it over HTTP with the same key.',
+    reply_type='image/tiff',
+    errors=(404,),
+)
+async def channel_tif(request: Request, req: S.ChannelTifRequest) -> Response:
     """One .czi channel, its data as a 16-bit TIFF, for exports."""
     try:
         index = int(request.path_params["index"])
@@ -344,7 +447,15 @@ def _engine(value: Any) -> bool | None:
     return True if value == "fast" else False if value is None else None
 
 
-async def trace(request: Request) -> Response:
+@route(
+    "POST /api/ais/trace",
+    summary='Trace an AIS from a click (ais_auto.m)',
+    tag='AIS',
+    description='Body: {processed, raw?, click: [x, y], click2?: [x, y], threshold?, settings?: {smooth, kernel, sigma, ...}, engine?: "fast"}. Clicks are MATLAB axes coordinates (x = column, y = row, pixel centres at 1..n). click2 stands in for the second ginput after re-thresholding; by default the first click is used again. threshold defaults to 0.01, what the original was called with (0 means Otsu, as in the original). engine "fast" is Settings\' Method "ais_auto.m (fast)": the same answer, sooner.',
+    reply_description="ais_auto.m's answer: ok, pixels, measures, shape, notes, and z on a Z-stack.",
+    errors=(400, 403),
+)
+async def trace(request: Request, req: S.TraceRequest) -> dict[str, Any]:
     """Body: {processed, raw?, click: [x, y], click2?: [x, y], threshold?,
     settings?: {smooth, kernel, sigma, ...}, engine?: "fast"}.
     Clicks are MATLAB axes coordinates (x = column, y = row, pixel centres at
@@ -396,7 +507,14 @@ def _traces(value: Any) -> list[list[list[int]]] | None:
     return value
 
 
-async def detect(request: Request) -> Response:
+@route(
+    "POST /api/ais/detect",
+    summary='Find every AIS on an image (auto mode)',
+    tag='AIS',
+    description='Auto mode. Body: {processed, raw?, threshold?, settings?, start?, exclude?: [[[x, y], ...], ...], engine?: "fast"}. Every AIS found on the image without a click (app/analysis/detect.py); start is both | brighter | dimmer | soma (a .czi only) | fitted | fitted2 | learned, exclude the traces already accepted on it.',
+    errors=(400, 403),
+)
+async def detect(request: Request, req: S.DetectRequest) -> S.DetectReply:
     """Auto mode. Body: {processed, raw?, threshold?, settings?, start?,
     exclude?: [[[x, y], ...], ...], engine?: "fast"}. Every AIS found on the image without a
     click (app/analysis/detect.py); start is both | brighter | dimmer | soma
@@ -519,7 +637,13 @@ def _activity(request: Request) -> batches.Activity:
     return request.app.state.ais_activity
 
 
-async def batch_list(request: Request) -> Response:
+@route(
+    "GET /api/ais/batches",
+    summary='Every batch with its progress',
+    tag='AIS',
+    description='Every batch with its progress: uploads, completion, per assignee, and any auto run going on (the Batches screen polls this as its monitor).',
+)
+async def batch_list(request: Request) -> S.BatchListReply:
     """Every batch with its progress: uploads, completion, per assignee, and
     any auto run going on (the Batches screen polls this as its monitor)."""
     rows = await run(_batch_rows, request)
@@ -548,7 +672,15 @@ def _batch_rows(request: Request) -> list[dict[str, Any]]:
     return rows
 
 
-async def batch_create(request: Request) -> Response:
+@route(
+    "POST /api/ais/batches",
+    summary='Create a batch',
+    tag='AIS',
+    description='Body: {name}: an empty batch, its images added afterwards.',
+    reply_description='The batch record: its images (each file with stored, and for admins the original names), adds, assignment, skipped, created_by_name, assignee_names, adder_names and excluded.',
+    errors=(400, 403),
+)
+async def batch_create(request: Request, req: S.BatchCreateRequest) -> dict[str, Any]:
     """Body: {name, folder_id?}: an empty batch, its images added afterwards,
     in that folder (the one the Batches screen is showing) or at the top."""
     body, refused = await _body(request)
@@ -605,7 +737,14 @@ def _fill_areas(library: Library, store: Any, batch: dict[str, Any], after: int,
     return {"filled": filled, "failed": failed, "after": last, "remaining": max(len(todo) - limit, 0)}
 
 
-async def batch_fill_areas(request: Request) -> Response:
+@route(
+    "POST /api/ais/batches/{batch_id}/fill-areas",
+    summary='Fill in missing AIS areas',
+    tag='AIS',
+    description="Body: {after?: result id, limit?: 1-50 (default 10), with_soma?: only AIS whose soma distance has been measured}: fill in the area (and on a Z-stack the volume) of the batch's accepted AIS that have none, tracing each again from its saved clicks, threshold and settings; only an AIS that comes out on the same pixels is filled in, and nothing else about it changes. A few at a time: call again with after until remaining is 0. {filled, failed: [result ids], after, remaining}.",
+    errors=(400, 403, 404),
+)
+async def batch_fill_areas(request: Request, req: S.BatchFillAreasRequest) -> S.FillAreasReply:
     """Body: {after?: result id, limit?: 1-50, with_soma?: only AIS with a
     soma distance}: fill in the area (and on a
     Z-stack the volume) of the batch's accepted AIS that have none, by
@@ -631,7 +770,15 @@ async def batch_fill_areas(request: Request) -> Response:
     return JSONResponse(await run(_fill_areas, _library(request), store, batch, after, limit, with_soma))
 
 
-async def batch_rename(request: Request) -> Response:
+@route(
+    "POST /api/ais/batches/{batch_id}/rename",
+    summary='Rename a batch',
+    tag='AIS',
+    description='Body: {name}. Its accepted AIS carry the new name too.',
+    reply_description='The batch record: its images (each file with stored, and for admins the original names), adds, assignment, skipped, created_by_name, assignee_names, adder_names and excluded.',
+    errors=(400, 403, 404),
+)
+async def batch_rename(request: Request, req: S.BatchRenameRequest) -> dict[str, Any]:
     """Body: {name}. Its accepted AIS carry the new name too."""
     body, refused = await _body(request)
     if refused:
@@ -648,7 +795,15 @@ async def batch_rename(request: Request) -> Response:
     return JSONResponse(await run(_batch_json, request, renamed))
 
 
-async def batch_archive(request: Request) -> Response:
+@route(
+    "POST /api/ais/batches/{batch_id}/archive",
+    summary='Archive or unarchive a batch',
+    tag='AIS',
+    description='Body: {archived}: archive the batch (hidden, results kept) or bring it back.',
+    reply_description='The batch record: its images (each file with stored, and for admins the original names), adds, assignment, skipped, created_by_name, assignee_names, adder_names and excluded.',
+    errors=(400, 403, 404),
+)
+async def batch_archive(request: Request, req: S.BatchArchiveRequest) -> dict[str, Any]:
     """Body: {archived}: archive the batch (hidden, results kept) or bring it back."""
     body, refused = await _body(request)
     if refused:
@@ -664,7 +819,15 @@ async def batch_archive(request: Request) -> Response:
     return JSONResponse(await run(_batch_json, request, archived))
 
 
-async def batch_order(request: Request) -> Response:
+@route(
+    "POST /api/ais/batches/order",
+    summary="Set the batches' priority order",
+    tag='AIS',
+    role=ADMIN,
+    description="Body: {ids}: the team's priority order, first on top (admins).",
+    errors=(400, 403),
+)
+async def batch_order(request: Request, req: S.BatchOrderRequest) -> S.OkReply:
     """Body: {ids}: the team's priority order, first on top (admins)."""
     body, refused = await _body(request)
     if refused:
@@ -676,7 +839,15 @@ async def batch_order(request: Request) -> Response:
     return JSONResponse({"ok": True})
 
 
-async def batch_move(request: Request) -> Response:
+@route(
+    "POST /api/ais/batches/move",
+    summary='File batches in a folder',
+    tag='AIS',
+    role=ADMIN,
+    description='Body: {ids, folder_id}: those batches into that folder, null for the top (admins).',
+    errors=(400, 403),
+)
+async def batch_move(request: Request, req: S.BatchMoveRequest) -> S.BatchMoveReply:
     """Body: {ids, folder_id}: those batches into that folder, null for the
     top (admins)."""
     body, refused = await _body(request)
@@ -692,11 +863,25 @@ async def batch_move(request: Request) -> Response:
 # --- the Batches screen's folders (admins change them) --------------------------
 
 
-async def folder_list(request: Request) -> Response:
+@route(
+    "GET /api/ais/folders",
+    summary="The Batches screen's folders",
+    tag='AIS',
+    description='Every folder: id, name, parent_id (null at the top), position.',
+)
+async def folder_list(request: Request) -> S.FolderListReply:
     return JSONResponse({"folders": await run(batches.list_folders, get_store(request))})
 
 
-async def folder_create(request: Request) -> Response:
+@route(
+    "POST /api/ais/folders",
+    summary='Create a folder',
+    tag='AIS',
+    role=ADMIN,
+    description='Body: {name, parent_id}: a new folder, first in its parent (null: the top) (admins).',
+    errors=(400, 403),
+)
+async def folder_create(request: Request, req: S.FolderCreateRequest) -> S.Folder:
     """Body: {name, parent_id}: a new folder, first in its parent (null: the top)."""
     body, refused = await _body(request)
     if refused:
@@ -713,7 +898,15 @@ def _folder_id(request: Request) -> int | None:
     return parse_id(request.path_params["folder_id"])
 
 
-async def folder_rename(request: Request) -> Response:
+@route(
+    "POST /api/ais/folders/{folder_id}/rename",
+    summary='Rename a folder',
+    tag='AIS',
+    role=ADMIN,
+    description='Body: {name} (admins).',
+    errors=(400, 403, 404),
+)
+async def folder_rename(request: Request, req: S.FolderRenameRequest) -> S.Folder:
     """Body: {name}."""
     body, refused = await _body(request)
     if refused:
@@ -726,7 +919,15 @@ async def folder_rename(request: Request) -> Response:
     return JSONResponse(folder) if folder else not_found("no such folder")
 
 
-async def folder_move(request: Request) -> Response:
+@route(
+    "POST /api/ais/folders/{folder_id}/move",
+    summary='Move a folder into another',
+    tag='AIS',
+    role=ADMIN,
+    description='Body: {parent_id}: null for the top; not into itself or anything inside it (admins).',
+    errors=(400, 403, 404),
+)
+async def folder_move(request: Request, req: S.FolderMoveRequest) -> S.Folder:
     """Body: {parent_id}: into another folder, null for the top."""
     body, refused = await _body(request)
     if refused:
@@ -739,7 +940,16 @@ async def folder_move(request: Request) -> Response:
     return JSONResponse(folder) if folder else not_found("no such folder")
 
 
-async def folder_delete(request: Request) -> Response:
+@route(
+    "POST /api/ais/folders/{folder_id}/delete",
+    summary='Delete a folder',
+    tag='AIS',
+    role=ADMIN,
+    description='What was in it, folders and batches, moves up to its parent (admins).',
+    mcp_http="Deleting a folder is kept out of agents' reach on purpose.",
+    errors=(400, 403, 404),
+)
+async def folder_delete(request: Request, req: S.FolderDeleteRequest) -> S.OkTrashReply:
     """The folder gone, what was in it moved up to its parent."""
     body, refused = await _body(request)
     if refused:
@@ -749,7 +959,15 @@ async def folder_delete(request: Request) -> Response:
     return JSONResponse({"ok": True, "trash_id": folder["trash_id"]}) if folder else not_found("no such folder")
 
 
-async def folder_order(request: Request) -> Response:
+@route(
+    "POST /api/ais/folders/order",
+    summary="Set the order of one folder's folders",
+    tag='AIS',
+    role=ADMIN,
+    description='Body: {parent_id, ids} (admins).',
+    errors=(400, 403),
+)
+async def folder_order(request: Request, req: S.FolderOrderRequest) -> S.OkReply:
     """Body: {parent_id, ids}: the order of one folder's folders."""
     body, refused = await _body(request)
     if refused:
@@ -771,7 +989,15 @@ def _add_name(body: dict[str, Any]) -> str | None:
     return name if isinstance(name, str) else None
 
 
-async def batch_add(request: Request) -> Response:
+@route(
+    "POST /api/ais/batches/{batch_id}/upload",
+    summary='Add images to a batch',
+    tag='AIS',
+    description='Body: {files: [{name, rel, sha, size, modified?}], randomize?, add_name?, translations?: [{dir, text}]}: more files picked in the browser for an existing batch, named by any __Translation.txt picked with them, blinded unless randomize is false. Upload them afterwards as for a new one.',
+    reply_description='The batch record: its images (each file with stored, and for admins the original names), adds, assignment, skipped, created_by_name, assignee_names, adder_names and excluded.',
+    errors=(400, 403, 404),
+)
+async def batch_add(request: Request, req: S.BatchAddRequest) -> dict[str, Any]:
     """Body: {files: [{name, rel, sha, size, modified?}], randomize?, add_name?,
     translations?: [{dir, text}]}: more files picked in the browser for an
     existing batch, named by any __Translation.txt picked with them, blinded
@@ -794,7 +1020,14 @@ async def batch_add(request: Request) -> Response:
     return JSONResponse(await run(_batch_json, request, batch))
 
 
-async def batch_status(request: Request) -> Response:
+@route(
+    "GET /api/ais/batches/{batch_id}/status",
+    summary="Each image's progress in a batch",
+    tag='AIS',
+    description='Per image: files on the server, accepted AIS, done, duplicate, assignee.',
+    errors=(404,),
+)
+async def batch_status(request: Request, req: S.BatchStatusRequest) -> S.BatchStatusReply:
     """Per image: files on the server, accepted AIS, done, duplicate, assignee."""
     store = get_store(request)
     batch_id = parse_id(request.path_params["batch_id"])
@@ -819,7 +1052,15 @@ def _status_rows(request: Request, batch: dict[str, Any], rows: list[dict[str, A
     return images
 
 
-async def batch_include(request: Request) -> Response:
+@route(
+    "POST /api/ais/batches/{batch_id}/include",
+    summary='Include or exclude an image',
+    tag='AIS',
+    description='Body: {keys, included}: include these images, or leave them out, for the whole team.',
+    reply_description='The batch record: its images (each file with stored, and for admins the original names), adds, assignment, skipped, created_by_name, assignee_names, adder_names and excluded.',
+    errors=(400, 403, 404),
+)
+async def batch_include(request: Request, req: S.BatchIncludeRequest) -> dict[str, Any]:
     """Body: {keys, included}: include these images, or leave them out, for
     the whole team."""
     body, refused = await _body(request)
@@ -837,7 +1078,16 @@ async def batch_include(request: Request) -> Response:
     return JSONResponse(await run(_batch_json, request, batch))
 
 
-async def batch_rerandomize(request: Request) -> Response:
+@route(
+    "POST /api/ais/batches/{batch_id}/adds/{add_id}/randomize",
+    summary="Re-randomize one folder's names",
+    tag='AIS',
+    role=ADMIN,
+    description='New random names for one folder of the batch (admins); its results, done marks, exclusions and assignment move with them.',
+    reply_description='The batch record: its images (each file with stored, and for admins the original names), adds, assignment, skipped, created_by_name, assignee_names, adder_names and excluded. Plus renamed and measured: images renamed, and AIS that moved with them.',
+    errors=(400, 403, 404),
+)
+async def batch_rerandomize(request: Request, req: S.BatchRerandomizeRequest) -> dict[str, Any]:
     """New random names for one folder of the batch (admins); its results,
     done marks, exclusions and assignment move with them."""
     body, refused = await _body(request)
@@ -858,7 +1108,16 @@ async def batch_rerandomize(request: Request) -> Response:
     return JSONResponse(await run(_batch_json, request, batch) | {"renamed": renamed, "measured": measured})
 
 
-async def batch_translation(request: Request) -> Response:
+@route(
+    "GET /api/ais/batches/{batch_id}/translation.txt",
+    summary="The batch's __Translation.txt (admins)",
+    tag='AIS',
+    role=ADMIN,
+    description="The batch's __Translation.txt (admins): original/random per file.",
+    reply_type='text/plain',
+    errors=(403, 404),
+)
+async def batch_translation(request: Request, req: S.BatchTranslationRequest) -> Response:
     """The batch's __Translation.txt (admins): original/random per file."""
     batch_id = parse_id(request.path_params["batch_id"])
     batch = await run(batches.get_batch, get_store(request), batch_id) if batch_id else None
@@ -868,7 +1127,15 @@ async def batch_translation(request: Request) -> Response:
                     headers={"Content-Disposition": 'attachment; filename="__Translation.txt"'})
 
 
-async def batch_treatments(request: Request) -> Response:
+@route(
+    "GET /api/ais/batches/{batch_id}/treatments",
+    summary="Each image's original name, saved treatment and guessed one (admins)",
+    tag='AIS',
+    role=ADMIN,
+    description="Each image's original name, saved treatment and guessed one (admins).",
+    errors=(403, 404),
+)
+async def batch_treatments(request: Request, req: S.BatchTreatmentsRequest) -> S.TreatmentsReply:
     """Each image's original name, saved treatment and guessed one (admins)."""
     batch_id = parse_id(request.path_params["batch_id"])
     batch = await run(batches.get_batch, get_store(request), batch_id) if batch_id else None
@@ -877,7 +1144,15 @@ async def batch_treatments(request: Request) -> Response:
     return JSONResponse({"treatments": await run(batches.review_treatments, get_store(request), batch)})
 
 
-async def batch_treatments_set(request: Request) -> Response:
+@route(
+    "POST /api/ais/batches/{batch_id}/treatments",
+    summary="Save a batch's treatments",
+    tag='AIS',
+    role=ADMIN,
+    description='Body: {treatments: {key: name}} (admins); "" takes one off.',
+    errors=(400, 403, 404),
+)
+async def batch_treatments_set(request: Request, req: S.BatchTreatmentsSetRequest) -> S.TreatmentsReply:
     """Body: {treatments: {key: name}} (admins); "" takes one off."""
     body, refused = await _body(request)
     if refused:
@@ -892,7 +1167,16 @@ async def batch_treatments_set(request: Request) -> Response:
     return JSONResponse({"treatments": await run(batches.review_treatments, get_store(request), batch)})
 
 
-async def compare_batches(request: Request) -> Response:
+@route(
+    "POST /api/ais/compare",
+    summary='Compare treatments across batches',
+    tag='AIS',
+    role=ADMIN,
+    description="Body: {batch_ids, labels?, tests?, units?, design?, sheets?, plots?}: the batches' measurements grouped by treatment, and with two or more, tested and plotted (admins: it has the original names and treatments). sheets: true adds comparison.xlsx's sheets as JSON ({columns, rows} each) and then keeps the SVG plots only with plots: true. See app/analysis/compare.py and report.py.",
+    reply_description='{measures, treatments, images, values, groups, pooled, stats, dropped, plots}, and sheets with sheets: true.',
+    errors=(400, 403),
+)
+async def compare_batches(request: Request, req: S.CompareBatchesRequest) -> dict[str, Any]:
     """Body: {batch_ids, labels?, tests?, units?, design?}: the batches' measurements
     grouped by treatment, and with two or more, tested and plotted (admins:
     it has the original names and treatments). tests/units pick the stats
@@ -971,7 +1255,14 @@ def _report(request: Request, ids: list[int], everything: bool, unblind: bool) -
             "unblinded": bool(unblind and admin), "everything": everything, "sheets": sheets}
 
 
-async def batch_report(request: Request) -> Response:
+@route(
+    "GET /api/ais/report",
+    summary='The batch report as JSON',
+    tag='AIS',
+    description="The Batches screen's report (report.xlsx) as JSON sheets, each {columns, rows}: summary, images, assignees, ais, measurements, measurement_types, and for admins original_names, by_treatment and statistics. Images left out are not in it unless everything=1; unblind=1 (admins only) puts blinded images under their original names. See app/analysis/report.py.",
+    errors=(400, 404),
+)
+async def batch_report(request: Request, req: S.BatchReportRequest) -> S.BatchReportReply:
     """?batch=<id>[,<id>...] | all, everything=0|1, unblind=0|1 (admins),
     sheets=<name>[,<name>...]: the Batches screen's report (report.xlsx) as
     JSON, for agents and scripts. Images the team left out are not in it
@@ -1004,7 +1295,13 @@ def _runs(request: Request) -> AutoRuns:
     return request.app.state.ais_runs
 
 
-async def auto_defaults(request: Request) -> Response:
+@route(
+    "GET /api/ais/auto/defaults",
+    summary='Auto mode defaults',
+    tag='AIS',
+    description='What a run uses unless it says otherwise (static/js/settings.js defaults), and what it may set: general, ranges, methods, starts, threshold, settings, engines, z_methods.',
+)
+async def auto_defaults(request: Request) -> S.AutoDefaultsReply:
     """What a run uses unless it says otherwise, and what it may say: the
     browser's Settings defaults (static/js/settings.js)."""
     return JSONResponse({"general": ap.DEFAULTS, "ranges": {k: list(v) for k, v in ap.RANGES.items()},
@@ -1013,7 +1310,14 @@ async def auto_defaults(request: Request) -> Response:
                          "z_methods": [m.id for m in zlength.METHODS if m.ready]})
 
 
-async def auto_start(request: Request) -> Response:
+@route(
+    "POST /api/ais/batches/{batch_id}/auto",
+    summary='Start an auto run',
+    tag='AIS',
+    description='Body: {general?, settings?, threshold?, engine?, skip_done?, mark_done?, images?}: auto mode over the batch\'s included images, run by the server, each AIS the filters keep saved as the browser\'s review "all" saves it. Answers at once with the run (409 while one is going on the batch). See app/analysis/auto_runner.py.',
+    errors=(400, 403, 404, 409),
+)
+async def auto_start(request: Request, req: S.AutoStartRequest) -> S.AutoStartReply:
     """Body: {general?, settings?, threshold?, engine?, skip_done?, mark_done?,
     images?}: auto mode over the batch, run by the server and saved as the
     browser's review "all" saves (each kept AIS straight to the batch).
@@ -1045,7 +1349,14 @@ async def auto_start(request: Request) -> Response:
     return JSONResponse(out)
 
 
-async def auto_list(request: Request) -> Response:
+@route(
+    "GET /api/ais/auto",
+    summary='Auto runs on the server',
+    tag='AIS',
+    description='The auto runs the server has done since it started, newest first. ?batch=<id> narrows them.',
+    errors=(400,),
+)
+async def auto_list(request: Request, req: S.AutoListRequest) -> S.AutoListReply:
     """?batch=<id>: the runs on that batch (else every one), newest first."""
     raw = request.query_params.get("batch", "")
     batch_id = parse_id(raw) if raw else None
@@ -1054,12 +1365,26 @@ async def auto_list(request: Request) -> Response:
     return JSONResponse({"runs": _runs(request).list(batch_id)})
 
 
-async def auto_get(request: Request) -> Response:
+@route(
+    "GET /api/ais/auto/{run_id}",
+    summary='One auto run',
+    tag='AIS',
+    description='How far the run has got: state (queued, running, finished, stopped, failed), done, total, found, hidden, saved, errors.',
+    errors=(404,),
+)
+async def auto_get(request: Request, req: S.AutoGetRequest) -> S.AutoRunSchema:
     out = _runs(request).get(request.path_params["run_id"])
     return JSONResponse(out) if out else not_found("no such run")
 
 
-async def auto_cancel(request: Request) -> Response:
+@route(
+    "POST /api/ais/auto/{run_id}/cancel",
+    summary='Stop an auto run',
+    tag='AIS',
+    description='Stops after the image it is on; what it saved stays. Whoever started it, or an admin.',
+    errors=(400, 403, 404),
+)
+async def auto_cancel(request: Request, req: S.AutoCancelRequest) -> S.AutoRunSchema:
     """Stop a run after the image it is on: whoever started it, or an admin."""
     body, refused = await _body(request)
     if refused:
@@ -1074,7 +1399,16 @@ async def auto_cancel(request: Request) -> Response:
     return JSONResponse(runs.cancel(found["id"]))
 
 
-async def batch_translation_load(request: Request) -> Response:
+@route(
+    "POST /api/ais/batches/{batch_id}/translation",
+    summary="Load a batch's translation file",
+    tag='AIS',
+    role=ADMIN,
+    description='Body: {text}: a __Translation.txt for a batch blinded somewhere else (admins): the original names of the files it names.',
+    reply_description='The batch record: its images (each file with stored, and for admins the original names), adds, assignment, skipped, created_by_name, assignee_names, adder_names and excluded. Plus named and unnamed: how many images it named, and how many are still without.',
+    errors=(400, 403, 404),
+)
+async def batch_translation_load(request: Request, req: S.BatchTranslationLoadRequest) -> dict[str, Any]:
     """Body: {text}: a __Translation.txt for a batch blinded somewhere else
     (admins): the original names of the files it names."""
     body, refused = await _body(request)
@@ -1093,7 +1427,15 @@ async def batch_translation_load(request: Request) -> Response:
     return JSONResponse(await run(_batch_json, request, batch) | {"named": named, "unnamed": unnamed})
 
 
-async def batch_activity(request: Request) -> Response:
+@route(
+    "POST /api/ais/batches/{batch_id}/activity",
+    summary='Report an auto run on a batch',
+    tag='AIS',
+    description='Body: {kind: "auto", state, done, total}: how far this person\'s auto run on the batch has got, so everyone\'s Batches screen can show it.',
+    mcp_http='The Process screen reporting that someone is working on a batch, not an action.',
+    errors=(400, 403, 404),
+)
+async def batch_activity(request: Request, req: S.BatchActivityRequest) -> S.Activity:
     """Body: {kind: "auto", state, done, total}: how far this person's auto
     run on the batch has got, so everyone's Batches screen can show it."""
     body, refused = await _body(request)
@@ -1109,7 +1451,14 @@ async def batch_activity(request: Request) -> Response:
     return JSONResponse(item)
 
 
-async def batch_get(request: Request) -> Response:
+@route(
+    "GET /api/ais/batches/{batch_id}",
+    summary='One batch',
+    tag='AIS',
+    reply_description='The batch record: its images (each file with stored, and for admins the original names), adds, assignment, skipped, created_by_name, assignee_names, adder_names and excluded.',
+    errors=(404,),
+)
+async def batch_get(request: Request, req: S.BatchGetRequest) -> dict[str, Any]:
     batch_id = parse_id(request.path_params["batch_id"])
     batch = await run(batches.get_batch, get_store(request), batch_id) if batch_id else None
     if batch is None:
@@ -1143,7 +1492,13 @@ def _batch_channels(library: Library, batch: dict[str, Any]) -> dict[str, Any]:
     return {"channels": list(found.values()), "czis": czis, "unread": unread}
 
 
-async def batch_channels(request: Request) -> Response:
+@route(
+    "GET /api/ais/batches/{batch_id}/channels",
+    summary="A batch's channels",
+    tag='AIS',
+    errors=(404,),
+)
+async def batch_channels(request: Request, req: S.BatchChannelsRequest) -> S.BatchChannelsReply:
     batch_id = parse_id(request.path_params["batch_id"])
     batch = await run(batches.get_batch, get_store(request), batch_id) if batch_id else None
     if batch is None:
@@ -1210,7 +1565,14 @@ def _batch_layouts(library: Library, store: Any, batch: dict[str, Any], add_id: 
             "stacks": batches.stack_calibration(images), "pixel": batches.image_pixel_size(images)}
 
 
-async def batch_layouts(request: Request) -> Response:
+@route(
+    "GET /api/ais/batches/{batch_id}/layouts",
+    summary="A batch's channel layouts",
+    tag='AIS',
+    description="?add=<id>: the channel layouts of a batch's images, or one add's: each with its channel names, colours, how many images, the roles in use and how many already have results; stacks: its Z-stacks' {count, z_step_um, pixel_um, mixed}, or null; pixel: its other images' {count, pixel_um (null: Settings', 40x by default), mixed}, or null.",
+    errors=(400, 404),
+)
+async def batch_layouts(request: Request, req: S.BatchLayoutsRequest) -> S.LayoutsReply:
     """?add=<id>: the channel layouts of a batch's images, or one add's."""
     batch_id = parse_id(request.path_params["batch_id"])
     add_id, ok = _add_param(request)
@@ -1223,7 +1585,14 @@ async def batch_layouts(request: Request) -> Response:
     return JSONResponse(await run(_batch_layouts, _library(request), store, batch, add_id))
 
 
-async def batch_layouts_set(request: Request) -> Response:
+@route(
+    "POST /api/ais/batches/{batch_id}/layouts",
+    summary="Set a batch's channel roles",
+    tag='AIS',
+    description="Body: {add?, channels: [{layout, roles}], stack?: {z_step_um, pixel_um}, pixel_um?: number or null}: which channel is the AIS, soma/dendrite or other, for the images of a batch (or one add) with those layouts, its Z-stacks' slice spacing and pixel size, and the microns per pixel its other images are measured with (null: back to the 40x default; left out: unchanged). Answers with the batch and the keys of the images now traced from other channels or calibration.",
+    errors=(400, 403, 404),
+)
+async def batch_layouts_set(request: Request, req: S.BatchLayoutsSetRequest) -> S.LayoutsSetReply:
     """Body: {add?, channels: [{layout, roles}], stack?: {z_step_um,
     pixel_um}, pixel_um?: number or null}: new channel roles for the images
     of a batch (or one add) with those layouts, for its Z-stacks a new z step
@@ -1254,7 +1623,15 @@ async def batch_layouts_set(request: Request) -> Response:
     return JSONResponse({"batch": await run(_batch_json, request, record), "changed": changed})
 
 
-async def batch_upload(request: Request) -> Response:
+@route(
+    "POST /api/ais/batches/upload",
+    summary='Create a batch from an uploaded folder',
+    tag='AIS',
+    description='Body: {name, files: [{name, rel, sha, size}], translations?: [{dir, text}]} -- a folder picked in the browser, hashed there. Upload the files afterwards with POST /api/ais/files.',
+    reply_description='The batch record: its images (each file with stored, and for admins the original names), adds, assignment, skipped, created_by_name, assignee_names, adder_names and excluded.',
+    errors=(400, 403),
+)
+async def batch_upload(request: Request, req: S.BatchUploadRequest) -> dict[str, Any]:
     """Body: {name, files: [{name, rel, sha, size}], translations?: [{dir,
     text}]} -- a folder picked in the browser, hashed there. Upload the files afterwards with POST /api/ais/files."""
     body, refused = await _body(request)
@@ -1285,7 +1662,16 @@ def _backup(request: Request, batch_id: int) -> dict[str, Any] | None:
                      "stored": sorted(stored)}
 
 
-async def batch_backup(request: Request) -> Response:
+@route(
+    "GET /api/ais/batches/{batch_id}/backup",
+    summary='What a backup ZIP holds besides the image files',
+    tag='AIS',
+    role=ADMIN,
+    description='What a backup ZIP holds besides the image files. Admins only: it has the original names in it.',
+    reply_description='{format, version, users, stored, batch, results, measurements}: what POST /api/ais/batches/import takes.',
+    errors=(403, 404),
+)
+async def batch_backup(request: Request, req: S.BatchBackupRequest) -> dict[str, Any]:
     """What a backup ZIP holds besides the image files. Admins only: it has
     the original names in it."""
     batch_id = parse_id(request.path_params["batch_id"])
@@ -1295,7 +1681,16 @@ async def batch_backup(request: Request) -> Response:
     return JSONResponse(backup)
 
 
-async def batch_import_missing(request: Request) -> Response:
+@route(
+    "POST /api/ais/batches/import/missing",
+    summary='Add the images a batch import was missing',
+    tag='AIS',
+    role=ADMIN,
+    description="Body: {shas}. Which of a backup's files the store does not have yet, to upload with POST /api/ais/files before importing.",
+    mcp_http='A backup zip: MCP messages are JSON, and clients cap their size. Send it over HTTP with the same key.',
+    errors=(400, 403),
+)
+async def batch_import_missing(request: Request, req: S.BatchImportMissingRequest) -> S.ImportMissingReply:
     """Body: {shas}. Which of a backup's files the store does not have yet,
     to upload with POST /api/ais/files before importing."""
     body, refused = await _body(request)
@@ -1309,7 +1704,17 @@ async def batch_import_missing(request: Request) -> Response:
     return JSONResponse({"missing": await run(lambda: [s for s in shas if not library.has(s)])})
 
 
-async def batch_import(request: Request) -> Response:
+@route(
+    "POST /api/ais/batches/import",
+    summary='Import a batch backup',
+    tag='AIS',
+    role=ADMIN,
+    description='Body: one batch of a backup ({format, version, users, batch, results}), which becomes a new batch.',
+    mcp_http='A backup zip: MCP messages are JSON, and clients cap their size. Send it over HTTP with the same key.',
+    reply_description='The batch record: its images (each file with stored, and for admins the original names), adds, assignment, skipped, created_by_name, assignee_names, adder_names and excluded.',
+    errors=(400, 403),
+)
+async def batch_import(request: Request, req: S.BatchImportRequest) -> dict[str, Any]:
     """Body: one batch of a backup ({format, version, users, batch, results}),
     which becomes a new batch."""
     body, refused = await _body(request)
@@ -1322,7 +1727,14 @@ async def batch_import(request: Request) -> Response:
     return JSONResponse(await run(_batch_json, request, batch))
 
 
-async def batch_delete(request: Request) -> Response:
+@route(
+    "POST /api/ais/batches/{batch_id}/delete",
+    summary='Delete a batch',
+    tag='AIS',
+    mcp_http="Deleting a whole batch is kept out of agents' reach on purpose.",
+    errors=(400, 403, 404),
+)
+async def batch_delete(request: Request, req: S.BatchDeleteRequest) -> S.OkTrashReply:
     body, refused = await _body(request)
     if refused:
         return refused
@@ -1340,7 +1752,14 @@ async def batch_delete(request: Request) -> Response:
     return JSONResponse({"ok": True, "trash_id": trash_id})
 
 
-async def batch_done(request: Request) -> Response:
+@route(
+    "POST /api/ais/batches/{batch_id}/done",
+    summary='Mark an image done or not done',
+    tag='AIS',
+    description='Body: {image, done}: mark an image done by hand (shared progress).',
+    errors=(400, 403, 404),
+)
+async def batch_done(request: Request, req: S.BatchDoneRequest) -> S.BatchDoneReply:
     """Body: {image, done}: mark an image done by hand (shared progress)."""
     body, refused = await _body(request)
     if refused:
@@ -1357,7 +1776,15 @@ async def batch_done(request: Request) -> Response:
     return JSONResponse({"skipped": batch["skipped"]})
 
 
-async def batch_reset(request: Request) -> Response:
+@route(
+    "POST /api/ais/batches/{batch_id}/reset",
+    summary="Reset a batch's results",
+    tag='AIS',
+    role=ADMIN,
+    description="Body: {scope: all | auto}: delete the batch's results (admins), to run it again. The Batches screen offers a backup export first.",
+    errors=(400, 403, 404),
+)
+async def batch_reset(request: Request, req: S.BatchResetRequest) -> S.BatchResetReply:
     """Body: {scope: all | auto}: delete the batch's results (admins), to run
     it again. The Batches screen offers a backup export first."""
     body, refused = await _body(request)
@@ -1388,7 +1815,14 @@ def _may_restore(request: Request, entry: dict[str, Any]) -> bool:
     return entry["kind"] == "batch" and entry.get("deleted_by") == actor.user.id
 
 
-async def trash_list(request: Request) -> Response:
+@route(
+    "GET /api/ais/trash",
+    summary="The Batches screen's trash",
+    tag='AIS',
+    description='What deleting a batch or folder, or resetting a batch, took away in the last 30 days, newest first: {entries: [{id, kind (batch | folder | reset), name, deleted_at, deleted_by, deleted_by_name, expires_at, can_restore, counts}], days}.',
+    mcp_http='The trash only holds what the Batches screen deleted, which agents cannot do.',
+)
+async def trash_list(request: Request) -> S.TrashListReply:
     """What was deleted in the last TRASH_DAYS days, newest first, each with
     can_restore for whoever asks."""
     store = get_store(request)
@@ -1400,7 +1834,15 @@ async def trash_list(request: Request) -> Response:
     return JSONResponse({"entries": entries, "days": batches.TRASH_DAYS})
 
 
-async def trash_restore(request: Request) -> Response:
+@route(
+    "POST /api/ais/trash/{trash_id}/restore",
+    summary='Restore from the trash',
+    tag='AIS',
+    description='Put a deleted batch (with its AIS and lines), folder or reset back. A batch: whoever deleted it or an admin; a folder or reset: admins.',
+    mcp_http='The trash only holds what the Batches screen deleted, which agents cannot do.',
+    errors=(400, 403, 404),
+)
+async def trash_restore(request: Request, req: S.TrashRestoreRequest) -> S.TrashSummary:
     body, refused = await _body(request)
     if refused:
         return refused
@@ -1420,7 +1862,16 @@ async def trash_restore(request: Request) -> Response:
     return JSONResponse(restored)
 
 
-async def trash_purge(request: Request) -> Response:
+@route(
+    "POST /api/ais/trash/{trash_id}/purge",
+    summary='Delete from the trash for good',
+    tag='AIS',
+    role=ADMIN,
+    description='The entry gone for good (admins).',
+    mcp_http="Deleting for good is kept out of agents' reach on purpose.",
+    errors=(400, 403, 404),
+)
+async def trash_purge(request: Request, req: S.TrashPurgeRequest) -> S.OkReply:
     """Delete an entry for good (admins)."""
     body, refused = await _body(request)
     if refused:
@@ -1430,7 +1881,16 @@ async def trash_purge(request: Request) -> Response:
     return JSONResponse({"ok": True}) if gone else not_found("not in the trash")
 
 
-async def batch_assign(request: Request) -> Response:
+@route(
+    "POST /api/ais/batches/{batch_id}/assign",
+    summary='Split a batch among people',
+    tag='AIS',
+    role=ADMIN,
+    description='Body: {shares: [{user_id, percent}]}: split the batch among these people (admins). An empty list clears the assignment.',
+    reply_description='The batch record: its images (each file with stored, and for admins the original names), adds, assignment, skipped, created_by_name, assignee_names, adder_names and excluded.',
+    errors=(400, 403, 404),
+)
+async def batch_assign(request: Request, req: S.BatchAssignRequest) -> dict[str, Any]:
     """Body: {shares: [{user_id, percent}]}: split the batch among these
     people (admins). An empty list clears the assignment."""
     body, refused = await _body(request)
@@ -1462,14 +1922,27 @@ async def _may_change(request: Request, row: dict[str, Any]) -> bool:
     return batch is not None and batches.assignee_of(batch, row["image"]) == actor.user.id
 
 
-async def result_list(request: Request) -> Response:
+@route(
+    "GET /api/ais/results",
+    summary='Accepted AIS',
+    tag='AIS',
+    description='?batch=<id> for one batch, anything else for all.',
+)
+async def result_list(request: Request, req: S.ResultListRequest) -> S.ResultListReply:
     """?batch=<id> for one batch, anything else for all."""
     batch_id = parse_id(request.query_params.get("batch", ""))
     rows = await run(batches.list_results, get_store(request), batch_id)
     return JSONResponse({"results": rows})
 
 
-async def result_add(request: Request) -> Response:
+@route(
+    "POST /api/ais/results",
+    summary='Accept an AIS',
+    tag='AIS',
+    description="Body: {batch_id, image, row} with row the accepted trace's numbers.",
+    errors=(400, 403),
+)
+async def result_add(request: Request, req: S.ResultAddRequest) -> S.AISResultSchema:
     """Body: {batch_id, image, row} with row the accepted trace's numbers."""
     body, refused = await _body(request)
     if refused:
@@ -1485,7 +1958,13 @@ async def result_add(request: Request) -> Response:
     return JSONResponse(row)
 
 
-async def result_delete(request: Request) -> Response:
+@route(
+    "POST /api/ais/results/{result_id}/delete",
+    summary='Delete an accepted AIS',
+    tag='AIS',
+    errors=(400, 403, 404, 409),
+)
+async def result_delete(request: Request, req: S.ResultDeleteRequest) -> S.ResultDeleteReply:
     body, refused = await _body(request)
     if refused:
         return refused
@@ -1506,7 +1985,14 @@ async def result_delete(request: Request) -> Response:
     return JSONResponse({"ok": True, "renumbered": renumbered})
 
 
-async def result_update(request: Request) -> Response:
+@route(
+    "POST /api/ais/results/{result_id}/update",
+    summary='Change an accepted AIS',
+    tag='AIS',
+    description='Body: {row}: an accepted AIS traced again (the Edit tool). It keeps its number and origin.',
+    errors=(400, 403, 404, 409),
+)
+async def result_update(request: Request, req: S.ResultUpdateRequest) -> S.AISResultSchema:
     """Body: {row}: an accepted AIS traced again (the Edit tool). It keeps its
     number and origin."""
     body, refused = await _body(request)
@@ -1533,7 +2019,14 @@ async def result_update(request: Request) -> Response:
     return JSONResponse(updated)
 
 
-async def result_soma(request: Request) -> Response:
+@route(
+    "POST /api/ais/results/{result_id}/soma",
+    summary="Set an accepted AIS's soma",
+    tag='AIS',
+    description="Body: {soma}: an accepted AIS's distance to its soma (the Measure tool), or null to clear it. The trace is left as it is.",
+    errors=(400, 403, 404, 409),
+)
+async def result_soma(request: Request, req: S.ResultSomaRequest) -> S.AISResultSchema:
     """Body: {soma}: an accepted AIS's distance to its soma (the Measure tool),
     or null to clear it. The trace is left as it is."""
     body, refused = await _body(request)
@@ -1560,7 +2053,15 @@ async def result_soma(request: Request) -> Response:
     return JSONResponse(updated)
 
 
-async def result_import(request: Request) -> Response:
+@route(
+    "POST /api/ais/results/import",
+    summary='Import results',
+    tag='AIS',
+    description='Body: {name, rows}: results kept in a browser before they lived here.',
+    mcp_http='A results file upload: MCP messages are JSON, and clients cap their size. Send it over HTTP with the same key.',
+    errors=(400, 403),
+)
+async def result_import(request: Request, req: S.ResultImportRequest) -> S.ResultImportReply:
     """Body: {name, rows}: results kept in a browser before they lived here."""
     body, refused = await _body(request)
     if refused:
@@ -1576,13 +2077,27 @@ async def result_import(request: Request) -> Response:
 # --- recorded measurements (the Measure tool's Record switch) ----------------
 
 
-async def measure_types(request: Request) -> Response:
+@route(
+    "GET /api/ais/measure-types",
+    summary="The team's measurement types for the Measure tool's Type picker",
+    tag='AIS',
+    description="The team's measurement types for the Measure tool's Type picker.",
+)
+async def measure_types(request: Request) -> S.MeasureTypesReply:
     """The team's measurement types for the Measure tool's Type picker."""
     types = await run(batches.measure_types, get_store(request))
     return JSONResponse({"types": types})
 
 
-async def measure_types_set(request: Request) -> Response:
+@route(
+    "POST /api/ais/measure-types",
+    summary='Set the measurement types',
+    tag='AIS',
+    role=ADMIN,
+    description="Body: {types: [name, ...]}: the team's new list (admins).",
+    errors=(400, 403),
+)
+async def measure_types_set(request: Request, req: S.MeasureTypesSetRequest) -> S.MeasureTypesSetReply:
     """Body: {types: [name, ...]}: the team's new list (admins)."""
     body, refused = await _body(request)
     if refused:
@@ -1594,14 +2109,27 @@ async def measure_types_set(request: Request) -> Response:
     return JSONResponse({"types": types})
 
 
-async def measurement_list(request: Request) -> Response:
+@route(
+    "GET /api/ais/measurements",
+    summary='Recorded measurements',
+    tag='AIS',
+    description='?batch=<id> for one batch, anything else for all.',
+)
+async def measurement_list(request: Request, req: S.MeasurementListRequest) -> S.MeasurementListReply:
     """?batch=<id> for one batch, anything else for all."""
     batch_id = parse_id(request.query_params.get("batch", ""))
     lines = await run(batches.list_measurements, get_store(request), batch_id)
     return JSONResponse({"measurements": lines})
 
 
-async def measurement_add(request: Request) -> Response:
+@route(
+    "POST /api/ais/measurements",
+    summary='Record a measurement',
+    tag='AIS',
+    description='Body: {batch_id, image, measurement}: a line recorded on an image.',
+    errors=(400, 403),
+)
+async def measurement_add(request: Request, req: S.MeasurementAddRequest) -> S.MeasurementSchema:
     """Body: {batch_id, image, measurement}: a line recorded on an image."""
     body, refused = await _body(request)
     if refused:
@@ -1617,7 +2145,14 @@ async def measurement_add(request: Request) -> Response:
     return JSONResponse(line)
 
 
-async def measurement_update(request: Request) -> Response:
+@route(
+    "POST /api/ais/measurements/{measurement_id}/update",
+    summary='Change a measurement',
+    tag='AIS',
+    description="Body: {measurement}: a recorded line's new ends, length and label.",
+    errors=(400, 403, 404, 409),
+)
+async def measurement_update(request: Request, req: S.MeasurementUpdateRequest) -> S.MeasurementSchema:
     """Body: {measurement}: a recorded line's new ends, length and label."""
     body, refused = await _body(request)
     if refused:
@@ -1643,7 +2178,13 @@ async def measurement_update(request: Request) -> Response:
     return JSONResponse(updated)
 
 
-async def measurement_delete(request: Request) -> Response:
+@route(
+    "POST /api/ais/measurements/{measurement_id}/delete",
+    summary='Delete a measurement',
+    tag='AIS',
+    errors=(400, 403, 404, 409),
+)
+async def measurement_delete(request: Request, req: S.MeasurementDeleteRequest) -> S.MeasurementDeleteReply:
     body, refused = await _body(request)
     if refused:
         return refused
@@ -1671,7 +2212,13 @@ async def measurement_delete(request: Request) -> Response:
 # loopback outside the container.
 
 
-async def local_status(request: Request) -> Response:
+@route(
+    "GET /api/ais/local/status",
+    summary='Whether folders on this computer and MATLAB are available',
+    tag='AIS',
+    mcp_http='Whether Open path and MATLAB work on this machine: those routes need a browser session.',
+)
+async def local_status(request: Request) -> S.LocalStatusReply:
     actor = actor_from(request)
     cfg = get_config(request)
     enabled = bool(cfg.local_folders_enabled and actor.is_admin and actor.session is not None)
@@ -1690,7 +2237,15 @@ async def _local_body(request: Request) -> tuple[dict[str, Any] | None, Response
     return await _body(request)
 
 
-async def local_list(request: Request) -> Response:
+@route(
+    "POST /api/ais/local/list",
+    summary='List a folder on this computer',
+    tag='AIS',
+    role=ADMIN,
+    access=SESSION_ONLY,
+    errors=(400, 403),
+)
+async def local_list(request: Request, req: S.LocalListRequest) -> S.LocalListReply:
     body, refused = await _local_body(request)
     if refused:
         return refused
@@ -1700,7 +2255,16 @@ async def local_list(request: Request) -> Response:
         return bad_request(str(exc))
 
 
-async def local_stacks(request: Request) -> Response:
+@route(
+    "POST /api/ais/local/stacks",
+    summary='Find Z-stacks in a folder on this computer',
+    tag='AIS',
+    role=ADMIN,
+    access=SESSION_ONLY,
+    description='Body: {path}. The Z-stacks under a folder, by name, for the Add dialog to ask about before the server hashes anything.',
+    errors=(400, 403),
+)
+async def local_stacks(request: Request, req: S.LocalStacksRequest) -> S.LocalStacksReply:
     """Body: {path}. The Z-stacks under a folder, by name, for the Add dialog
     to ask about before the server hashes anything: TIFF slices (stacks) and
     .czi files (czi_stacks)."""
@@ -1714,7 +2278,16 @@ async def local_stacks(request: Request) -> Response:
         return bad_request(str(exc))
 
 
-async def local_channels(request: Request) -> Response:
+@route(
+    "POST /api/ais/local/channels",
+    summary='Find channel layouts in a folder on this computer',
+    tag='AIS',
+    role=ADMIN,
+    access=SESSION_ONLY,
+    description="Body: {path}. The channel layouts of a folder's images, for the Add dialog to ask about before the server hashes anything.",
+    errors=(400, 403),
+)
+async def local_channels(request: Request, req: S.LocalChannelsRequest) -> S.LocalChannelsReply:
     """Body: {path}. The channel layouts of a folder's images, for the Add
     dialog to ask about before the server hashes anything."""
     body, refused = await _local_body(request)
@@ -1742,7 +2315,17 @@ def _path_name(folder: str, body: dict[str, Any]) -> str:
     return folder.rstrip("/\\").replace("\\", "/").split("/")[-1] or folder
 
 
-async def batch_path(request: Request) -> Response:
+@route(
+    "POST /api/ais/batches/path",
+    summary='Create a batch from a folder on this computer',
+    tag='AIS',
+    role=ADMIN,
+    access=SESSION_ONLY,
+    description='Body: {path}: an Open-path batch, hashed and recorded by the server.',
+    reply_description='The batch record: its images (each file with stored, and for admins the original names), adds, assignment, skipped, created_by_name, assignee_names, adder_names and excluded.',
+    errors=(400, 403),
+)
+async def batch_path(request: Request, req: S.BatchPathRequest) -> dict[str, Any]:
     """Body: {path}: an Open-path batch, hashed and recorded by the server."""
     body, refused = await _local_body(request)
     if refused:
@@ -1759,7 +2342,17 @@ async def batch_path(request: Request) -> Response:
     return JSONResponse(await run(_batch_json, request, batch))
 
 
-async def batch_add_path(request: Request) -> Response:
+@route(
+    "POST /api/ais/batches/{batch_id}/path",
+    summary='Add a folder on this computer to a batch',
+    tag='AIS',
+    role=ADMIN,
+    access=SESSION_ONLY,
+    description='Body: {path}: a folder on this machine added to an existing batch.',
+    reply_description='The batch record: its images (each file with stored, and for admins the original names), adds, assignment, skipped, created_by_name, assignee_names, adder_names and excluded.',
+    errors=(400, 403, 404),
+)
+async def batch_add_path(request: Request, req: S.BatchAddPathRequest) -> dict[str, Any]:
     """Body: {path}: a folder on this machine added to an existing batch."""
     body, refused = await _local_body(request)
     if refused:
@@ -1782,7 +2375,15 @@ async def batch_add_path(request: Request) -> Response:
     return JSONResponse(await run(_batch_json, request, batch))
 
 
-async def local_reveal(request: Request) -> Response:
+@route(
+    "POST /api/ais/local/reveal",
+    summary='Show a file in Finder',
+    tag='AIS',
+    role=ADMIN,
+    access=SESSION_ONLY,
+    errors=(400, 403),
+)
+async def local_reveal(request: Request, req: S.LocalRevealRequest) -> S.LocalOkReply:
     body, refused = await _local_body(request)
     if refused:
         return refused
@@ -1793,7 +2394,15 @@ async def local_reveal(request: Request) -> Response:
     return JSONResponse({"ok": True})
 
 
-async def local_open(request: Request) -> Response:
+@route(
+    "POST /api/ais/local/open",
+    summary='Open a file on this computer',
+    tag='AIS',
+    role=ADMIN,
+    access=SESSION_ONLY,
+    errors=(400, 403),
+)
+async def local_open(request: Request, req: S.LocalOpenRequest) -> S.LocalOkReply:
     body, refused = await _local_body(request)
     if refused:
         return refused
@@ -1804,7 +2413,15 @@ async def local_open(request: Request) -> Response:
     return JSONResponse({"ok": True})
 
 
-async def local_choose(request: Request) -> Response:
+@route(
+    "POST /api/ais/local/choose",
+    summary='Pick a folder on this computer',
+    tag='AIS',
+    role=ADMIN,
+    access=SESSION_ONLY,
+    errors=(400, 403),
+)
+async def local_choose(request: Request, req: S.LocalChooseRequest) -> S.LocalChooseReply:
     body, refused = await _local_body(request)
     if refused:
         return refused
@@ -1851,7 +2468,16 @@ async def bundle_response(request: Request, job: matlab.Run) -> Response:
                     headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 
-async def matlab_bundle_download(request: Request) -> Response:
+@route(
+    "POST /api/ais/matlab/bundle",
+    summary='Download a MATLAB replay zip',
+    tag='AIS',
+    description='Body: see matlab_run. The zip "Download MATLAB Replay" saves: the same images /file and /processed.tif already give a signed-in person, so this needs nothing more than that.',
+    mcp_http="A MATLAB run as a zip download for a person's computer.",
+    reply_type='application/zip',
+    errors=(400, 403),
+)
+async def matlab_bundle_download(request: Request, req: S.MatlabBundleDownloadRequest) -> Response:
     """Body: see matlab_run. The zip "Download MATLAB Replay" saves: the same
     images /file and /processed.tif already give a signed-in person, so this
     needs nothing more than that."""
@@ -1867,7 +2493,16 @@ async def matlab_bundle_download(request: Request) -> Response:
         return bad_request(str(exc))
 
 
-async def local_matlab(request: Request) -> Response:
+@route(
+    "POST /api/ais/local/matlab",
+    summary='Verify an image in MATLAB on this computer',
+    tag='AIS',
+    role=ADMIN,
+    access=SESSION_ONLY,
+    description="Body: see matlab_run. Starts MATLAB's desktop on the original ais_auto.m for that image, on this machine (app/analysis/matlab.py).",
+    errors=(400, 403),
+)
+async def local_matlab(request: Request, req: S.LocalMatlabRequest) -> S.LocalMatlabReply:
     """Body: see matlab_run. Starts MATLAB's desktop on the original ais_auto.m
     for that image, on this machine (app/analysis/matlab.py)."""
     body, refused = await _local_body(request)

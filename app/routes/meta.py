@@ -3,16 +3,23 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from typing import Annotated, Any
+
 from starlette.requests import Request
+from msgspec import Meta
 from starlette.responses import JSONResponse, Response
 
+from app.apidocs import PUBLIC, Reply, route
+from app.apidocs.route import reply_response
 from app.core import db, graceful
 from app.models import users
+from app.routes.admin import OkReply
 
 READY_TIMEOUT_SECONDS = 2.0
 
 
-async def get_language(request: Request) -> Response:
+@route("GET /api/language", summary="The UI's text", tag="Account", access=PUBLIC)
+async def get_language(request: Request) -> dict[str, Any]:
     """The whole language.yaml tree as JSON. Deliberately public: the
     signed-out page has text too, and none of it is secret. Do not put
     anything sensitive in language.yaml -- it is, by design, readable by
@@ -24,18 +31,30 @@ async def get_language(request: Request) -> Response:
     )
 
 
-async def get_health(request: Request) -> Response:
+@route("GET /api/health", summary="Is the process up", tag="Monitoring", access=PUBLIC)
+async def get_health(request: Request) -> OkReply:
     """What the Dockerfile HEALTHCHECK hits. Trivial on purpose -- if it
     touched the database, a slow query would get the container killed and
     restarted, turning a small problem into an outage."""
-    return JSONResponse({"ok": True})
+    return OkReply(ok=True)
 
 
 # The About screen renders this, so the report has one copy: the one in docs/.
 REPORT = Path(__file__).resolve().parents[2] / "docs" / "ais_auto_report.md"
 
 
-async def get_report(request: Request) -> Response:
+class ReportReply(Reply):
+    markdown: Annotated[str, Meta(description="docs/ais_auto_report.md as it is on disk.")]
+
+
+@route(
+    "GET /api/about/report", summary="The ais_auto.m report, as Markdown",
+    tag="About", errors=(404,),
+    description="docs/ais_auto_report.md as {\"markdown\": ...}, for the About screen. Read on every call so "
+    "an edited report shows without a restart.",
+    mcp_http="The About screen's copy of a document in the repository; nothing to act on.",
+)
+def get_report(request: Request) -> ReportReply:
     """docs/ais_auto_report.md as {"markdown": ...}, for the About screen.
     Read on every call so an edited report shows without a restart."""
     try:
@@ -59,7 +78,8 @@ async def _probe(store: db.Store) -> bool:
         return False
 
 
-async def get_ready(request: Request) -> Response:
+@route("GET /api/ready", summary="Can the server do real work", tag="Monitoring", access=PUBLIC)
+async def get_ready(request: Request) -> OkReply:
     """Whether this instance can serve: what a load balancer or an orchestrator
     asks, as against /api/health, which only says the process is up. Public,
     so it says yes or no and nothing else.
@@ -74,7 +94,7 @@ async def get_ready(request: Request) -> Response:
         probe = state.ready_probe = asyncio.create_task(_probe(state.store))
     done, _ = await asyncio.wait({probe}, timeout=READY_TIMEOUT_SECONDS)
     ok = bool(done) and probe.result()
-    return JSONResponse({"ok": ok}, status_code=200 if ok else 503)
+    return reply_response(OkReply(ok=ok), 200 if ok else 503)  # type: ignore[return-value]
 
 
 async def unknown_api(request: Request) -> Response:

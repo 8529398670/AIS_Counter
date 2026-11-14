@@ -1,13 +1,11 @@
 """The three files of the API reference, as the code describes them.
 
-The route table is build_routes() itself, with the activity log's routes in
-(they exist only while logs are on) and AIS Counter's MATLAB helper routes, so
-every route the app can have is there.
-Nothing is built that a route needs to run: the docs only read the table."""
+The route table is build_routes() itself, so every route the app can have is
+there. Nothing is built that a route needs to run: the docs only read the
+table."""
 from __future__ import annotations
 
 import json
-from types import SimpleNamespace
 from typing import Any
 
 from starlette.routing import Route
@@ -39,11 +37,7 @@ def every_route() -> list[tuple[str, str, Any]]:
     from app.core.static_files import StaticServer
     from app.routes import build_routes
 
-    # AIS Counter: the MATLAB helper's routes are set up once too, only while
-    # matlab_helper and API keys are on; they are in the docs either way.
-    started_with = SimpleNamespace(logs=SimpleNamespace(enabled=True), matlab_helper=True, api_keys_enabled=True,
-                                   upload_limit_bytes=1073741824)
-    return documented_routes(build_routes(StaticServer(assets.BUNDLED_STATIC), started_with))
+    return documented_routes(build_routes(StaticServer(assets.BUNDLED_STATIC)))
 
 
 def spec() -> tuple[dict[str, Any], list[str]]:

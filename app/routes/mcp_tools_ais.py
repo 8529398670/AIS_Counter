@@ -184,6 +184,21 @@ def _ok(answer: Answer) -> Any:
 
 
 @dataclass
+class AisTool(Tool):
+    """A Tool with its own hand-written arguments schema, standing for its
+    declared route all the same (endpoint names the route in mcp.json and
+    test_mcp_parity.py). The AIS tools call their route in-process (_route)
+    with arguments shaped for an agent, so their schema is theirs, not the
+    route's request type."""
+
+    schema: dict[str, Any] | None = None
+
+    def arguments(self) -> dict[str, Any]:
+        return self.schema or {"type": "object", "properties": {}, "additionalProperties": False}
+
+
+
+@dataclass
 class Spec:
     """A tool that is one route: which args go in its path, query and body."""
 
@@ -225,9 +240,9 @@ class Spec:
             out = _ok(await _route(call, self.handler, self.method, self.path, path_params, query, body))
             return self.shape(out, call) if self.shape else out
 
-        return Tool(name=self.name, title=self.title, description=self.description, call=run, input_schema=schema,
+        return AisTool(name=self.name, title=self.title, description=self.description, call=run, schema=schema,
                     read_only=self.read_only, destructive=self.destructive, admin_only=self.admin_only,
-                    route=f"{self.method} {self.path}")
+                    endpoint=self.handler)
 
 
 def _brief(batch: dict[str, Any]) -> dict[str, Any]:
@@ -687,24 +702,24 @@ def register(registry: Registry) -> None:
     thumb and composite kinds are the other two image routes."""
     for spec in _specs():
         registry.register(spec.tool())
-    registry.register(Tool(
-        name="upload_instructions", route="POST /api/ais/files", title="How to upload files",
+    registry.register(AisTool(
+        name="upload_instructions", endpoint=ais.upload, title="How to upload files",
         description="Image bytes do not go through MCP: POST each file's raw bytes to the url given, with your API key (Content-Type: application/octet-stream). With batch_id, also the files that batch still needs (sha, name, rel, image).",
-        call=upload_instructions, input_schema=UPLOAD_SCHEMA, read_only=True))
-    registry.register(Tool(
-        name="files_stored", route="POST /api/ais/files", title="Which files the server has",
+        call=upload_instructions, schema=UPLOAD_SCHEMA, read_only=True))
+    registry.register(AisTool(
+        name="files_stored", endpoint=ais.upload, title="Which files the server has",
         description="For each sha-256, whether the server already holds that file (so it need not be uploaded again).",
-        call=files_stored, input_schema=STORED_SCHEMA, read_only=True))
-    registry.register(Tool(
-        name="get_image", route="GET /api/ais/files/{sha}/view.png", title="Look at an image",
+        call=files_stored, schema=STORED_SCHEMA, read_only=True))
+    registry.register(AisTool(
+        name="get_image", endpoint=ais.view, title="Look at an image",
         description="An image as PNG: the processed view the Process screen traces on (view), a thumbnail (thumb), or a .czi's channels together (composite).",
-        call=get_image, input_schema=IMAGE_SCHEMA, read_only=True))
-    registry.register(Tool(
-        name="trace_click", route="POST /api/ais/trace", title="Trace an AIS from a click",
+        call=get_image, schema=IMAGE_SCHEMA, read_only=True))
+    registry.register(AisTool(
+        name="trace_click", endpoint=ais.trace, title="Trace an AIS from a click",
         description="What a click on the Process screen does: the AIS traced from that point, with the row to save (save_result) when it worked. Uses the auto_defaults settings unless given.",
-        call=trace_click, input_schema=TRACE_SCHEMA, read_only=True))
-    registry.register(Tool(
-        name="detect_image", route="POST /api/ais/detect", title="Find AIS on one image",
+        call=trace_click, schema=TRACE_SCHEMA, read_only=True))
+    registry.register(AisTool(
+        name="detect_image", endpoint=ais.detect, title="Find AIS on one image",
         description="Auto mode on one image without saving: every candidate the filters keep (include_hidden: the rest too), each with passes and the row save_result takes -- so you can review and save them yourself. The image's saved AIS are left out of the search.",
-        call=detect_image, input_schema=DETECT_SCHEMA, read_only=True))
+        call=detect_image, schema=DETECT_SCHEMA, read_only=True))
 

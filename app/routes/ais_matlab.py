@@ -22,6 +22,9 @@ from pathlib import Path
 from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse, Response
 
+from app.apidocs import ADMIN, KEY_ONLY, SESSION_ONLY, route
+from app.routes import ais_schemas as S
+from app.core.security import RequireHelperKey
 from app.analysis import matlab
 from app.analysis.images import ImageError
 from app.analysis.matlab_jobs import Jobs
@@ -59,7 +62,16 @@ def _jobs(request: Request) -> Jobs:
     return request.app.state.matlab_jobs
 
 
-async def send(request: Request) -> Response:
+@route(
+    "POST /api/ais/matlab/send",
+    summary='Send a MATLAB run to your helper',
+    tag='AIS',
+    access=SESSION_ONLY,
+    feature="matlab_helper",
+    description="Body: see matlab_run. Hands the run to the caller's own helper and answers with what became of it.",
+    errors=(400, 403, 409),
+)
+async def send(request: Request, req: S.SendRequest) -> S.SendReply:
     """Body: see matlab_run. Hands the run to the caller's own helper and
     answers with what became of it."""
     body, refused = await _body(request)
@@ -95,7 +107,17 @@ async def send(request: Request) -> Response:
     return JSONResponse({"ok": True}) if job.ok else bad_request(job.message or "the MATLAB helper could not start MATLAB")
 
 
-async def mint_key(request: Request) -> Response:
+@route(
+    "POST /api/ais/matlab/helper/key",
+    summary='Make a MATLAB helper key',
+    tag='AIS',
+    access=SESSION_ONLY,
+    feature="matlab_helper",
+    description="The Connect button: a key good for the helper's routes and nothing else (app/models/api_keys.py). The credential appears here and nowhere else.",
+    status=201,
+    errors=(400, 403),
+)
+async def mint_key(request: Request, req: S.MintKeyRequest) -> S.MintKeyReply:
     """The Connect button: a key good for the helper's routes and nothing else
     (app/models/api_keys.py). The credential appears here and nowhere else."""
     _, refused = await _body(request)
@@ -109,7 +131,17 @@ async def mint_key(request: Request) -> Response:
     return JSONResponse({"credential": credential}, status_code=201)
 
 
-async def download(request: Request) -> Response:
+@route(
+    "GET /api/ais/matlab/helper/download/{platform}",
+    summary='The helper for one OS and CPU, from helper/build.sh',
+    tag='AIS',
+    feature="matlab_helper",
+    description='The helper for one OS and CPU, from helper/build.sh.',
+    mcp_http="The MATLAB helper program itself, a download for a person's computer.",
+    reply_type='application/octet-stream',
+    errors=(404,),
+)
+async def download(request: Request, req: S.DownloadRequest) -> Response:
     """The helper for one OS and CPU, from helper/build.sh."""
     target = TARGETS.get(request.path_params["platform"].lower())
     if target is None:
@@ -121,7 +153,19 @@ async def download(request: Request) -> Response:
     return FileResponse(path, media_type="application/octet-stream", filename=name)
 
 
-async def next_job(request: Request) -> Response:
+@route(
+    "GET /api/ais/matlab/helper/next",
+    summary="The helper's next run",
+    tag='AIS',
+    access=KEY_ONLY,
+    feature="matlab_helper",
+    description='Polled by the helper: also how the server knows it is there.',
+    mcp_http='Called by the MATLAB helper program, not by agents.',
+    reply_description='The run to open, now claimed. 204 with no body when there is none.',
+    errors=(403,),
+    use=[RequireHelperKey],
+)
+async def next_job(request: Request) -> S.NextJobReply:
     """Polled by the helper: also how the server knows it is there."""
     jobs = _jobs(request)
     user_id = actor_from(request).user.id
@@ -132,7 +176,19 @@ async def next_job(request: Request) -> Response:
     return JSONResponse({"id": job.id, "mode": job.run.mode, "cell": matlab.safe_cell(job.run.cell)})
 
 
-async def job_bundle(request: Request) -> Response:
+@route(
+    "GET /api/ais/matlab/helper/jobs/{job_id}/bundle",
+    summary="The claimed run's zip, built now rather than held in memory waiting",
+    tag='AIS',
+    access=KEY_ONLY,
+    feature="matlab_helper",
+    description="The claimed run's zip, built now rather than held in memory waiting.",
+    mcp_http='Called by the MATLAB helper program, not by agents; the bundle is a zip.',
+    reply_type='application/zip',
+    errors=(400, 403, 404),
+    use=[RequireHelperKey],
+)
+async def job_bundle(request: Request, req: S.JobBundleRequest) -> Response:
     """The claimed run's zip, built now rather than held in memory waiting."""
     job = _jobs(request).get(actor_from(request).user.id, request.path_params["job_id"])
     if job is None:
@@ -143,7 +199,18 @@ async def job_bundle(request: Request) -> Response:
         return bad_request(str(exc))
 
 
-async def job_done(request: Request) -> Response:
+@route(
+    "POST /api/ais/matlab/helper/jobs/{job_id}/done",
+    summary='Report what the helper launched',
+    tag='AIS',
+    access=KEY_ONLY,
+    feature="matlab_helper",
+    description='Body: {ok, message?}: what the helper did with the job.',
+    mcp_http='Called by the MATLAB helper program, not by agents.',
+    errors=(400, 403, 404),
+    use=[RequireHelperKey],
+)
+async def job_done(request: Request, req: S.JobDoneRequest) -> S.JobDoneReply:
     """Body: {ok, message?}: what the helper did with the job."""
     body, refused = await _body(request)
     if refused:

@@ -50,13 +50,13 @@ An error reply is a JSON object whose `error` says what went wrong.
 | POST | [`/api/account/matlab`](#post-apiaccountmatlab) | Set where MATLAB is on your computer | browser session only, anyone signed in |
 | POST | [`/api/account/password`](#post-apiaccountpassword) | Set or clear your password | browser session only, anyone signed in |
 | POST | [`/api/account/pin`](#post-apiaccountpin) | Set or clear your PIN | browser session only, anyone signed in |
-| POST | [`/api/account/rename`](#post-apiaccountrename) | Change your display name | browser session or API key, anyone signed in |
+| POST | [`/api/account/rename`](#post-apiaccountrename) | Rename your account | browser session or API key, anyone signed in |
 | GET | [`/api/account/sessions`](#get-apiaccountsessions) | Your signed-in devices | browser session or API key, anyone signed in |
 | POST | [`/api/account/sessions/revoke-others`](#post-apiaccountsessionsrevoke-others) | Sign out every other device | browser session or API key, anyone signed in |
 | POST | [`/api/account/sessions/{session_id}/label`](#post-apiaccountsessionssession_idlabel) | Name one of your devices | browser session or API key, anyone signed in |
-| POST | [`/api/account/sessions/{session_id}/revoke`](#post-apiaccountsessionssession_idrevoke) | Sign out one device | browser session or API key, anyone signed in |
+| POST | [`/api/account/sessions/{session_id}/revoke`](#post-apiaccountsessionssession_idrevoke) | Sign out one of your devices | browser session or API key, anyone signed in |
 | POST | [`/api/account/shortcuts`](#post-apiaccountshortcuts) | Save your rebound keyboard shortcuts | browser session or API key, anyone signed in |
-| POST | [`/api/account/theme`](#post-apiaccounttheme) | Pick which theme you use | browser session or API key, anyone signed in |
+| POST | [`/api/account/theme`](#post-apiaccounttheme) | Pick your theme | browser session or API key, anyone signed in |
 | POST | [`/api/account/themes`](#post-apiaccountthemes) | Replace your own themes | browser session or API key, anyone signed in |
 | POST | [`/api/account/two-factor/confirm`](#post-apiaccounttwo-factorconfirm) | Turn two-factor on | browser session only, anyone signed in |
 | POST | [`/api/account/two-factor/disable`](#post-apiaccounttwo-factordisable) | Turn two-factor off | browser session only, anyone signed in |
@@ -65,11 +65,13 @@ An error reply is a JSON object whose `error` says what went wrong.
 | POST | [`/api/logout`](#post-apilogout) | Sign out | browser session or API key, anyone signed in |
 | POST | [`/api/logs/events`](#post-apilogsevents) | Record what happened on the page | browser session or API key, anyone signed in |
 | GET | [`/api/me`](#get-apime) | Who am I | browser session or API key, anyone signed in |
-| GET | [`/api/team`](#get-apiteam) | Everyone's names | browser session or API key, anyone signed in |
+| GET | [`/api/team`](#get-apiteam) | List team | browser session or API key, anyone signed in |
 
 ### POST /api/account/login-link
 
 A login link for yourself
+
+A link that signs your own account in on a browser or another device. Only a key with your account's full role may ask: one scoped down to user on an admin account is refused.
 
 |  |  |
 |---|---|
@@ -82,8 +84,8 @@ A login link for yourself
 | Field | Type | Required | Limits | Description |
 |---|---|---|---|---|
 | `csrf_token` | string | no |  | From GET /api/me. Browser sessions only. |
-| `expires_in_minutes` | integer | no | 0 to 525600 | 0 never expires. Default auth.login_token_ttl_seconds for a link that works once, auth.multi_use_login_token_ttl_seconds otherwise. Through an API key: 1-1440, and the default is held to a day. |
-| `max_uses` | integer | no | 0 to 1000 | Sign-ins the link allows: 1-1000, or 0 for unlimited. Default 1. Through an API key: 1 only. |
+| `expires_in_minutes` | integer or null | no | 0 to 525600 | 0 never expires. Default auth.login_token_ttl_seconds for a link that works once, auth.multi_use_login_token_ttl_seconds otherwise. |
+| `max_uses` | integer or null | no | 0 to 1000 | Sign-ins the link allows: 1-1000, or 0 for unlimited. Default 1. |
 
 **Reply 200**: Success
 
@@ -99,6 +101,8 @@ A login link for yourself
 ### POST /api/account/login-link/cancel
 
 Stop your own login link working
+
+Void your account's live login link without making a new one. Devices it already signed in stay signed in. Answers with removed: 0 or 1.
 
 |  |  |
 |---|---|
@@ -176,7 +180,7 @@ Set or clear your PIN
 |  |  |
 |---|---|
 | Who may call | browser session only, anyone signed in |
-| Errors | 400, 401, 403, 429, 503 |
+| Errors | 400, 401, 403, 404, 429, 503 |
 
 **Request body**
 
@@ -194,7 +198,9 @@ Set or clear your PIN
 
 ### POST /api/account/rename
 
-Change your display name
+Rename your account
+
+Change your own display name (1-80 characters). expect, when given, is the name you think it has now; if someone changed it meanwhile the rename is refused with the current name, so nothing is overwritten unseen.
 
 |  |  |
 |---|---|
@@ -207,7 +213,7 @@ Change your display name
 | Field | Type | Required | Limits | Description |
 |---|---|---|---|---|
 | `csrf_token` | string | no |  | From GET /api/me. Browser sessions only. |
-| `display_name` | string | yes |  |  |
+| `display_name` | string | yes | 1 to 80 characters |  |
 | `expect` | string or null | no |  |  |
 
 **Reply 200**: Success
@@ -221,6 +227,8 @@ Change your display name
 
 Your signed-in devices
 
+Where your account is signed in, a page at a time: id, when it started and was last seen, the browser, and the name you gave it. Through an API key no device is current. next is the offset of the following page, or null on the last one.
+
 |  |  |
 |---|---|
 | Who may call | browser session or API key, anyone signed in |
@@ -231,8 +239,8 @@ Your signed-in devices
 
 | Name | In | Type | Required | Limits | Description |
 |---|---|---|---|---|---|
-| `limit` | query | integer | no | 1 to 1000 | Rows to return. Default 200. |
-| `offset` | query | integer | no | at least 0 |  |
+| `limit` | query | integer | no | 1 to 1000; default `200` | Rows to return. Default 200. |
+| `offset` | query | integer | no | at least 0 | Rows to skip: the next value of the previous page. |
 
 **Reply 200**: Success
 
@@ -269,7 +277,7 @@ Sign out every other device
 
 Name one of your devices
 
-This device included. Empty clears the name.
+Give one of your devices a name (at most 80 characters; empty clears it). expect, when given, is the name you think it has now.
 
 |  |  |
 |---|---|
@@ -281,15 +289,15 @@ This device included. Empty clears the name.
 
 | Name | In | Type | Required | Limits | Description |
 |---|---|---|---|---|---|
-| `session_id` | path | string | yes |  |  |
+| `session_id` | path | string | yes |  | The device's id, from GET /api/account/sessions or GET /api/admin/users/{user_id}/sessions (list_my_sessions or admin_list_user_sessions over MCP). |
 
 **Request body**
 
 | Field | Type | Required | Limits | Description |
 |---|---|---|---|---|
 | `csrf_token` | string | no |  | From GET /api/me. Browser sessions only. |
-| `expect` | string | no |  | The name you think it has. Answers 409 if it has another. |
-| `label` | string | yes |  | At most 80 characters. |
+| `expect` | string or null | no |  | The name you think it has. Answers 409 if it has another. |
+| `label` | string | yes | at most 80 characters | At most 80 characters. |
 
 **Reply 200**: Success
 
@@ -300,7 +308,9 @@ This device included. Empty clears the name.
 
 ### POST /api/account/sessions/{session_id}/revoke
 
-Sign out one device
+Sign out one of your devices
+
+End one of your signed-in sessions; that browser has to sign in again.
 
 |  |  |
 |---|---|
@@ -312,7 +322,7 @@ Sign out one device
 
 | Name | In | Type | Required | Limits | Description |
 |---|---|---|---|---|---|
-| `session_id` | path | string | yes |  |  |
+| `session_id` | path | string | yes |  | The device's id, from GET /api/account/sessions or GET /api/admin/users/{user_id}/sessions (list_my_sessions or admin_list_user_sessions over MCP). |
 
 **Request body**
 
@@ -353,7 +363,9 @@ Replace the caller's rebound keyboard shortcuts with the map sent (static/js/sho
 
 ### POST /api/account/theme
 
-Pick which theme you use
+Pick your theme
+
+Switch to another theme from your list (or the defaults), by its id.
 
 |  |  |
 |---|---|
@@ -378,6 +390,8 @@ Pick which theme you use
 ### POST /api/account/themes
 
 Replace your own themes
+
+Replace your whole list of color themes (1 to 40) and pick the one you use. themes: null goes back to following the app's defaults. A theme is the Theme schema in the API reference (config/openapi.json): id, name, mode light|dark, accent, second, and optional colors as #rrggbb.
 
 |  |  |
 |---|---|
@@ -530,6 +544,8 @@ Record what happened on the page
 
 Who am I
 
+The account this API key belongs to, the role it acts with (role -- never higher than the key's own scope), and the account's own role.
+
 |  |  |
 |---|---|
 | Who may call | browser session or API key, anyone signed in |
@@ -542,7 +558,9 @@ Who am I
 
 ### GET /api/team
 
-Everyone's names
+List team
+
+People with an active account, a page at a time: id and display name.
 
 |  |  |
 |---|---|
@@ -554,8 +572,8 @@ Everyone's names
 
 | Name | In | Type | Required | Limits | Description |
 |---|---|---|---|---|---|
-| `limit` | query | integer | no | 1 to 1000 | Rows to return. Default 200. |
-| `offset` | query | integer | no | at least 0 |  |
+| `limit` | query | integer | no | 1 to 1000; default `200` | Rows to return. Default 200. |
+| `offset` | query | integer | no | at least 0 | Rows to skip: the next value of the previous page. |
 
 **Reply 200**: Success
 
@@ -684,8 +702,8 @@ Every key in the app
 
 | Name | In | Type | Required | Limits | Description |
 |---|---|---|---|---|---|
-| `limit` | query | integer | no | 1 to 1000 | Rows to return. Default 200. |
-| `offset` | query | integer | no | at least 0 |  |
+| `limit` | query | integer | no | 1 to 1000; default `200` | Rows to return. Default 200. |
+| `offset` | query | integer | no | at least 0 | Rows to skip: the next value of the previous page. |
 | `q` | query | string | no |  | Keep keys whose name or owner contains this, in any case. |
 | `live` | query | string | no | one of `true` | Leave out revoked and expired keys. |
 | `sort` | query | string | no | one of `display_name`, `name`, `role`, `last_used_at`, `expires_at`, `created_at` | Field to sort the whole list by. Rows without it go last. |
@@ -718,7 +736,7 @@ Any admin may do this for an ordinary user, and only the owner for another admin
 | `expires_in_days` | integer or null | no | 0 to 3650 | Absent or null: the configured default. 0: never expires. |
 | `name` | string | yes | 1 to 80 characters |  |
 | `role` | string | no | one of `admin`, `user`; default `user` |  |
-| `user_id` | integer | yes |  |  |
+| `user_id` | integer | yes | at least 1 |  |
 
 **Reply 201**: Success
 
@@ -737,7 +755,7 @@ Delete anyone's key
 
 | Name | In | Type | Required | Limits | Description |
 |---|---|---|---|---|---|
-| `key_id` | path | string | yes |  |  |
+| `key_id` | path | string | yes |  | The key's id, from GET /api/keys (GET /api/admin/keys for anyone's). |
 
 **Request body**
 
@@ -764,7 +782,7 @@ Change when anyone's key expires
 
 | Name | In | Type | Required | Limits | Description |
 |---|---|---|---|---|---|
-| `key_id` | path | string | yes |  |  |
+| `key_id` | path | string | yes |  | The key's id, from GET /api/keys (GET /api/admin/keys for anyone's). |
 
 **Request body**
 
@@ -775,7 +793,7 @@ Change when anyone's key expires
 
 **Reply 200**: Success
 
-An empty object.
+[`APIKey`](#apikey).
 
 ### POST /api/admin/keys/{key_id}/rename
 
@@ -790,15 +808,15 @@ Rename anyone's key
 
 | Name | In | Type | Required | Limits | Description |
 |---|---|---|---|---|---|
-| `key_id` | path | string | yes |  |  |
+| `key_id` | path | string | yes |  | The key's id, from GET /api/keys (GET /api/admin/keys for anyone's). |
 
 **Request body**
 
 | Field | Type | Required | Limits | Description |
 |---|---|---|---|---|
 | `csrf_token` | string | no |  | From GET /api/me. Browser sessions only. |
-| `expect` | string | no |  | The name you think it has. Answers 409 if it has another. |
-| `name` | string | yes |  | 1-80 characters. |
+| `expect` | string or null | no |  | The name you think it has. Answers 409 if it has another. |
+| `name` | string | yes | 1 to 80 characters | 1-80 characters. |
 
 **Reply 200**: Success
 
@@ -820,7 +838,7 @@ Undo deleting anyone's key
 
 | Name | In | Type | Required | Limits | Description |
 |---|---|---|---|---|---|
-| `key_id` | path | string | yes |  |  |
+| `key_id` | path | string | yes |  | The key's id, from GET /api/keys (GET /api/admin/keys for anyone's). |
 
 **Request body**
 
@@ -845,7 +863,7 @@ Revoke anyone's key
 
 | Name | In | Type | Required | Limits | Description |
 |---|---|---|---|---|---|
-| `key_id` | path | string | yes |  |  |
+| `key_id` | path | string | yes |  | The key's id, from GET /api/keys (GET /api/admin/keys for anyone's). |
 
 **Request body**
 
@@ -872,8 +890,8 @@ Your API keys
 
 | Name | In | Type | Required | Limits | Description |
 |---|---|---|---|---|---|
-| `limit` | query | integer | no | 1 to 1000 | Rows to return. Default 200. |
-| `offset` | query | integer | no | at least 0 |  |
+| `limit` | query | integer | no | 1 to 1000; default `200` | Rows to return. Default 200. |
+| `offset` | query | integer | no | at least 0 | Rows to skip: the next value of the previous page. |
 | `q` | query | string | no |  | Keep keys whose name contains this, in any case. |
 | `live` | query | string | no | one of `true` | Leave out revoked and expired keys. |
 | `sort` | query | string | no | one of `name`, `role`, `last_used_at`, `expires_at`, `created_at` | Field to sort the whole list by. Rows without it go last. |
@@ -922,7 +940,7 @@ Delete one of your keys
 
 | Name | In | Type | Required | Limits | Description |
 |---|---|---|---|---|---|
-| `key_id` | path | string | yes |  |  |
+| `key_id` | path | string | yes |  | The key's id, from GET /api/keys (GET /api/admin/keys for anyone's). |
 
 **Request body**
 
@@ -949,7 +967,7 @@ Change when one of your keys expires
 
 | Name | In | Type | Required | Limits | Description |
 |---|---|---|---|---|---|
-| `key_id` | path | string | yes |  |  |
+| `key_id` | path | string | yes |  | The key's id, from GET /api/keys (GET /api/admin/keys for anyone's). |
 
 **Request body**
 
@@ -960,7 +978,7 @@ Change when one of your keys expires
 
 **Reply 200**: Success
 
-An empty object.
+[`APIKey`](#apikey).
 
 ### POST /api/keys/{key_id}/rename
 
@@ -975,15 +993,15 @@ Rename one of your keys
 
 | Name | In | Type | Required | Limits | Description |
 |---|---|---|---|---|---|
-| `key_id` | path | string | yes |  |  |
+| `key_id` | path | string | yes |  | The key's id, from GET /api/keys (GET /api/admin/keys for anyone's). |
 
 **Request body**
 
 | Field | Type | Required | Limits | Description |
 |---|---|---|---|---|
 | `csrf_token` | string | no |  | From GET /api/me. Browser sessions only. |
-| `expect` | string | no |  | The name you think it has. Answers 409 if it has another. |
-| `name` | string | yes |  | 1-80 characters. |
+| `expect` | string or null | no |  | The name you think it has. Answers 409 if it has another. |
+| `name` | string | yes | 1 to 80 characters | 1-80 characters. |
 
 **Reply 200**: Success
 
@@ -1005,7 +1023,7 @@ Undo deleting one of your keys
 
 | Name | In | Type | Required | Limits | Description |
 |---|---|---|---|---|---|
-| `key_id` | path | string | yes |  |  |
+| `key_id` | path | string | yes |  | The key's id, from GET /api/keys (GET /api/admin/keys for anyone's). |
 
 **Request body**
 
@@ -1030,7 +1048,7 @@ Revoke one of your keys
 
 | Name | In | Type | Required | Limits | Description |
 |---|---|---|---|---|---|
-| `key_id` | path | string | yes |  |  |
+| `key_id` | path | string | yes |  | The key's id, from GET /api/keys (GET /api/admin/keys for anyone's). |
 
 **Request body**
 
@@ -1048,24 +1066,26 @@ Revoke one of your keys
 
 | Method | Path | Summary | Who may call |
 |---|---|---|---|
-| GET | [`/api/admin/theme-defaults`](#get-apiadmintheme-defaults) | The themes everyone without their own list sees | browser session or API key, admins |
+| GET | [`/api/admin/theme-defaults`](#get-apiadmintheme-defaults) | Default themes | browser session or API key, admins |
 | POST | [`/api/admin/theme-defaults`](#post-apiadmintheme-defaults) | Replace the default themes | browser session or API key, admins |
-| GET | [`/api/admin/users`](#get-apiadminusers) | Every account | browser session or API key, admins |
-| POST | [`/api/admin/users`](#post-apiadminusers) | Create an account and its login link | browser session or API key, admins |
+| GET | [`/api/admin/users`](#get-apiadminusers) | List users | browser session or API key, admins |
+| POST | [`/api/admin/users`](#post-apiadminusers) | Create an account | browser session or API key, admins |
 | POST | [`/api/admin/users/{user_id}/cancel-login-link`](#post-apiadminusersuser_idcancel-login-link) | Stop an account's login link working | browser session or API key, admins |
 | POST | [`/api/admin/users/{user_id}/delete`](#post-apiadminusersuser_iddelete) | Delete an account | browser session or API key, admins |
-| POST | [`/api/admin/users/{user_id}/disabled`](#post-apiadminusersuser_iddisabled) | Disable or enable an account | browser session or API key, admins |
+| POST | [`/api/admin/users/{user_id}/disabled`](#post-apiadminusersuser_iddisabled) | Disable or enable a user | browser session or API key, admins |
 | POST | [`/api/admin/users/{user_id}/reissue-login`](#post-apiadminusersuser_idreissue-login) | A new login link for an account | browser session or API key, admins |
-| POST | [`/api/admin/users/{user_id}/rename`](#post-apiadminusersuser_idrename) | Rename someone else | browser session or API key, admins |
+| POST | [`/api/admin/users/{user_id}/rename`](#post-apiadminusersuser_idrename) | Rename someone | browser session or API key, admins |
 | POST | [`/api/admin/users/{user_id}/reset-two-factor`](#post-apiadminusersuser_idreset-two-factor) | Turn off an account's two-factor | browser session or API key, admins |
-| POST | [`/api/admin/users/{user_id}/revoke-access`](#post-apiadminusersuser_idrevoke-access) | End every credential an account holds | browser session or API key, admins |
+| POST | [`/api/admin/users/{user_id}/revoke-access`](#post-apiadminusersuser_idrevoke-access) | Revoke a user's access | browser session or API key, admins |
 | POST | [`/api/admin/users/{user_id}/role`](#post-apiadminusersuser_idrole) | Change an account's role | browser session or API key, admins |
 | GET | [`/api/admin/users/{user_id}/sessions`](#get-apiadminusersuser_idsessions) | An account's signed-in devices | browser session or API key, admins |
 | POST | [`/api/admin/users/{user_id}/sessions/{session_id}/revoke`](#post-apiadminusersuser_idsessionssession_idrevoke) | Sign out one of an account's devices | browser session or API key, admins |
 
 ### GET /api/admin/theme-defaults
 
-The themes everyone without their own list sees
+Default themes
+
+The theme list everyone without their own list sees. themes is null while the built-in ones apply.
 
 |  |  |
 |---|---|
@@ -1082,6 +1102,8 @@ The themes everyone without their own list sees
 ### POST /api/admin/theme-defaults
 
 Replace the default themes
+
+Replace the theme list everyone without their own list sees, 1 to 40 themes in the Theme schema of the API reference. null puts the built-in themes back.
 
 |  |  |
 |---|---|
@@ -1105,7 +1127,9 @@ Replace the default themes
 
 ### GET /api/admin/users
 
-Every account
+List users
+
+Accounts, a page at a time, including disabled ones, with each one's role and which is the owner. next is the offset of the following page, or null on the last one.
 
 |  |  |
 |---|---|
@@ -1117,8 +1141,8 @@ Every account
 
 | Name | In | Type | Required | Limits | Description |
 |---|---|---|---|---|---|
-| `limit` | query | integer | no | 1 to 1000 | Rows to return. Default 200. |
-| `offset` | query | integer | no | at least 0 |  |
+| `limit` | query | integer | no | 1 to 1000; default `200` | Rows to return. Default 200. |
+| `offset` | query | integer | no | at least 0 | Rows to skip: the next value of the previous page. |
 | `q` | query | string | no |  | Keep accounts whose name or username contains this, in any case. |
 | `sort` | query | string | no | one of `display_name`, `role`, `disabled`, `created_at` | Field to sort the whole list by. Rows without it go last. |
 | `dir` | query | string | no | one of `asc`, `desc` | Default asc. |
@@ -1133,7 +1157,9 @@ Every account
 
 ### POST /api/admin/users
 
-Create an account and its login link
+Create an account
+
+Make a new account and its first login link, to hand to the person. role is admin or user. Answers with user_id and the link.
 
 |  |  |
 |---|---|
@@ -1146,10 +1172,10 @@ Create an account and its login link
 | Field | Type | Required | Limits | Description |
 |---|---|---|---|---|
 | `csrf_token` | string | no |  | From GET /api/me. Browser sessions only. |
-| `display_name` | string | yes |  |  |
-| `expires_in_minutes` | integer | no | 0 to 525600 | 0 never expires. Default auth.login_token_ttl_seconds for a link that works once, auth.multi_use_login_token_ttl_seconds otherwise. Through an API key: 1-1440, and the default is held to a day. |
-| `max_uses` | integer | no | 0 to 1000 | Sign-ins the link allows: 1-1000, or 0 for unlimited. Default 1. Through an API key: 1 only. |
-| `role` | string | no | one of `admin`, `user` |  |
+| `display_name` | string | yes | 1 to 80 characters |  |
+| `expires_in_minutes` | integer or null | no | 0 to 525600 | 0 never expires. Default auth.login_token_ttl_seconds for a link that works once, auth.multi_use_login_token_ttl_seconds otherwise. |
+| `max_uses` | integer or null | no | 0 to 1000 | Sign-ins the link allows: 1-1000, or 0 for unlimited. Default 1. |
+| `role` | string | yes | one of `admin`, `user` |  |
 
 **Reply 201**: Success
 
@@ -1167,6 +1193,8 @@ Create an account and its login link
 
 Stop an account's login link working
 
+Void an account's live login link without making a new one: a link that went somewhere it should not have.
+
 |  |  |
 |---|---|
 | Who may call | browser session or API key, admins |
@@ -1177,7 +1205,7 @@ Stop an account's login link working
 
 | Name | In | Type | Required | Limits | Description |
 |---|---|---|---|---|---|
-| `user_id` | path | string | yes |  |  |
+| `user_id` | path | integer | yes | at least 1 | The account's id, from GET /api/admin/users (admin_list_users over MCP). |
 
 **Request body**
 
@@ -1196,6 +1224,8 @@ Stop an account's login link working
 
 Delete an account
 
+Remove an account for good, with its sessions, login link and API keys.
+
 |  |  |
 |---|---|
 | Who may call | browser session or API key, admins |
@@ -1206,7 +1236,7 @@ Delete an account
 
 | Name | In | Type | Required | Limits | Description |
 |---|---|---|---|---|---|
-| `user_id` | path | string | yes |  |  |
+| `user_id` | path | integer | yes | at least 1 | The account's id, from GET /api/admin/users (admin_list_users over MCP). |
 
 **Request body**
 
@@ -1223,7 +1253,9 @@ Delete an account
 
 ### POST /api/admin/users/{user_id}/disabled
 
-Disable or enable an account
+Disable or enable a user
+
+Switch an account off (disabled: true) or back on (false). Disabling signs it out everywhere and voids its live login link; its API keys stop working while it is off. Reversible. The owner and your own account cannot be disabled.
 
 |  |  |
 |---|---|
@@ -1235,7 +1267,7 @@ Disable or enable an account
 
 | Name | In | Type | Required | Limits | Description |
 |---|---|---|---|---|---|
-| `user_id` | path | string | yes |  |  |
+| `user_id` | path | integer | yes | at least 1 | The account's id, from GET /api/admin/users (admin_list_users over MCP). |
 
 **Request body**
 
@@ -1254,6 +1286,8 @@ Disable or enable an account
 
 A new login link for an account
 
+For someone who lost their device or their link: a fresh login link for their account.
+
 |  |  |
 |---|---|
 | Who may call | browser session or API key, admins |
@@ -1264,15 +1298,15 @@ A new login link for an account
 
 | Name | In | Type | Required | Limits | Description |
 |---|---|---|---|---|---|
-| `user_id` | path | string | yes |  |  |
+| `user_id` | path | integer | yes | at least 1 | The account's id, from GET /api/admin/users (admin_list_users over MCP). |
 
 **Request body**
 
 | Field | Type | Required | Limits | Description |
 |---|---|---|---|---|
 | `csrf_token` | string | no |  | From GET /api/me. Browser sessions only. |
-| `expires_in_minutes` | integer | no | 0 to 525600 | 0 never expires. Default auth.login_token_ttl_seconds for a link that works once, auth.multi_use_login_token_ttl_seconds otherwise. Through an API key: 1-1440, and the default is held to a day. |
-| `max_uses` | integer | no | 0 to 1000 | Sign-ins the link allows: 1-1000, or 0 for unlimited. Default 1. Through an API key: 1 only. |
+| `expires_in_minutes` | integer or null | no | 0 to 525600 | 0 never expires. Default auth.login_token_ttl_seconds for a link that works once, auth.multi_use_login_token_ttl_seconds otherwise. |
+| `max_uses` | integer or null | no | 0 to 1000 | Sign-ins the link allows: 1-1000, or 0 for unlimited. Default 1. |
 
 **Reply 200**: Success
 
@@ -1287,9 +1321,9 @@ A new login link for an account
 
 ### POST /api/admin/users/{user_id}/rename
 
-Rename someone else
+Rename someone
 
-Only the owner can rename an admin.
+Change another account's display name (1-80 characters). Only the owner renames an admin. expect, when given, is the name you think it has now; if it changed meanwhile the rename is refused with the current name.
 
 |  |  |
 |---|---|
@@ -1301,15 +1335,15 @@ Only the owner can rename an admin.
 
 | Name | In | Type | Required | Limits | Description |
 |---|---|---|---|---|---|
-| `user_id` | path | string | yes |  |  |
+| `user_id` | path | integer | yes | at least 1 | The account's id, from GET /api/admin/users (admin_list_users over MCP). |
 
 **Request body**
 
 | Field | Type | Required | Limits | Description |
 |---|---|---|---|---|
 | `csrf_token` | string | no |  | From GET /api/me. Browser sessions only. |
-| `display_name` | string | yes |  | 1-80 characters. |
-| `expect` | string | no |  | The name you think they have. Answers 409 if it is another. |
+| `display_name` | string | yes | 1 to 80 characters | 1-80 characters. |
+| `expect` | string or null | no |  | The name you think they have. Answers 409 if it is another. |
 
 **Reply 200**: Success
 
@@ -1322,6 +1356,8 @@ Only the owner can rename an admin.
 
 Turn off an account's two-factor
 
+For someone who lost both their phone and their recovery codes: switches their two-factor sign-in off so a login link lets them in again. Only the owner resets an admin's; the owner's is reset from a shell.
+
 |  |  |
 |---|---|
 | Who may call | browser session or API key, admins |
@@ -1332,7 +1368,7 @@ Turn off an account's two-factor
 
 | Name | In | Type | Required | Limits | Description |
 |---|---|---|---|---|---|
-| `user_id` | path | string | yes |  |  |
+| `user_id` | path | integer | yes | at least 1 | The account's id, from GET /api/admin/users (admin_list_users over MCP). |
 
 **Request body**
 
@@ -1348,7 +1384,9 @@ Turn off an account's two-factor
 
 ### POST /api/admin/users/{user_id}/revoke-access
 
-End every credential an account holds
+Revoke a user's access
+
+For an account that may be compromised: ends every session and voids its live login link and every API key it holds, at once.
 
 |  |  |
 |---|---|
@@ -1360,7 +1398,7 @@ End every credential an account holds
 
 | Name | In | Type | Required | Limits | Description |
 |---|---|---|---|---|---|
-| `user_id` | path | string | yes |  |  |
+| `user_id` | path | integer | yes | at least 1 | The account's id, from GET /api/admin/users (admin_list_users over MCP). |
 
 **Request body**
 
@@ -1379,7 +1417,7 @@ End every credential an account holds
 
 Change an account's role
 
-Only the owner can take an admin's rights away. Becoming an admin ends the account's sessions and live login link.
+Make an account an admin or an ordinary user. Only the owner takes an admin's rights away; the owner is always an admin, and nobody changes their own role. Becoming an admin ends the account's sessions and live login link.
 
 |  |  |
 |---|---|
@@ -1391,7 +1429,7 @@ Only the owner can take an admin's rights away. Becoming an admin ends the accou
 
 | Name | In | Type | Required | Limits | Description |
 |---|---|---|---|---|---|
-| `user_id` | path | string | yes |  |  |
+| `user_id` | path | integer | yes | at least 1 | The account's id, from GET /api/admin/users (admin_list_users over MCP). |
 
 **Request body**
 
@@ -1411,7 +1449,7 @@ Only the owner can take an admin's rights away. Becoming an admin ends the accou
 
 An account's signed-in devices
 
-The owner's are the owner's alone, and only the owner sees addresses.
+Where an account is signed in: every session, with when it started and was last seen. Addresses are shown to the owner only, and only the owner sees the owner's.
 
 |  |  |
 |---|---|
@@ -1423,9 +1461,9 @@ The owner's are the owner's alone, and only the owner sees addresses.
 
 | Name | In | Type | Required | Limits | Description |
 |---|---|---|---|---|---|
-| `user_id` | path | integer | yes |  |  |
-| `limit` | query | integer | no | 1 to 1000 | Rows to return. Default 200. |
-| `offset` | query | integer | no | at least 0 |  |
+| `user_id` | path | integer | yes | at least 1 | The account's id, from GET /api/admin/users (admin_list_users over MCP). |
+| `limit` | query | integer | no | 1 to 1000; default `200` | Rows to return. Default 200. |
+| `offset` | query | integer | no | at least 0 | Rows to skip: the next value of the previous page. |
 
 **Reply 200**: Success
 
@@ -1449,8 +1487,8 @@ Sign out one of an account's devices
 
 | Name | In | Type | Required | Limits | Description |
 |---|---|---|---|---|---|
-| `user_id` | path | integer | yes |  |  |
-| `session_id` | path | string | yes |  |  |
+| `user_id` | path | integer | yes | at least 1 | The account's id, from GET /api/admin/users (admin_list_users over MCP). |
+| `session_id` | path | string | yes |  | The device's id, from GET /api/account/sessions or GET /api/admin/users/{user_id}/sessions (list_my_sessions or admin_list_user_sessions over MCP). |
 
 **Request body**
 
@@ -1468,14 +1506,14 @@ Sign out one of an account's devices
 
 | Method | Path | Summary | Who may call |
 |---|---|---|---|
-| GET | [`/api/admin/invite-links`](#get-apiadmininvite-links) | Every invite link | browser session or API key, admins |
+| GET | [`/api/admin/invite-links`](#get-apiadmininvite-links) | List invite links | browser session or API key, admins |
 | POST | [`/api/admin/invite-links`](#post-apiadmininvite-links) | Create an invite link | browser session or API key, admins |
 | POST | [`/api/admin/invite-links/{link_id}/delete`](#post-apiadmininvite-linkslink_iddelete) | Delete an invite link | browser session or API key, admins |
-| POST | [`/api/admin/invite-links/{link_id}/limits`](#post-apiadmininvite-linkslink_idlimits) | Change a link's places and expiry | browser session or API key, admins |
-| POST | [`/api/admin/invite-links/{link_id}/rename`](#post-apiadmininvite-linkslink_idrename) | Rename a link | browser session or API key, admins |
+| POST | [`/api/admin/invite-links/{link_id}/limits`](#post-apiadmininvite-linkslink_idlimits) | Change an invite link's places and expiry | browser session or API key, admins |
+| POST | [`/api/admin/invite-links/{link_id}/rename`](#post-apiadmininvite-linkslink_idrename) | Rename an invite link | browser session or API key, admins |
 | POST | [`/api/admin/invite-links/{link_id}/restore`](#post-apiadmininvite-linkslink_idrestore) | Undo deleting an invite link | browser session or API key, admins |
-| POST | [`/api/admin/invite-links/{link_id}/revoke`](#post-apiadmininvite-linkslink_idrevoke) | Switch an invite link off | browser session or API key, admins |
-| POST | [`/api/admin/invite-links/{link_id}/switch-on`](#post-apiadmininvite-linkslink_idswitch-on) | Switch a link back on | browser session or API key, admins |
+| POST | [`/api/admin/invite-links/{link_id}/revoke`](#post-apiadmininvite-linkslink_idrevoke) | Switch off an invite link | browser session or API key, admins |
+| POST | [`/api/admin/invite-links/{link_id}/switch-on`](#post-apiadmininvite-linkslink_idswitch-on) | Switch an invite link back on | browser session or API key, admins |
 | POST | [`/api/join/claim`](#post-apijoinclaim) | Sign in as an existing account | anyone |
 | POST | [`/api/join/create`](#post-apijoincreate) | Join as a new account | anyone |
 | POST | [`/api/join/info`](#post-apijoininfo) | What an invite link is | anyone |
@@ -1483,20 +1521,22 @@ Sign out one of an account's devices
 
 ### GET /api/admin/invite-links
 
-Every invite link
+List invite links
+
+Group invite links, a page at a time: label, places used and left, expiry, and whether each still works. The links themselves are never shown again after creation. next is the offset of the following page, or null on the last one.
 
 |  |  |
 |---|---|
 | Who may call | browser session or API key, admins |
 | MCP tool | [`admin_list_invite_links`](#admin_list_invite_links) |
-| Errors | 400, 401, 403, 429, 503 |
+| Errors | 400, 401, 403, 404, 429, 503 |
 
 **Parameters**
 
 | Name | In | Type | Required | Limits | Description |
 |---|---|---|---|---|---|
-| `limit` | query | integer | no | 1 to 1000 | Rows to return. Default 200. |
-| `offset` | query | integer | no | at least 0 |  |
+| `limit` | query | integer | no | 1 to 1000; default `200` | Rows to return. Default 200. |
+| `offset` | query | integer | no | at least 0 | Rows to skip: the next value of the previous page. |
 | `q` | query | string | no |  | Keep links whose label or maker contains this, in any case. |
 | `sort` | query | string | no | one of `label`, `used`, `expires_at` | Field to sort the whole list by. Rows without it go last. |
 | `dir` | query | string | no | one of `asc`, `desc` | Default asc. |
@@ -1513,28 +1553,44 @@ Every invite link
 
 Create an invite link
 
+One link for a group: each person who opens it joins as a new user, up to max_uses people, for days days.
+
 |  |  |
 |---|---|
 | Who may call | browser session or API key, admins |
 | MCP tool | [`admin_create_invite_link`](#admin_create_invite_link) |
-| Errors | 400, 401, 403, 429, 503 |
+| Errors | 400, 401, 403, 404, 429, 503 |
 
 **Request body**
 
 | Field | Type | Required | Limits | Description |
 |---|---|---|---|---|
 | `csrf_token` | string | no |  | From GET /api/me. Browser sessions only. |
-| `days` | integer | yes |  |  |
-| `label` | string | yes |  |  |
-| `max_uses` | integer | yes |  |  |
+| `days` | integer | yes | 1 to 365 |  |
+| `label` | string | yes | 1 to 80 characters |  |
+| `max_uses` | integer | yes | 1 to 1000 |  |
 
 **Reply 201**: Success
 
-Every field of [`InviteLink`](#invitelink) and [`JoinPath`](#joinpath).
+| Field | Type | Required | Limits | Description |
+|---|---|---|---|---|
+| `created_by` | integer | yes |  |  |
+| `created_by_name` | string | no |  |  |
+| `expires_at` | string (date-time) | yes |  |  |
+| `id` | string | yes |  |  |
+| `join_path` | string | yes |  | The link to hand out, shown in this response only. A credential: treat it like a password. |
+| `label` | string | yes |  |  |
+| `live` | boolean | yes |  |  |
+| `max_uses` | integer | yes |  |  |
+| `remaining` | integer | yes |  |  |
+| `revoked` | boolean | yes |  |  |
+| `used` | integer | yes |  |  |
 
 ### POST /api/admin/invite-links/{link_id}/delete
 
 Delete an invite link
+
+Take an invite link off the list and stop it working. The accounts it made stay.
 
 |  |  |
 |---|---|
@@ -1546,7 +1602,7 @@ Delete an invite link
 
 | Name | In | Type | Required | Limits | Description |
 |---|---|---|---|---|---|
-| `link_id` | path | string | yes |  |  |
+| `link_id` | path | string | yes |  | The link's id, from GET /api/admin/invite-links (admin_list_invite_links over MCP). |
 
 **Request body**
 
@@ -1562,7 +1618,9 @@ Delete an invite link
 
 ### POST /api/admin/invite-links/{link_id}/limits
 
-Change a link's places and expiry
+Change an invite link's places and expiry
+
+Set how many people the link may take in (never fewer than have joined) and, when days is given, a new expiry counted from now. The link then counts as this key's: revoking the key switches it off.
 
 |  |  |
 |---|---|
@@ -1574,23 +1632,25 @@ Change a link's places and expiry
 
 | Name | In | Type | Required | Limits | Description |
 |---|---|---|---|---|---|
-| `link_id` | path | string | yes |  |  |
+| `link_id` | path | string | yes |  | The link's id, from GET /api/admin/invite-links (admin_list_invite_links over MCP). |
 
 **Request body**
 
 | Field | Type | Required | Limits | Description |
 |---|---|---|---|---|
 | `csrf_token` | string | no |  | From GET /api/me. Browser sessions only. |
-| `days` | integer | no | 1 to 365 | Counted from now. Leave out to keep the expiry. |
+| `days` | integer or null | no | 1 to 365 | Counted from now. Leave out to keep the expiry. |
 | `max_uses` | integer | yes | 1 to 1000 | Not fewer than have joined. |
 
 **Reply 200**: Success
 
-An empty object.
+[`InviteLink`](#invitelink).
 
 ### POST /api/admin/invite-links/{link_id}/rename
 
-Rename a link
+Rename an invite link
+
+Change the label people see on an invite link's join page (1-80 characters). expect, when given, is the label you think it has now.
 
 |  |  |
 |---|---|
@@ -1602,15 +1662,15 @@ Rename a link
 
 | Name | In | Type | Required | Limits | Description |
 |---|---|---|---|---|---|
-| `link_id` | path | string | yes |  |  |
+| `link_id` | path | string | yes |  | The link's id, from GET /api/admin/invite-links (admin_list_invite_links over MCP). |
 
 **Request body**
 
 | Field | Type | Required | Limits | Description |
 |---|---|---|---|---|
 | `csrf_token` | string | no |  | From GET /api/me. Browser sessions only. |
-| `expect` | string | no |  | The label you think it has. Answers 409 if it has another. |
-| `label` | string | yes |  | 1-80 characters. |
+| `expect` | string or null | no |  | The label you think it has. Answers 409 if it has another. |
+| `label` | string | yes | 1 to 80 characters | 1-80 characters. |
 
 **Reply 200**: Success
 
@@ -1623,6 +1683,8 @@ Rename a link
 
 Undo deleting an invite link
 
+Bring back an invite link deleted in the last few minutes, working as before. The link then counts as this key's: revoking the key switches it off.
+
 |  |  |
 |---|---|
 | Who may call | browser session or API key, admins |
@@ -1633,7 +1695,7 @@ Undo deleting an invite link
 
 | Name | In | Type | Required | Limits | Description |
 |---|---|---|---|---|---|
-| `link_id` | path | string | yes |  |  |
+| `link_id` | path | string | yes |  | The link's id, from GET /api/admin/invite-links (admin_list_invite_links over MCP). |
 
 **Request body**
 
@@ -1647,7 +1709,9 @@ Undo deleting an invite link
 
 ### POST /api/admin/invite-links/{link_id}/revoke
 
-Switch an invite link off
+Switch off an invite link
+
+Stop an invite link from letting anyone else join or sign in through it. Accounts it already made keep working. Cannot be switched back on.
 
 |  |  |
 |---|---|
@@ -1659,7 +1723,7 @@ Switch an invite link off
 
 | Name | In | Type | Required | Limits | Description |
 |---|---|---|---|---|---|
-| `link_id` | path | string | yes |  |  |
+| `link_id` | path | string | yes |  | The link's id, from GET /api/admin/invite-links (admin_list_invite_links over MCP). |
 
 **Request body**
 
@@ -1675,7 +1739,7 @@ Switch an invite link off
 
 ### POST /api/admin/invite-links/{link_id}/switch-on
 
-Switch a link back on
+Switch an invite link back on
 
 |  |  |
 |---|---|
@@ -1687,7 +1751,7 @@ Switch a link back on
 
 | Name | In | Type | Required | Limits | Description |
 |---|---|---|---|---|---|
-| `link_id` | path | string | yes |  |  |
+| `link_id` | path | string | yes |  | The link's id, from GET /api/admin/invite-links (admin_list_invite_links over MCP). |
 
 **Request body**
 
@@ -1697,7 +1761,7 @@ Switch a link back on
 
 **Reply 200**: Success
 
-An empty object.
+[`InviteLink`](#invitelink).
 
 ### POST /api/join/claim
 
@@ -1728,7 +1792,7 @@ Join as a new account
 |  |  |
 |---|---|
 | Who may call | anyone |
-| Errors | 400, 404, 409, 429, 503 |
+| Errors | 400, 403, 404, 409, 429, 503 |
 
 **Request body**
 
@@ -1750,7 +1814,7 @@ What an invite link is
 |  |  |
 |---|---|
 | Who may call | anyone |
-| Errors | 404, 429, 503 |
+| Errors | 400, 403, 404, 429, 503 |
 
 **Request body**
 
@@ -1775,7 +1839,7 @@ Accounts matching a name
 |  |  |
 |---|---|
 | Who may call | anyone |
-| Errors | 400, 404, 429, 503 |
+| Errors | 400, 403, 404, 429, 503 |
 
 **Request body**
 
@@ -1791,7 +1855,10 @@ Accounts matching a name
 | Field | Type | Required | Limits | Description |
 |---|---|---|---|---|
 | `can_create` | boolean | yes |  |  |
-| `matches` | array of [`Member`](#member) | yes |  |  |
+| `matches` | array of object | yes |  |  |
+| `matches[].display_name` | string | yes |  |  |
+| `matches[].has_pin` | boolean | yes |  |  |
+| `matches[].id` | integer | yes |  |  |
 
 ## Owner
 
@@ -1840,7 +1907,7 @@ Run a job now
 
 | Name | In | Type | Required | Limits | Description |
 |---|---|---|---|---|---|
-| `name` | path | string | yes |  |  |
+| `name` | path | string | yes |  | The job's name, from GET /api/owner/jobs. |
 
 **Request body**
 
@@ -1861,7 +1928,7 @@ The days on record
 |  |  |
 |---|---|
 | Who may call | browser session only, the owner |
-| Errors | 404, 429, 503 |
+| Errors | 400, 404, 429, 503 |
 
 **Parameters**
 
@@ -1886,10 +1953,10 @@ One day's entries
 
 | Name | In | Type | Required | Limits | Description |
 |---|---|---|---|---|---|
-| `date` | path | string | yes |  |  |
+| `date` | path | string | yes |  | The day's date, from GET /api/owner/logs/days. |
 | `q` | query | string | no |  | The Logs screen's search. |
-| `before` | query | integer | no |  |  |
-| `limit` | query | integer | no |  |  |
+| `before` | query | integer or null | no | at least 0 |  |
+| `limit` | query | integer | no | 1 to 1000; default `200` | Rows to return. Default 200. |
 
 **Reply 200**: Success
 
@@ -1908,7 +1975,7 @@ Delete one day
 
 | Name | In | Type | Required | Limits | Description |
 |---|---|---|---|---|---|
-| `date` | path | string | yes |  |  |
+| `date` | path | string | yes |  | The day's date, from GET /api/owner/logs/days. |
 
 **Request body**
 
@@ -1935,7 +2002,7 @@ One day's entries as a file
 
 | Name | In | Type | Required | Limits | Description |
 |---|---|---|---|---|---|
-| `date` | path | string | yes |  |  |
+| `date` | path | string | yes |  | The day's date, from GET /api/owner/logs/days. |
 
 **Reply 200**: Success
 
@@ -1968,15 +2035,15 @@ Name an address or a range, or rename one
 | Field | Type | Required | Limits | Description |
 |---|---|---|---|---|
 | `csrf_token` | string | no |  | From GET /api/me. Browser sessions only. |
-| `name` | string | yes | at most 80 characters |  |
+| `name` | string | yes | 1 to 80 characters |  |
 | `target` | string | yes | e.g. `10.0.0.0/24` | An address, or a range such as 10.0.0.0/24. |
 
 **Reply 200**: Success
 
 | Field | Type | Required | Limits | Description |
 |---|---|---|---|---|
-| `name` | string | no |  |  |
-| `target` | string | no |  |  |
+| `name` | string | yes |  |  |
+| `target` | string | yes |  |  |
 
 ### POST /api/owner/logs/ip-names/delete
 
@@ -1998,7 +2065,7 @@ Take a name off an address or a range
 
 | Field | Type | Required | Limits | Description |
 |---|---|---|---|---|
-| `deleted` | boolean | no |  |  |
+| `deleted` | boolean | yes |  |  |
 
 ### POST /api/owner/logs/prune
 
@@ -2026,7 +2093,7 @@ New log entries as they happen
 |  |  |
 |---|---|
 | Who may call | browser session only, the owner |
-| Errors | 404, 429, 503 |
+| Errors | 400, 404, 429, 503 |
 
 **Parameters**
 
@@ -2085,7 +2152,7 @@ Allow or block an account's password
 
 | Name | In | Type | Required | Limits | Description |
 |---|---|---|---|---|---|
-| `user_id` | path | string | yes |  |  |
+| `user_id` | path | integer | yes | at least 1 | The account's id, from GET /api/admin/users (admin_list_users over MCP). |
 
 **Request body**
 
@@ -2182,10 +2249,6 @@ Refused: this server has no stream
 
 **Reply 405**: Success
 
-| Field | Type | Required | Limits | Description |
-|---|---|---|---|---|
-| `ok` | boolean | yes |  |  |
-
 ### POST /mcp
 
 Model Context Protocol, at the key's role
@@ -2194,7 +2257,7 @@ Model Context Protocol, at the key's role
 |---|---|
 | Who may call | API key only, anyone signed in |
 | MCP tool | None, HTTP only: The MCP endpoint itself. |
-| Errors | 400, 401, 404, 429, 503 |
+| Errors | 400, 401, 403, 404, 429, 503 |
 
 **Request body**
 
@@ -2214,10 +2277,6 @@ Refused: this server keeps no sessions
 | Errors | 404, 429, 503 |
 
 **Reply 405**: Success
-
-| Field | Type | Required | Limits | Description |
-|---|---|---|---|---|
-| `ok` | boolean | yes |  |  |
 
 ## AIS
 
@@ -2370,7 +2429,7 @@ How far the run has got: state (queued, running, finished, stopped, failed), don
 |---|---|
 | Who may call | browser session or API key, anyone signed in |
 | MCP tool | [`get_auto_run`](#get_auto_run) |
-| Errors | 401, 404, 429, 503 |
+| Errors | 400, 401, 404, 429, 503 |
 
 **Parameters**
 
@@ -2458,7 +2517,7 @@ Every batch with its progress: uploads, completion, per assignee, and any auto r
 | `batches[].id` | integer | yes |  |  |
 | `batches[].images` | integer | yes |  |  |
 | `batches[].included` | integer | yes |  |  |
-| `batches[].mine` | object or null | yes |  | Your own share, if you have one. |
+| `batches[].mine` | object or null | yes |  |  |
 | `batches[].mine.ais` | integer | yes |  |  |
 | `batches[].mine.completed` | integer | yes |  |  |
 | `batches[].mine.images` | integer | yes |  |  |
@@ -2634,11 +2693,11 @@ Body: {path}: an Open-path batch, hashed and recorded by the server.
 | `channels[].roles[].label` | string | yes |  | The channel's name; empty unless role is other. |
 | `channels[].roles[].role` | string | yes | one of `ais`, `soma`, `other` |  |
 | `csrf_token` | string | no |  | From GET /api/me. Browser sessions only. |
-| `czi_stack` | object or null | no |  | For files with zstack: Z-stack .czi files. |
+| `czi_stack` | object or null | no |  |  |
 | `czi_stack.apotome` | string | no | one of `sectioned`, `widefield` | How ApoTome phases become slices. Default sectioned. |
 | `path` | string | yes |  | A folder on this machine. |
 | `randomize` | boolean | no |  | Blind the names. Default true. |
-| `stack` | object or null | no |  | Group TIFF slices into Z-stacks. |
+| `stack` | object or null | no |  |  |
 | `stack.pixel_um` | number | yes |  |  |
 | `stack.plane` | integer | yes | 0 to 3 | The channel of each slice that is the AIS. |
 | `stack.z_step_um` | number | yes |  |  |
@@ -2669,7 +2728,7 @@ Body: {name, files: [{name, rel, sha, size}], translations?: [{dir, text}]} -- a
 | `channels[].roles[].label` | string | yes |  | The channel's name; empty unless role is other. |
 | `channels[].roles[].role` | string | yes | one of `ais`, `soma`, `other` |  |
 | `csrf_token` | string | no |  | From GET /api/me. Browser sessions only. |
-| `czi_stack` | object or null | no |  | For files with zstack: Z-stack .czi files. |
+| `czi_stack` | object or null | no |  |  |
 | `czi_stack.apotome` | string | no | one of `sectioned`, `widefield` | How ApoTome phases become slices. Default sectioned. |
 | `files` | array of object | yes |  | 1 to 5000. |
 | `files[].layout` | object | no |  | Its channels as the browser read them. |
@@ -2685,7 +2744,7 @@ Body: {name, files: [{name, rel, sha, size}], translations?: [{dir, text}]} -- a
 | `files[].zstack.z_step_um` | number or null | yes |  | Its Z scaling; null without, when stack's is used. |
 | `name` | string | yes |  |  |
 | `randomize` | boolean | no |  | Blind the names. Default true. |
-| `stack` | object or null | no |  | Group TIFF slices into Z-stacks. |
+| `stack` | object or null | no |  |  |
 | `stack.pixel_um` | number | yes |  |  |
 | `stack.plane` | integer | yes | 0 to 3 | The channel of each slice that is the AIS. |
 | `stack.z_step_um` | number | yes |  |  |
@@ -2705,7 +2764,7 @@ One batch
 |---|---|
 | Who may call | browser session or API key, anyone signed in |
 | MCP tool | [`get_batch`](#get_batch) |
-| Errors | 401, 404, 429, 503 |
+| Errors | 400, 401, 404, 429, 503 |
 
 **Parameters**
 
@@ -2868,7 +2927,7 @@ Body: {general?, settings?, threshold?, engine?, skip_done?, mark_done?, images?
 | Field | Type | Required | Limits | Description |
 |---|---|---|---|---|
 | `csrf_token` | string | no |  | From GET /api/me. Browser sessions only. |
-| `engine` | string or null | no | one of `fast` |  |
+| `engine` | string | no | one of `fast` |  |
 | `general` | object or null | no |  | Settings' general fields (auto_method, fitted_min_length, ...). |
 | `images` | array of string or null | no |  | Only these image keys. |
 | `mark_done` | boolean | no |  | Default false. |
@@ -2916,7 +2975,7 @@ What a backup ZIP holds besides the image files. Admins only: it has the origina
 |---|---|
 | Who may call | browser session or API key, admins |
 | MCP tool | [`get_backup`](#get_backup) |
-| Errors | 401, 403, 404, 429, 503 |
+| Errors | 400, 401, 403, 404, 429, 503 |
 
 **Parameters**
 
@@ -2936,7 +2995,7 @@ A batch's channels
 |---|---|
 | Who may call | browser session or API key, anyone signed in |
 | MCP tool | [`batch_channels`](#batch_channels) |
-| Errors | 401, 404, 429, 503 |
+| Errors | 400, 401, 404, 429, 503 |
 
 **Parameters**
 
@@ -3194,11 +3253,11 @@ Body: {path}: a folder on this machine added to an existing batch.
 | `channels[].roles[].label` | string | yes |  | The channel's name; empty unless role is other. |
 | `channels[].roles[].role` | string | yes | one of `ais`, `soma`, `other` |  |
 | `csrf_token` | string | no |  | From GET /api/me. Browser sessions only. |
-| `czi_stack` | object or null | no |  | For files with zstack: Z-stack .czi files. |
+| `czi_stack` | object or null | no |  |  |
 | `czi_stack.apotome` | string | no | one of `sectioned`, `widefield` | How ApoTome phases become slices. Default sectioned. |
 | `path` | string | yes |  | A folder on this machine. |
 | `randomize` | boolean | no |  | Blind the names. Default true. |
-| `stack` | object or null | no |  | Group TIFF slices into Z-stacks. |
+| `stack` | object or null | no |  |  |
 | `stack.pixel_um` | number | yes |  |  |
 | `stack.plane` | integer | yes | 0 to 3 | The channel of each slice that is the AIS. |
 | `stack.z_step_um` | number | yes |  |  |
@@ -3279,7 +3338,7 @@ Per image: files on the server, accepted AIS, done, duplicate, assignee.
 |---|---|
 | Who may call | browser session or API key, anyone signed in |
 | MCP tool | [`batch_status`](#batch_status) |
-| Errors | 401, 404, 429, 503 |
+| Errors | 400, 401, 404, 429, 503 |
 
 **Parameters**
 
@@ -3347,7 +3406,7 @@ The batch's __Translation.txt (admins): original/random per file.
 |---|---|
 | Who may call | browser session or API key, admins |
 | MCP tool | [`get_translation`](#get_translation) |
-| Errors | 401, 403, 404, 429, 503 |
+| Errors | 400, 401, 403, 404, 429, 503 |
 
 **Parameters**
 
@@ -3369,7 +3428,7 @@ Each image's original name, saved treatment and guessed one (admins).
 |---|---|
 | Who may call | browser session or API key, admins |
 | MCP tool | [`get_treatments`](#get_treatments) |
-| Errors | 401, 403, 404, 429, 503 |
+| Errors | 400, 401, 403, 404, 429, 503 |
 
 **Parameters**
 
@@ -3459,7 +3518,7 @@ Body: {files: [{name, rel, sha, size, modified?}], randomize?, add_name?, transl
 | `channels[].roles[].label` | string | yes |  | The channel's name; empty unless role is other. |
 | `channels[].roles[].role` | string | yes | one of `ais`, `soma`, `other` |  |
 | `csrf_token` | string | no |  | From GET /api/me. Browser sessions only. |
-| `czi_stack` | object or null | no |  | For files with zstack: Z-stack .czi files. |
+| `czi_stack` | object or null | no |  |  |
 | `czi_stack.apotome` | string | no | one of `sectioned`, `widefield` | How ApoTome phases become slices. Default sectioned. |
 | `files` | array of object | yes |  | 1 to 5000. |
 | `files[].layout` | object | no |  | Its channels as the browser read them. |
@@ -3474,7 +3533,7 @@ Body: {files: [{name, rel, sha, size, modified?}], randomize?, add_name?, transl
 | `files[].zstack.slices` | integer | yes | at least 2 | Its Z planes. |
 | `files[].zstack.z_step_um` | number or null | yes |  | Its Z scaling; null without, when stack's is used. |
 | `randomize` | boolean | no |  | Blind the names. Default true. |
-| `stack` | object or null | no |  | Group TIFF slices into Z-stacks. |
+| `stack` | object or null | no |  |  |
 | `stack.pixel_um` | number | yes |  |  |
 | `stack.plane` | integer | yes | 0 to 3 | The channel of each slice that is the AIS. |
 | `stack.z_step_um` | number | yes |  |  |
@@ -3532,7 +3591,7 @@ Auto mode. Body: {processed, raw?, threshold?, settings?, start?, exclude?: [[[x
 | Field | Type | Required | Limits | Description |
 |---|---|---|---|---|
 | `csrf_token` | string | no |  | From GET /api/me. Browser sessions only. |
-| `engine` | string or null | no | one of `fast` |  |
+| `engine` | string | no | one of `fast` |  |
 | `exclude` | array of array of array of integer or null | no |  | The traces already accepted, each [[x, y], ...]. |
 | `processed` | string | yes |  | The traced image's sha. |
 | `raw` | string or null | no |  | The raw image's sha, for a TIFF pair. |
@@ -3568,7 +3627,7 @@ The file's bytes as application/octet-stream with the CSRF token in X-CSRF-Token
 
 | Name | In | Type | Required | Limits | Description |
 |---|---|---|---|---|---|
-| `X-CSRF-Token` | header | string | no |  | With a raw body from a browser session: its CSRF token. |
+| `X-CSRF-Token` | header | string | no |  | From GET /api/me. Browser sessions only. |
 
 **Request body**
 
@@ -3592,7 +3651,7 @@ One .czi channel, for the viewer
 |---|---|
 | Who may call | browser session or API key, anyone signed in |
 | MCP tool | None, HTTP only: Viewer images for the Process screen; get_image gives an agent the processed view. |
-| Errors | 401, 404, 429, 503 |
+| Errors | 400, 401, 404, 429, 503 |
 
 **Parameters**
 
@@ -3615,7 +3674,7 @@ One .czi channel, its data as a 16-bit TIFF, for exports.
 |---|---|
 | Who may call | browser session or API key, anyone signed in |
 | MCP tool | None, HTTP only: File bytes: MCP messages are JSON, and clients cap their size. Fetch it over HTTP with the same key. |
-| Errors | 401, 404, 429, 503 |
+| Errors | 400, 401, 404, 429, 503 |
 
 **Parameters**
 
@@ -3638,7 +3697,7 @@ A .czi's channels [{index, name, color}] for the channel buttons; [] for a TIFF.
 |---|---|
 | Who may call | browser session or API key, anyone signed in |
 | MCP tool | None, HTTP only: Viewer detail for the Process screen's channel picker; get_batch names each image's files. |
-| Errors | 401, 404, 429, 503 |
+| Errors | 400, 401, 404, 429, 503 |
 
 **Parameters**
 
@@ -3665,7 +3724,7 @@ A .czi's channels merged in their display colors, for exports.
 |---|---|
 | Who may call | browser session or API key, anyone signed in |
 | MCP tool | None, HTTP only: Reached through get_image with kind composite. |
-| Errors | 401, 404, 429, 503 |
+| Errors | 400, 401, 404, 429, 503 |
 
 **Parameters**
 
@@ -3687,7 +3746,7 @@ The stored file itself (a .czi or TIFF as it was added), for exports.
 |---|---|
 | Who may call | browser session or API key, anyone signed in |
 | MCP tool | None, HTTP only: File bytes: MCP messages are JSON, and clients cap their size. Fetch it over HTTP with the same key. |
-| Errors | 401, 404, 429, 503 |
+| Errors | 400, 401, 404, 429, 503 |
 
 **Parameters**
 
@@ -3761,7 +3820,7 @@ Body {pixel_um, traces: [{id, pixels}], split?, soma?: {min_um, max_um, roundnes
 | `pairs[].other.end` | string | yes | one of `first`, `last` |  |
 | `pairs[].other.gap_um` | number or null | yes |  |  |
 | `pairs[].soma` | integer or null | yes |  | The same as body. |
-| `pairs[].widths` | array of number | yes |  | [first, last] in um. |
+| `pairs[].widths` | array of number or null | yes |  | [first, last] in um. |
 
 ### GET /api/ais/files/{sha}/processed.tif
 
@@ -3773,7 +3832,7 @@ A .czi's processed AIS channel as a TIFF (what tracing uses), for exports.
 |---|---|
 | Who may call | browser session or API key, anyone signed in |
 | MCP tool | None, HTTP only: File bytes: MCP messages are JSON, and clients cap their size. Fetch it over HTTP with the same key. |
-| Errors | 401, 404, 429, 503 |
+| Errors | 400, 401, 404, 429, 503 |
 
 **Parameters**
 
@@ -3795,7 +3854,7 @@ One slice of a Z-stack, for the viewer's Z slider.
 |---|---|
 | Who may call | browser session or API key, anyone signed in |
 | MCP tool | None, HTTP only: Viewer images for the Process screen's z-stack slider; get_image gives an agent the processed view. |
-| Errors | 401, 404, 429, 503 |
+| Errors | 400, 401, 404, 429, 503 |
 
 **Parameters**
 
@@ -3818,7 +3877,7 @@ A .czi's soma outlines (soma.py), each its edge pixels as 1-based [x, y], for th
 |---|---|
 | Who may call | browser session or API key, anyone signed in |
 | MCP tool | None, HTTP only: Viewer overlay for the Process screen; detect_image and trace_click give an agent the results. |
-| Errors | 401, 404, 429, 503 |
+| Errors | 400, 401, 404, 429, 503 |
 
 **Parameters**
 
@@ -3840,7 +3899,7 @@ An image's thumbnail
 |---|---|
 | Who may call | browser session or API key, anyone signed in |
 | MCP tool | None, HTTP only: Reached through get_image with kind thumb. |
-| Errors | 401, 404, 429, 503 |
+| Errors | 400, 401, 404, 429, 503 |
 
 **Parameters**
 
@@ -3860,7 +3919,7 @@ An image for the viewer
 |---|---|
 | Who may call | browser session or API key, anyone signed in |
 | MCP tool | [`get_image`](#get_image) |
-| Errors | 401, 404, 429, 503 |
+| Errors | 400, 401, 404, 429, 503 |
 
 **Parameters**
 
@@ -4303,7 +4362,7 @@ The helper for one OS and CPU, from helper/build.sh.
 |---|---|
 | Who may call | browser session or API key, anyone signed in |
 | MCP tool | None, HTTP only: The MATLAB helper program itself, a download for a person's computer. |
-| Errors | 401, 404, 429, 503 |
+| Errors | 400, 401, 404, 429, 503 |
 
 **Parameters**
 
@@ -4359,6 +4418,7 @@ Body: {ok, message?}: what the helper did with the job.
 
 | Field | Type | Required | Limits | Description |
 |---|---|---|---|---|
+| `csrf_token` | string | no |  | From GET /api/me. Browser sessions only. |
 | `message` | string | no |  | Why not, shown to the person. Cut to 500 characters. |
 | `ok` | boolean | yes |  | Whether MATLAB started. |
 
@@ -4377,7 +4437,7 @@ The Connect button: a key good for the helper's routes and nothing else (app/mod
 |  |  |
 |---|---|
 | Who may call | browser session only, anyone signed in |
-| Errors | 400, 401, 403, 429, 503 |
+| Errors | 400, 401, 403, 404, 429, 503 |
 
 **Request body**
 
@@ -4401,7 +4461,7 @@ Polled by the helper: also how the server knows it is there.
 |---|---|
 | Who may call | API key only, anyone signed in |
 | MCP tool | None, HTTP only: Called by the MATLAB helper program, not by agents. |
-| Errors | 401, 403, 429, 503 |
+| Errors | 401, 403, 404, 429, 503 |
 
 **Reply 200**: The run to open, now claimed. 204 with no body when there is none.
 
@@ -4420,7 +4480,7 @@ Body: see matlab_run. Hands the run to the caller's own helper and answers with 
 |  |  |
 |---|---|
 | Who may call | browser session only, anyone signed in |
-| Errors | 400, 401, 403, 409, 429, 503 |
+| Errors | 400, 401, 403, 404, 409, 429, 503 |
 
 **Request body**
 
@@ -4494,7 +4554,7 @@ Recorded measurements
 |---|---|
 | Who may call | browser session or API key, anyone signed in |
 | MCP tool | [`list_measurements`](#list_measurements) |
-| Errors | 401, 429, 503 |
+| Errors | 400, 401, 429, 503 |
 
 **Parameters**
 
@@ -4656,7 +4716,7 @@ Accepted AIS
 |---|---|
 | Who may call | browser session or API key, anyone signed in |
 | MCP tool | [`list_results`](#list_results) |
-| Errors | 401, 429, 503 |
+| Errors | 400, 401, 429, 503 |
 
 **Parameters**
 
@@ -4778,7 +4838,7 @@ Body: {soma}: an accepted AIS's distance to its soma (the Measure tool), or null
 |---|---|---|---|---|
 | `csrf_token` | string | no |  | From GET /api/me. Browser sessions only. |
 | `expect` | integer | no | at least 0 | The rev you last saw. Answers 409, with the record as it is now, if it has moved on. |
-| `soma` | object or null | yes |  | Every number 0 or more; null clears it. |
+| `soma` | object or null | yes |  |  |
 | `soma.soma_ais_x` | number | yes |  |  |
 | `soma.soma_ais_y` | number | yes |  |  |
 | `soma.soma_dz_um` | number | no |  | Z-stacks: the distance in depth. |
@@ -4841,7 +4901,7 @@ Body: {processed, raw?, click: [x, y], click2?: [x, y], threshold?, settings?: {
 | `click` | array of number | yes |  | [x, y]. |
 | `click2` | array of number or null | no |  | [x, y]. |
 | `csrf_token` | string | no |  | From GET /api/me. Browser sessions only. |
-| `engine` | string or null | no | one of `fast` |  |
+| `engine` | string | no | one of `fast` |  |
 | `processed` | string | yes |  | The traced image's sha. |
 | `raw` | string or null | no |  | The raw image's sha, for a TIFF pair. |
 | `settings` | object | no |  | The method's settings; missing ones are the original's. |
@@ -5087,6 +5147,7 @@ The shapes the routes above refer to by name.
 | `last_used_at` | string (date-time) | no |  |  |
 | `live` | boolean | yes |  |  |
 | `name` | string | yes |  |  |
+| `purpose` | string | no |  | What the key is for, when it is a special one: matlab_helper for a MATLAB helper's key. |
 | `revoked` | boolean | yes |  |  |
 | `revoked_at` | string (date-time) | no |  |  |
 | `role` | string | yes | one of `admin`, `user` |  |
@@ -5133,10 +5194,10 @@ The shapes the routes above refer to by name.
 
 | Field | Type | Required | Limits | Description |
 |---|---|---|---|---|
-| `names` | array of object | no |  |  |
-| `names[].created_at` | string (date-time) | no |  |  |
-| `names[].name` | string | no |  |  |
-| `names[].target` | string | no |  |  |
+| `names` | array of object | yes |  |  |
+| `names[].created_at` | string (date-time) | yes |  |  |
+| `names[].name` | string | yes |  |  |
+| `names[].target` | string | yes |  |  |
 
 ### InviteLink
 
@@ -5144,7 +5205,7 @@ The shapes the routes above refer to by name.
 |---|---|---|---|---|
 | `created_by` | integer | yes |  |  |
 | `created_by_name` | string | no |  |  |
-| `expires_at` | string (date-time) | no |  |  |
+| `expires_at` | string (date-time) | yes |  |  |
 | `id` | string | yes |  |  |
 | `label` | string | yes |  |  |
 | `live` | boolean | yes |  |  |
@@ -5162,18 +5223,12 @@ The shapes the routes above refer to by name.
 | `last_error` | string | no |  |  |
 | `last_finished` | string (date-time) | no |  |  |
 | `last_note` | string | no |  |  |
-| `last_ok` | boolean | no |  |  |
+| `last_ok` | boolean or null | no |  |  |
 | `last_started` | string (date-time) | no |  |  |
 | `name` | string | yes |  |  |
 | `next_due` | string (date-time) | yes |  |  |
 | `running` | boolean | yes |  |  |
 | `runs` | integer | yes |  |  |
-
-### JoinPath
-
-| Field | Type | Required | Limits | Description |
-|---|---|---|---|---|
-| `join_path` | string | yes |  | The link to hand out, shown in this response only. A credential: treat it like a password. |
 
 ### Joined
 
@@ -5199,16 +5254,16 @@ One of these:
 |---|---|---|---|---|
 | `date` | string | yes |  |  |
 | `entries` | array of object | yes |  |  |
-| `next` | integer or null | no |  |  |
+| `next` | integer or null | yes |  |  |
 
 ### LogDays
 
 | Field | Type | Required | Limits | Description |
 |---|---|---|---|---|
 | `days` | array of object | yes |  |  |
-| `dropped` | integer | no |  |  |
-| `settings` | object | no |  |  |
-| `total_bytes` | integer | no |  |  |
+| `dropped` | integer | yes |  |  |
+| `settings` | object | yes |  |  |
+| `total_bytes` | integer | yes |  |  |
 
 ### LoginLink
 
@@ -5233,41 +5288,41 @@ One of these:
 | Field | Type | Required | Limits | Description |
 |---|---|---|---|---|
 | `account_role` | string | yes |  |  |
-| `announcement` | string | no |  | server.announcement. Empty when there is none. |
+| `announcement` | string | yes |  | server.announcement. Empty when there is none. |
 | `api_key_id` | string | no |  | API keys only. |
 | `api_key_name` | string | no |  | API keys only. |
-| `api_keys_enabled` | boolean | no |  |  |
-| `auth` | string | no |  |  |
+| `api_keys_enabled` | boolean | yes |  |  |
+| `auth` | string | yes |  |  |
 | `authenticated` | boolean | yes |  |  |
 | `csrf_token` | string | no |  | Browser sessions only. |
-| `description` | string | no |  | app.description. Empty when there is none. |
+| `description` | string | yes |  | app.description. Empty when there is none. |
 | `display_name` | string | yes |  |  |
-| `has_password` | boolean | no |  |  |
-| `has_pin` | boolean | no |  |  |
+| `has_password` | boolean | yes |  |  |
+| `has_pin` | boolean | yes |  |  |
 | `id` | integer | yes |  |  |
-| `invite_links_enabled` | boolean | no |  | Whether invite links are on. |
+| `invite_links_enabled` | boolean | yes |  | Whether invite links are on. |
 | `is_owner` | boolean | yes |  |  |
-| `login_link` | [`LoginLink`](#loginlink) or null | no |  | Your own live login link, or null. |
-| `logs_enabled` | boolean | no |  |  |
-| `logs_ui_clicks` | boolean | no |  |  |
+| `login_link` | [`LoginLink`](#loginlink) or null | yes |  | Your own live login link, or null. |
+| `logs_enabled` | boolean | yes |  |  |
+| `logs_ui_clicks` | boolean | yes |  |  |
 | `maintenance` | string | yes | one of `none`, `read_only`, `full` |  |
 | `matlab_path` | string | no |  | Where MATLAB is on your computer, for your replay zips. Browser sessions only. |
-| `mcp_enabled` | boolean | no |  | server.mcp: whether POST /mcp answers. |
-| `mcp_url` | string | no |  | Where to read the MCP reference: config/mcp.json in app.repo, or /api/mcp.json when there is no repo. Only with server.mcp on. |
-| `openapi_url` | string | no |  | Where to read this API's reference: config/openapi.json in app.repo, or /api/openapi.json when there is no repo. |
-| `password_blocked` | boolean | no |  |  |
-| `passwords_enabled` | boolean | no |  |  |
-| `repo` | string | no |  | app.repo without a trailing / or .git: where the source lives. Empty when it is not set. |
+| `mcp_enabled` | boolean | yes |  | server.mcp: whether POST /mcp answers. |
+| `mcp_url` | string | yes |  | Where to read the MCP reference: config/mcp.json in app.repo, or /api/mcp.json when there is no repo. Only with server.mcp on. |
+| `openapi_url` | string | yes |  | Where to read this API's reference: config/openapi.json in app.repo, or /api/openapi.json when there is no repo. |
+| `password_blocked` | boolean | yes |  |  |
+| `passwords_enabled` | boolean | yes |  |  |
+| `repo` | string | yes |  | app.repo without a trailing / or .git: where the source lives. Empty when it is not set. |
 | `role` | string | yes |  | The effective role: never higher than an API key's own. |
-| `shortcuts` | map of array of string | no |  | The keyboard shortcuts you rebound: each action's keys. An action left out keeps its default. |
-| `show_about` | boolean | no |  | app.show_about: whether the menu has About. |
-| `theme_id` | string | no |  | The theme you use. Empty: the first. |
-| `themes` | array of object or null | no |  | Your themes (see the Theme schema): your own list, else the app's defaults, else null for the built-in ones. |
-| `themes_custom` | boolean | no |  | Whether you have your own list rather than following the defaults. |
-| `two_factor` | boolean | no |  |  |
-| `two_factor_enabled` | boolean | no |  |  |
-| `username` | string | no |  |  |
-| `version` | string | no |  | The running build. dev when none was stamped. |
+| `shortcuts` | map of array of string | yes |  | The keyboard shortcuts you rebound: each action's keys. An action left out keeps its default. |
+| `show_about` | boolean | yes |  | app.show_about: whether the menu has About. |
+| `theme_id` | string | yes |  | The theme you use. Empty: the first. |
+| `themes` | array of [`Theme`](#theme) or null | yes |  | Your themes (see the Theme schema): your own list, else the app's defaults, else null for the built-in ones. |
+| `themes_custom` | boolean | yes |  | Whether you have your own list rather than following the defaults. |
+| `two_factor` | boolean | yes |  |  |
+| `two_factor_enabled` | boolean | yes |  |  |
+| `username` | string | yes |  |  |
+| `version` | string | yes |  | The running build. dev when none was stamped. |
 
 ### Measurement
 
@@ -5303,29 +5358,42 @@ One of these:
 
 ### NewAPIKey
 
-Every field of [`APIKey`](#apikey), plus these:
-
 | Field | Type | Required | Limits | Description |
 |---|---|---|---|---|
+| `created_at` | string (date-time) | yes |  |  |
+| `created_by` | integer | no |  | The admin who made this key for its owner. Absent if the owner made it. |
+| `created_by_name` | string | no |  |  |
 | `credential` | string | yes |  | Shown in this response only, and never recoverable. |
+| `display_name` | string | no |  | The key's owner. On the admin list only. |
+| `expired` | boolean | yes |  |  |
+| `expires_at` | string (date-time) | no |  |  |
+| `id` | string | yes |  |  |
+| `last_used_at` | string (date-time) | no |  |  |
+| `live` | boolean | yes |  |  |
+| `name` | string | yes |  |  |
+| `purpose` | string | no |  | What the key is for, when it is a special one: matlab_helper for a MATLAB helper's key. |
+| `revoked` | boolean | yes |  |  |
+| `revoked_at` | string (date-time) | no |  |  |
+| `role` | string | yes | one of `admin`, `user` |  |
+| `user_id` | integer | yes |  |  |
 
 ### PruneResult
 
 | Field | Type | Required | Limits | Description |
 |---|---|---|---|---|
-| `bytes_after` | integer | no |  |  |
-| `bytes_before` | integer | no |  |  |
-| `compressed` | integer | no |  |  |
-| `deleted` | integer | no |  |  |
+| `bytes_after` | integer | yes |  |  |
+| `bytes_before` | integer | yes |  |  |
+| `compressed` | integer | yes |  |  |
+| `deleted` | integer | yes |  |  |
 
 ### Revoked
 
 | Field | Type | Required | Limits | Description |
 |---|---|---|---|---|
-| `api_keys` | integer | no |  |  |
-| `login_links` | integer | no |  |  |
-| `passwords` | integer | no |  |  |
-| `sessions` | integer | no |  |  |
+| `api_keys` | integer | yes |  |  |
+| `login_links` | integer | yes |  |  |
+| `passwords` | integer | yes |  |  |
+| `sessions` | integer | yes |  |  |
 
 ### Session
 
@@ -5345,42 +5413,43 @@ Every field of [`APIKey`](#apikey), plus these:
 
 | Field | Type | Required | Limits | Description |
 |---|---|---|---|---|
-| `applied` | array of string or null | no |  |  |
-| `changes` | array of object or null | no |  |  |
-| `restart` | array of string or null | no |  |  |
-| `scripts` | array of string or null | no |  |  |
-| `unchanged` | array of string or null | no |  |  |
-| `version` | string | no |  |  |
+| `applied` | array of string or null | yes |  |  |
+| `changes` | array of object or null | yes |  |  |
+| `restart` | array of string or null | yes |  |  |
+| `scripts` | array of string or null | yes |  |  |
+| `unchanged` | array of string or null | yes |  |  |
+| `version` | string | yes |  |  |
 
 ### SettingsSnapshot
 
 | Field | Type | Required | Limits | Description |
 |---|---|---|---|---|
-| `error` | object or null | no |  |  |
-| `error.at` | string (date-time) | no |  |  |
-| `error.message` | string | no |  |  |
-| `error.origin` | string | no |  |  |
-| `file` | string | no |  |  |
-| `in_container` | boolean | no |  |  |
-| `secret_file` | string | no |  |  |
-| `sections` | array of object | no |  |  |
-| `sections[].help` | string | no |  |  |
-| `sections[].keys` | array of object | no |  |  |
-| `sections[].keys[].apply` | string | no |  |  |
-| `sections[].keys[].default` | any | no |  |  |
-| `sections[].keys[].help` | string | no |  |  |
-| `sections[].keys[].in_file` | boolean | no |  |  |
-| `sections[].keys[].key` | string | no |  |  |
-| `sections[].keys[].locked` | boolean | no |  |  |
-| `sections[].keys[].name` | string | no |  |  |
-| `sections[].keys[].pending_restart` | boolean | no |  |  |
-| `sections[].keys[].running` | any | no |  |  |
-| `sections[].keys[].type` | string | no |  |  |
-| `sections[].keys[].value` | any | no |  |  |
-| `sections[].name` | string | no |  |  |
-| `stale` | boolean | no |  |  |
-| `version` | string | no |  | Send it back when saving: a changed file is refused with a 409. |
-| `writable` | boolean | no |  |  |
+| `error` | object or null | yes |  |  |
+| `error.at` | string (date-time) | yes |  |  |
+| `error.message` | string | yes |  |  |
+| `error.origin` | string | yes |  |  |
+| `file` | string | yes |  |  |
+| `in_container` | boolean | yes |  |  |
+| `secret_file` | string | yes |  |  |
+| `sections` | array of object | yes |  |  |
+| `sections[].help` | string | yes |  |  |
+| `sections[].keys` | array of object | yes |  |  |
+| `sections[].keys[].apply` | string | yes |  |  |
+| `sections[].keys[].default` | any | yes |  |  |
+| `sections[].keys[].file_only` | boolean | yes |  | A path: change it in config.yaml, never here. |
+| `sections[].keys[].help` | string | yes |  |  |
+| `sections[].keys[].in_file` | boolean | yes |  |  |
+| `sections[].keys[].key` | string | yes |  |  |
+| `sections[].keys[].locked` | boolean | yes |  |  |
+| `sections[].keys[].name` | string | yes |  |  |
+| `sections[].keys[].pending_restart` | boolean | yes |  |  |
+| `sections[].keys[].running` | any | yes |  |  |
+| `sections[].keys[].type` | string | yes |  |  |
+| `sections[].keys[].value` | any | yes |  |  |
+| `sections[].name` | string | yes |  |  |
+| `stale` | boolean | yes |  |  |
+| `version` | string | yes |  | Send it back when saving: a changed file is refused with a 409. |
+| `writable` | boolean | yes |  |  |
 
 ### SignIn
 
@@ -5405,19 +5474,19 @@ One of these:
 |---|---|---|---|---|
 | `accent` | string | yes |  | The main color: what you can press. |
 | `background` | string | no |  | The page. Left out: the mode's own. |
-| `button` | object | no |  | How the theme's buttons look. A choice left out is the default (rounded, normal, raised, normal). |
+| `button` | object or null | no |  | How the theme's buttons look. A choice left out is the default (rounded, normal, raised, normal). |
 | `button.case` | string | no | one of `normal`, `upper` |  |
 | `button.depth` | string | no | one of `flat`, `raised`, `glossy` |  |
 | `button.shape` | string | no | one of `square`, `soft`, `rounded`, `pill` |  |
 | `button.weight` | string | no | one of `normal`, `medium`, `bold` |  |
-| `dark` | object | no |  | A light theme's colors for dark mode, kept while it is light. Switching the theme to dark swaps them in. A light theme's light (or a dark theme's dark) is dropped. |
+| `dark` | object or null | no |  | A light theme's colors for dark mode, kept while it is light. Switching the theme to dark swaps them in. A light theme's light (or a dark theme's dark) is dropped. |
 | `dark.accent` | string | yes |  | The main color: what you can press. |
 | `dark.background` | string | no |  | The page. Left out: the mode's own. |
 | `dark.overrides` | map of string | no |  | Worked-out colors replaced by name: text, accent, accentFg, second, secondFg, secondText, link, navLink, background, surface, nested, chrome, info, infoBorder, border, and for each button variant V (Secondary, Success, Danger, Warning, Info, Light, Dark) btnV, btnVFg and btnVText. Leaving one out puts the readable color back. |
 | `dark.second` | string | yes |  | Says where you are: active nav item, headings, info. |
 | `dark.surface` | string | no |  | Cards. Left out: the mode's own. |
 | `id` | string | yes |  | Lower-case letters, digits, - and _, up to 32. |
-| `light` | object | no |  | A dark theme's colors for light mode, kept while it is dark. Switching the theme to light swaps them in. |
+| `light` | object or null | no |  | A dark theme's colors for light mode, kept while it is dark. Switching the theme to light swaps them in. |
 | `light.accent` | string | yes |  | The main color: what you can press. |
 | `light.background` | string | no |  | The page. Left out: the mode's own. |
 | `light.overrides` | map of string | no |  | Worked-out colors replaced by name: text, accent, accentFg, second, secondFg, secondText, link, navLink, background, surface, nested, chrome, info, infoBorder, border, and for each button variant V (Secondary, Success, Danger, Warning, Info, Light, Dark) btnV, btnVFg and btnVText. Leaving one out puts the readable color back. |
@@ -5433,17 +5502,17 @@ One of these:
 
 | Field | Type | Required | Limits | Description |
 |---|---|---|---|---|
-| `created_at` | string (date-time) | no |  |  |
+| `created_at` | string (date-time) | yes |  |  |
 | `disabled` | boolean | yes |  |  |
 | `display_name` | string | yes |  |  |
-| `has_password` | boolean | no |  |  |
+| `has_password` | boolean | yes |  |  |
 | `id` | integer | yes |  |  |
-| `login_link` | [`LoginLink`](#loginlink) or null | no |  | The account's live login link, or null. |
+| `login_link` | [`LoginLink`](#loginlink) or null | yes |  | The account's live login link, or null. |
 | `owner` | boolean | yes |  |  |
-| `password_blocked` | boolean | no |  |  |
+| `password_blocked` | boolean | yes |  |  |
 | `role` | string | yes | one of `admin`, `user` |  |
-| `two_factor` | boolean | no |  |  |
-| `username` | string | no |  | Empty until a password is set. |
+| `two_factor` | boolean | yes |  |  |
+| `username` | string | yes |  | Empty until a password is set. |
 
 ## MCP tools
 
@@ -5457,40 +5526,40 @@ Every tool POST /mcp offers. Written by scripts/api_docs.sh from the registered 
 
 | Tool | Route | Who | What |
 |---|---|---|---|
-| [`whoami`](#whoami) | `GET /api/me` | any key | Who am I |
-| [`list_team`](#list_team) | `GET /api/team` | any key | List team |
-| [`admin_list_users`](#admin_list_users) | `GET /api/admin/users` | admin keys | List users (admin) |
-| [`admin_set_user_disabled`](#admin_set_user_disabled) | `POST /api/admin/users/{user_id}/disabled` | admin keys | Disable or enable a user (admin) |
-| [`admin_revoke_access`](#admin_revoke_access) | `POST /api/admin/users/{user_id}/revoke-access` | admin keys | Revoke a user's access (admin) |
-| [`rename_account`](#rename_account) | `POST /api/account/rename` | any key | Rename your account |
-| [`set_shortcuts`](#set_shortcuts) | `POST /api/account/shortcuts` | any key | Change your keyboard shortcuts |
-| [`set_themes`](#set_themes) | `POST /api/account/themes` | any key | Replace your own themes |
-| [`set_theme`](#set_theme) | `POST /api/account/theme` | any key | Pick your theme |
-| [`admin_get_theme_defaults`](#admin_get_theme_defaults) | `GET /api/admin/theme-defaults` | admin keys | Default themes (admin) |
-| [`admin_set_theme_defaults`](#admin_set_theme_defaults) | `POST /api/admin/theme-defaults` | admin keys | Replace the default themes (admin) |
-| [`create_my_login_link`](#create_my_login_link) | `POST /api/account/login-link` | any key | A login link for yourself |
-| [`cancel_my_login_link`](#cancel_my_login_link) | `POST /api/account/login-link/cancel` | any key | Stop your own login link working |
-| [`admin_create_user`](#admin_create_user) | `POST /api/admin/users` | admin keys | Create an account (admin) |
-| [`admin_reissue_login`](#admin_reissue_login) | `POST /api/admin/users/{user_id}/reissue-login` | admin keys | A new login link for an account (admin) |
 | [`admin_cancel_login_link`](#admin_cancel_login_link) | `POST /api/admin/users/{user_id}/cancel-login-link` | admin keys | Stop an account's login link working (admin) |
-| [`admin_rename_user`](#admin_rename_user) | `POST /api/admin/users/{user_id}/rename` | admin keys | Rename someone (admin) |
-| [`admin_set_user_role`](#admin_set_user_role) | `POST /api/admin/users/{user_id}/role` | admin keys | Change an account's role (admin) |
-| [`admin_delete_user`](#admin_delete_user) | `POST /api/admin/users/{user_id}/delete` | admin keys | Delete an account (admin) |
-| [`admin_reset_two_factor`](#admin_reset_two_factor) | `POST /api/admin/users/{user_id}/reset-two-factor` | admin keys | Turn off an account's two-factor (admin) |
-| [`list_my_sessions`](#list_my_sessions) | `GET /api/account/sessions` | any key | Your signed-in devices |
-| [`label_my_session`](#label_my_session) | `POST /api/account/sessions/{session_id}/label` | any key | Name one of your devices |
-| [`revoke_my_session`](#revoke_my_session) | `POST /api/account/sessions/{session_id}/revoke` | any key | Sign out one of your devices |
-| [`revoke_my_other_sessions`](#revoke_my_other_sessions) | `POST /api/account/sessions/revoke-others` | any key | Sign out all your devices |
-| [`admin_list_user_sessions`](#admin_list_user_sessions) | `GET /api/admin/users/{user_id}/sessions` | admin keys | An account's signed-in devices (admin) |
-| [`admin_revoke_user_session`](#admin_revoke_user_session) | `POST /api/admin/users/{user_id}/sessions/{session_id}/revoke` | admin keys | Sign out one of an account's devices (admin) |
 | [`admin_create_invite_link`](#admin_create_invite_link) | `POST /api/admin/invite-links` | admin keys | Create an invite link (admin) |
-| [`admin_rename_invite_link`](#admin_rename_invite_link) | `POST /api/admin/invite-links/{link_id}/rename` | admin keys | Rename an invite link (admin) |
-| [`admin_set_invite_link_limits`](#admin_set_invite_link_limits) | `POST /api/admin/invite-links/{link_id}/limits` | admin keys | Change an invite link's places and expiry (admin) |
-| [`admin_switch_on_invite_link`](#admin_switch_on_invite_link) | `POST /api/admin/invite-links/{link_id}/switch-on` | admin keys | Switch an invite link back on (admin) |
+| [`admin_create_user`](#admin_create_user) | `POST /api/admin/users` | admin keys | Create an account (admin) |
 | [`admin_delete_invite_link`](#admin_delete_invite_link) | `POST /api/admin/invite-links/{link_id}/delete` | admin keys | Delete an invite link (admin) |
-| [`admin_restore_invite_link`](#admin_restore_invite_link) | `POST /api/admin/invite-links/{link_id}/restore` | admin keys | Undo deleting an invite link (admin) |
+| [`admin_delete_user`](#admin_delete_user) | `POST /api/admin/users/{user_id}/delete` | admin keys | Delete an account (admin) |
+| [`admin_get_theme_defaults`](#admin_get_theme_defaults) | `GET /api/admin/theme-defaults` | admin keys | Default themes (admin) |
 | [`admin_list_invite_links`](#admin_list_invite_links) | `GET /api/admin/invite-links` | admin keys | List invite links (admin) |
+| [`admin_list_user_sessions`](#admin_list_user_sessions) | `GET /api/admin/users/{user_id}/sessions` | admin keys | An account's signed-in devices (admin) |
+| [`admin_list_users`](#admin_list_users) | `GET /api/admin/users` | admin keys | List users (admin) |
+| [`admin_reissue_login`](#admin_reissue_login) | `POST /api/admin/users/{user_id}/reissue-login` | admin keys | A new login link for an account (admin) |
+| [`admin_rename_invite_link`](#admin_rename_invite_link) | `POST /api/admin/invite-links/{link_id}/rename` | admin keys | Rename an invite link (admin) |
+| [`admin_rename_user`](#admin_rename_user) | `POST /api/admin/users/{user_id}/rename` | admin keys | Rename someone (admin) |
+| [`admin_reset_two_factor`](#admin_reset_two_factor) | `POST /api/admin/users/{user_id}/reset-two-factor` | admin keys | Turn off an account's two-factor (admin) |
+| [`admin_restore_invite_link`](#admin_restore_invite_link) | `POST /api/admin/invite-links/{link_id}/restore` | admin keys | Undo deleting an invite link (admin) |
+| [`admin_revoke_access`](#admin_revoke_access) | `POST /api/admin/users/{user_id}/revoke-access` | admin keys | Revoke a user's access (admin) |
 | [`admin_revoke_invite_link`](#admin_revoke_invite_link) | `POST /api/admin/invite-links/{link_id}/revoke` | admin keys | Switch off an invite link (admin) |
+| [`admin_revoke_user_session`](#admin_revoke_user_session) | `POST /api/admin/users/{user_id}/sessions/{session_id}/revoke` | admin keys | Sign out one of an account's devices (admin) |
+| [`admin_set_invite_link_limits`](#admin_set_invite_link_limits) | `POST /api/admin/invite-links/{link_id}/limits` | admin keys | Change an invite link's places and expiry (admin) |
+| [`admin_set_theme_defaults`](#admin_set_theme_defaults) | `POST /api/admin/theme-defaults` | admin keys | Replace the default themes (admin) |
+| [`admin_set_user_disabled`](#admin_set_user_disabled) | `POST /api/admin/users/{user_id}/disabled` | admin keys | Disable or enable a user (admin) |
+| [`admin_set_user_role`](#admin_set_user_role) | `POST /api/admin/users/{user_id}/role` | admin keys | Change an account's role (admin) |
+| [`admin_switch_on_invite_link`](#admin_switch_on_invite_link) | `POST /api/admin/invite-links/{link_id}/switch-on` | admin keys | Switch an invite link back on (admin) |
+| [`cancel_my_login_link`](#cancel_my_login_link) | `POST /api/account/login-link/cancel` | any key | Stop your own login link working |
+| [`create_my_login_link`](#create_my_login_link) | `POST /api/account/login-link` | any key | A login link for yourself |
+| [`label_my_session`](#label_my_session) | `POST /api/account/sessions/{session_id}/label` | any key | Name one of your devices |
+| [`list_my_sessions`](#list_my_sessions) | `GET /api/account/sessions` | any key | Your signed-in devices |
+| [`list_team`](#list_team) | `GET /api/team` | any key | List team |
+| [`rename_account`](#rename_account) | `POST /api/account/rename` | any key | Rename your account |
+| [`revoke_my_other_sessions`](#revoke_my_other_sessions) | `POST /api/account/sessions/revoke-others` | any key | Sign out all your devices |
+| [`revoke_my_session`](#revoke_my_session) | `POST /api/account/sessions/{session_id}/revoke` | any key | Sign out one of your devices |
+| [`set_shortcuts`](#set_shortcuts) | `POST /api/account/shortcuts` | any key | Set your keyboard shortcuts |
+| [`set_theme`](#set_theme) | `POST /api/account/theme` | any key | Pick your theme |
+| [`set_themes`](#set_themes) | `POST /api/account/themes` | any key | Replace your own themes |
+| [`whoami`](#whoami) | `GET /api/me` | any key | Who am I |
 | [`list_batches`](#list_batches) | `GET /api/ais/batches` | any key | List batches |
 | [`list_folders`](#list_folders) | `GET /api/ais/folders` | any key | List folders |
 | [`get_batch`](#get_batch) | `GET /api/ais/batches/{batch_id}` | any key | Get a batch |
@@ -5544,251 +5613,6 @@ Every tool POST /mcp offers. Written by scripts/api_docs.sh from the registered 
 | [`trace_click`](#trace_click) | `POST /api/ais/trace` | any key | Trace an AIS from a click |
 | [`detect_image`](#detect_image) | `POST /api/ais/detect` | any key | Find AIS on one image |
 
-### whoami
-
-The account this API key belongs to, the role it acts with (role -- never higher than the key's own scope), and the account's own role.
-
-|  |  |
-|---|---|
-| Route | `GET /api/me` |
-| Read only | yes |
-| Destructive | no |
-
-**Arguments**
-
-| Field | Type | Required | Limits | Description |
-|---|---|---|---|---|
-
-### list_team
-
-People with an active account, a page at a time: id and display name. Use the id wherever another tool asks for a user. next is the offset of the following page, or null on the last one.
-
-|  |  |
-|---|---|
-| Route | `GET /api/team` |
-| Read only | yes |
-| Destructive | no |
-
-**Arguments**
-
-| Field | Type | Required | Limits | Description |
-|---|---|---|---|---|
-| `limit` | integer | no | 1 to 1000 | Rows to return. Default 200. |
-| `offset` | integer | no | at least 0 | Rows to skip: the next value of the previous page. |
-
-### admin_list_users
-
-Accounts, a page at a time, including disabled ones, with each one's role and which is the owner. next is the offset of the following page, or null on the last one.
-
-|  |  |
-|---|---|
-| Route | `GET /api/admin/users` |
-| Read only | yes |
-| Destructive | no |
-
-**Arguments**
-
-| Field | Type | Required | Limits | Description |
-|---|---|---|---|---|
-| `limit` | integer | no | 1 to 1000 | Rows to return. Default 200. |
-| `offset` | integer | no | at least 0 | Rows to skip: the next value of the previous page. |
-
-### admin_set_user_disabled
-
-Switch an account off (disabled: true) or back on (false). Disabling signs it out everywhere and voids its live login link; its API keys stop working while it is off. Reversible. The owner and your own account cannot be disabled.
-
-|  |  |
-|---|---|
-| Route | `POST /api/admin/users/{user_id}/disabled` |
-| Read only | no |
-| Destructive | no |
-
-**Arguments**
-
-| Field | Type | Required | Limits | Description |
-|---|---|---|---|---|
-| `disabled` | boolean | yes |  |  |
-| `user_id` | integer | yes | at least 1 | The account's id, from list_team or admin_list_users. |
-
-### admin_revoke_access
-
-For an account that may be compromised: ends every session and voids its live login link and every API key it holds, at once. The account stays enabled; admin_reissue_login lets its owner back in. The owner and your own account cannot be revoked.
-
-|  |  |
-|---|---|
-| Route | `POST /api/admin/users/{user_id}/revoke-access` |
-| Read only | no |
-| Destructive | yes |
-
-**Arguments**
-
-| Field | Type | Required | Limits | Description |
-|---|---|---|---|---|
-| `user_id` | integer | yes | at least 1 | The account's id, from list_team or admin_list_users. |
-
-### rename_account
-
-Change your own display name (1-80 characters). expect, when given, is the name you think it has now; if someone changed it meanwhile the rename is refused with the current name, so nothing is overwritten unseen.
-
-|  |  |
-|---|---|
-| Route | `POST /api/account/rename` |
-| Read only | no |
-| Destructive | no |
-
-**Arguments**
-
-| Field | Type | Required | Limits | Description |
-|---|---|---|---|---|
-| `display_name` | string | yes |  |  |
-| `expect` | string | no |  | The current name, from whoami. Optional. |
-
-### set_shortcuts
-
-Replace your rebound keyboard shortcuts: action id to its list of keys, such as "undo": ["Mod+Z"] (Mod is Cmd on a Mac, Ctrl elsewhere). Send the whole map; an empty list switches an action's keys off, and {} puts every key back to its default. whoami shows the current map.
-
-|  |  |
-|---|---|
-| Route | `POST /api/account/shortcuts` |
-| Read only | no |
-| Destructive | no |
-
-**Arguments**
-
-| Field | Type | Required | Limits | Description |
-|---|---|---|---|---|
-| `shortcuts` | map of array of string | yes |  |  |
-
-### set_themes
-
-Replace your whole list of color themes (1 to 40) and pick the one you use. themes: null goes back to following the app's defaults. A theme is the Theme schema in the API reference (config/openapi.json): id, name, mode light|dark, accent, second, and optional colors as #rrggbb. whoami shows the current list.
-
-|  |  |
-|---|---|
-| Route | `POST /api/account/themes` |
-| Read only | no |
-| Destructive | no |
-
-**Arguments**
-
-| Field | Type | Required | Limits | Description |
-|---|---|---|---|---|
-| `theme_id` | string | no |  |  |
-| `themes` | array of object or null | yes |  |  |
-
-### set_theme
-
-Switch to another theme from your list (or the defaults), by its id.
-
-|  |  |
-|---|---|
-| Route | `POST /api/account/theme` |
-| Read only | no |
-| Destructive | no |
-
-**Arguments**
-
-| Field | Type | Required | Limits | Description |
-|---|---|---|---|---|
-| `theme_id` | string | yes |  |  |
-
-### admin_get_theme_defaults
-
-The theme list everyone without their own list sees. themes is null while the built-in ones apply.
-
-|  |  |
-|---|---|
-| Route | `GET /api/admin/theme-defaults` |
-| Read only | yes |
-| Destructive | no |
-
-**Arguments**
-
-| Field | Type | Required | Limits | Description |
-|---|---|---|---|---|
-
-### admin_set_theme_defaults
-
-Replace the theme list everyone without their own list sees, 1 to 40 themes in the Theme schema of the API reference. null puts the built-in themes back.
-
-|  |  |
-|---|---|
-| Route | `POST /api/admin/theme-defaults` |
-| Read only | no |
-| Destructive | no |
-
-**Arguments**
-
-| Field | Type | Required | Limits | Description |
-|---|---|---|---|---|
-| `themes` | array of object or null | yes |  |  |
-
-### create_my_login_link
-
-A link that signs your own account in on a browser or another device. Only a key with your account's full role may ask: one scoped down to user on an admin account is refused. Answers with login_url (open it to sign in), expires_at and max_uses. The link works once and expires within a day (links made with an API key are held to that; a browser can make longer or reusable ones). Any older link the account could still use stops working; its signed-in devices stay signed in. Revoking or deleting this API key voids the link while it is unused.
-
-|  |  |
-|---|---|
-| Route | `POST /api/account/login-link` |
-| Read only | no |
-| Destructive | no |
-
-**Arguments**
-
-| Field | Type | Required | Limits | Description |
-|---|---|---|---|---|
-| `expires_in_minutes` | integer | no | 1 to 1440 | Minutes until the link stops working, 1-1440. Default: the server's one-time link default, at most a day. |
-
-### cancel_my_login_link
-
-Void your account's live login link without making a new one. Devices it already signed in stay signed in. Answers with removed: 0 or 1.
-
-|  |  |
-|---|---|
-| Route | `POST /api/account/login-link/cancel` |
-| Read only | no |
-| Destructive | yes |
-
-**Arguments**
-
-| Field | Type | Required | Limits | Description |
-|---|---|---|---|---|
-
-### admin_create_user
-
-Make a new account and its first login link, to hand to the person. role is admin or user. Answers with user_id and the link. Answers with login_url (open it to sign in), expires_at and max_uses. The link works once and expires within a day (links made with an API key are held to that; a browser can make longer or reusable ones). Any older link the account could still use stops working; its signed-in devices stay signed in. Revoking or deleting this API key voids the link while it is unused.
-
-|  |  |
-|---|---|
-| Route | `POST /api/admin/users` |
-| Read only | no |
-| Destructive | no |
-
-**Arguments**
-
-| Field | Type | Required | Limits | Description |
-|---|---|---|---|---|
-| `display_name` | string | yes |  | 1-80 characters. |
-| `expires_in_minutes` | integer | no | 1 to 1440 | Minutes until the link stops working, 1-1440. Default: the server's one-time link default, at most a day. |
-| `role` | string | yes | one of `admin`, `user` |  |
-
-### admin_reissue_login
-
-For someone who lost their device or their link: a fresh login link for their account. Answers with login_url (open it to sign in), expires_at and max_uses. The link works once and expires within a day (links made with an API key are held to that; a browser can make longer or reusable ones). Any older link the account could still use stops working; its signed-in devices stay signed in. Revoking or deleting this API key voids the link while it is unused.
-
-|  |  |
-|---|---|
-| Route | `POST /api/admin/users/{user_id}/reissue-login` |
-| Read only | no |
-| Destructive | no |
-
-**Arguments**
-
-| Field | Type | Required | Limits | Description |
-|---|---|---|---|---|
-| `expires_in_minutes` | integer | no | 1 to 1440 | Minutes until the link stops working, 1-1440. Default: the server's one-time link default, at most a day. |
-| `user_id` | integer | yes | at least 1 | The account's id, from list_team or admin_list_users. |
-
 ### admin_cancel_login_link
 
 Void an account's live login link without making a new one: a link that went somewhere it should not have. Devices it already signed in stay signed in; admin_revoke_access ends those too. Answers with removed: 0 or 1.
@@ -5803,173 +5627,7 @@ Void an account's live login link without making a new one: a link that went som
 
 | Field | Type | Required | Limits | Description |
 |---|---|---|---|---|
-| `user_id` | integer | yes | at least 1 | The account's id, from list_team or admin_list_users. |
-
-### admin_rename_user
-
-Change another account's display name (1-80 characters). Only the owner renames an admin. expect, when given, is the name you think it has now; if it changed meanwhile the rename is refused with the current name.
-
-|  |  |
-|---|---|
-| Route | `POST /api/admin/users/{user_id}/rename` |
-| Read only | no |
-| Destructive | no |
-
-**Arguments**
-
-| Field | Type | Required | Limits | Description |
-|---|---|---|---|---|
-| `display_name` | string | yes |  |  |
-| `expect` | string | no |  | The current name, from admin_list_users. Optional. |
-| `user_id` | integer | yes | at least 1 | The account's id, from list_team or admin_list_users. |
-
-### admin_set_user_role
-
-Make an account an admin or an ordinary user. Only the owner takes an admin's rights away; the owner is always an admin, and nobody changes their own role.
-
-|  |  |
-|---|---|
-| Route | `POST /api/admin/users/{user_id}/role` |
-| Read only | no |
-| Destructive | no |
-
-**Arguments**
-
-| Field | Type | Required | Limits | Description |
-|---|---|---|---|---|
-| `role` | string | yes | one of `admin`, `user` |  |
-| `user_id` | integer | yes | at least 1 | The account's id, from list_team or admin_list_users. |
-
-### admin_delete_user
-
-Remove an account for good, with its sessions, login link and API keys. Cannot be undone: admin_set_user_disabled is the reversible version. Only the owner deletes an admin; nobody deletes the owner or themselves.
-
-|  |  |
-|---|---|
-| Route | `POST /api/admin/users/{user_id}/delete` |
-| Read only | no |
-| Destructive | yes |
-
-**Arguments**
-
-| Field | Type | Required | Limits | Description |
-|---|---|---|---|---|
-| `user_id` | integer | yes | at least 1 | The account's id, from list_team or admin_list_users. |
-
-### admin_reset_two_factor
-
-For someone who lost both their phone and their recovery codes: switches their two-factor sign-in off so a login link lets them in again. Only the owner resets an admin's; the owner's is reset from a shell.
-
-|  |  |
-|---|---|
-| Route | `POST /api/admin/users/{user_id}/reset-two-factor` |
-| Read only | no |
-| Destructive | yes |
-
-**Arguments**
-
-| Field | Type | Required | Limits | Description |
-|---|---|---|---|---|
-| `user_id` | integer | yes | at least 1 | The account's id, from list_team or admin_list_users. |
-
-### list_my_sessions
-
-Where your account is signed in, a page at a time: id, when it started and was last seen, the browser, and the name you gave it. Through an API key no device is current. next is the offset of the following page, or null on the last one.
-
-|  |  |
-|---|---|
-| Route | `GET /api/account/sessions` |
-| Read only | yes |
-| Destructive | no |
-
-**Arguments**
-
-| Field | Type | Required | Limits | Description |
-|---|---|---|---|---|
-| `limit` | integer | no | 1 to 1000 | Rows to return. Default 200. |
-| `offset` | integer | no | at least 0 | Rows to skip: the next value of the previous page. |
-
-### label_my_session
-
-Give one of your devices a name (at most 80 characters; empty clears it). expect, when given, is the name you think it has now.
-
-|  |  |
-|---|---|
-| Route | `POST /api/account/sessions/{session_id}/label` |
-| Read only | no |
-| Destructive | no |
-
-**Arguments**
-
-| Field | Type | Required | Limits | Description |
-|---|---|---|---|---|
-| `expect` | string | no |  |  |
-| `label` | string | yes |  |  |
-| `session_id` | string | yes |  | The device's id, from list_my_sessions or admin_list_user_sessions. |
-
-### revoke_my_session
-
-End one of your signed-in sessions; that browser has to sign in again.
-
-|  |  |
-|---|---|
-| Route | `POST /api/account/sessions/{session_id}/revoke` |
-| Read only | no |
-| Destructive | yes |
-
-**Arguments**
-
-| Field | Type | Required | Limits | Description |
-|---|---|---|---|---|
-| `session_id` | string | yes |  | The device's id, from list_my_sessions or admin_list_user_sessions. |
-
-### revoke_my_other_sessions
-
-End every session your account has: through an API key there is no current device to keep, so every browser signs in again. API keys keep working. Answers with how many were removed.
-
-|  |  |
-|---|---|
-| Route | `POST /api/account/sessions/revoke-others` |
-| Read only | no |
-| Destructive | yes |
-
-**Arguments**
-
-| Field | Type | Required | Limits | Description |
-|---|---|---|---|---|
-
-### admin_list_user_sessions
-
-Where an account is signed in: every session, with when it started and was last seen. Addresses are shown to the owner only, and only the owner sees the owner's.
-
-|  |  |
-|---|---|
-| Route | `GET /api/admin/users/{user_id}/sessions` |
-| Read only | yes |
-| Destructive | no |
-
-**Arguments**
-
-| Field | Type | Required | Limits | Description |
-|---|---|---|---|---|
-| `user_id` | integer | yes | at least 1 | The account's id, from list_team or admin_list_users. |
-
-### admin_revoke_user_session
-
-End one of an account's sessions, rather than all of them with admin_revoke_access.
-
-|  |  |
-|---|---|
-| Route | `POST /api/admin/users/{user_id}/sessions/{session_id}/revoke` |
-| Read only | no |
-| Destructive | yes |
-
-**Arguments**
-
-| Field | Type | Required | Limits | Description |
-|---|---|---|---|---|
-| `session_id` | string | yes |  | The device's id, from list_my_sessions or admin_list_user_sessions. |
-| `user_id` | integer | yes | at least 1 | The account's id, from list_team or admin_list_users. |
+| `user_id` | integer | yes | at least 1 | The account's id, from GET /api/admin/users (admin_list_users over MCP). |
 
 ### admin_create_invite_link
 
@@ -5986,16 +5644,16 @@ One link for a group: each person who opens it joins as a new user, up to max_us
 | Field | Type | Required | Limits | Description |
 |---|---|---|---|---|
 | `days` | integer | yes | 1 to 365 |  |
-| `label` | string | yes |  | 1-80 characters; people see it on the join page. |
+| `label` | string | yes | 1 to 80 characters |  |
 | `max_uses` | integer | yes | 1 to 1000 |  |
 
-### admin_rename_invite_link
+### admin_create_user
 
-Change the label people see on an invite link's join page (1-80 characters). expect, when given, is the label you think it has now.
+Make a new account and its first login link, to hand to the person. role is admin or user. Answers with user_id and the link. Answers with login_url (open it to sign in), expires_at and max_uses. The link works once and expires within a day (links made with an API key are held to that; a browser can make longer or reusable ones). Any older link the account could still use stops working; its signed-in devices stay signed in. Revoking or deleting this API key voids the link while it is unused, and signs out every device it signed in.
 
 |  |  |
 |---|---|
-| Route | `POST /api/admin/invite-links/{link_id}/rename` |
+| Route | `POST /api/admin/users` |
 | Read only | no |
 | Destructive | no |
 
@@ -6003,43 +5661,10 @@ Change the label people see on an invite link's join page (1-80 characters). exp
 
 | Field | Type | Required | Limits | Description |
 |---|---|---|---|---|
-| `expect` | string | no |  |  |
-| `label` | string | yes |  |  |
-| `link_id` | string | yes |  | The id from admin_list_invite_links. |
-
-### admin_set_invite_link_limits
-
-Set how many people the link may take in (never fewer than have joined) and, when days is given, a new expiry counted from now. The link then counts as this key's: revoking the key switches it off.
-
-|  |  |
-|---|---|
-| Route | `POST /api/admin/invite-links/{link_id}/limits` |
-| Read only | no |
-| Destructive | no |
-
-**Arguments**
-
-| Field | Type | Required | Limits | Description |
-|---|---|---|---|---|
-| `days` | integer | no | 1 to 365 | Leave it out to keep the expiry. |
-| `link_id` | string | yes |  | The id from admin_list_invite_links. |
-| `max_uses` | integer | yes | 1 to 1000 |  |
-
-### admin_switch_on_invite_link
-
-Undo admin_revoke_invite_link: anyone still holding the link can use it again. The link then counts as this key's: revoking the key switches it off.
-
-|  |  |
-|---|---|
-| Route | `POST /api/admin/invite-links/{link_id}/switch-on` |
-| Read only | no |
-| Destructive | no |
-
-**Arguments**
-
-| Field | Type | Required | Limits | Description |
-|---|---|---|---|---|
-| `link_id` | string | yes |  | The id from admin_list_invite_links. |
+| `display_name` | string | yes | 1 to 80 characters |  |
+| `expires_in_minutes` | integer or null | no | 0 to 525600 | 0 never expires. Default auth.login_token_ttl_seconds for a link that works once, auth.multi_use_login_token_ttl_seconds otherwise. |
+| `max_uses` | integer or null | no | 0 to 1000 | Sign-ins the link allows: 1-1000, or 0 for unlimited. Default 1. |
+| `role` | string | yes | one of `admin`, `user` |  |
 
 ### admin_delete_invite_link
 
@@ -6055,23 +5680,38 @@ Take an invite link off the list and stop it working. The accounts it made stay.
 
 | Field | Type | Required | Limits | Description |
 |---|---|---|---|---|
-| `link_id` | string | yes |  | The id from admin_list_invite_links. |
+| `link_id` | string | yes |  | The link's id, from GET /api/admin/invite-links (admin_list_invite_links over MCP). |
 
-### admin_restore_invite_link
+### admin_delete_user
 
-Bring back an invite link deleted in the last few minutes, working as before. The link then counts as this key's: revoking the key switches it off.
+Remove an account for good, with its sessions, login link and API keys. Cannot be undone: admin_set_user_disabled is the reversible version. Only the owner deletes an admin; nobody deletes the owner or themselves.
 
 |  |  |
 |---|---|
-| Route | `POST /api/admin/invite-links/{link_id}/restore` |
+| Route | `POST /api/admin/users/{user_id}/delete` |
 | Read only | no |
+| Destructive | yes |
+
+**Arguments**
+
+| Field | Type | Required | Limits | Description |
+|---|---|---|---|---|
+| `user_id` | integer | yes | at least 1 | The account's id, from GET /api/admin/users (admin_list_users over MCP). |
+
+### admin_get_theme_defaults
+
+The theme list everyone without their own list sees. themes is null while the built-in ones apply.
+
+|  |  |
+|---|---|
+| Route | `GET /api/admin/theme-defaults` |
+| Read only | yes |
 | Destructive | no |
 
 **Arguments**
 
 | Field | Type | Required | Limits | Description |
 |---|---|---|---|---|
-| `link_id` | string | yes |  | The id from admin_list_invite_links. |
 
 ### admin_list_invite_links
 
@@ -6087,8 +5727,151 @@ Group invite links, a page at a time: label, places used and left, expiry, and w
 
 | Field | Type | Required | Limits | Description |
 |---|---|---|---|---|
-| `limit` | integer | no | 1 to 1000 | Rows to return. Default 200. |
+| `dir` | string | no | one of `asc`, `desc` | Default asc. |
+| `limit` | integer | no | 1 to 1000; default `200` | Rows to return. Default 200. |
 | `offset` | integer | no | at least 0 | Rows to skip: the next value of the previous page. |
+| `q` | string | no |  | Keep links whose label or maker contains this, in any case. |
+| `sort` | string | no | one of `label`, `used`, `expires_at` | Field to sort the whole list by. Rows without it go last. |
+
+### admin_list_user_sessions
+
+Where an account is signed in: every session, with when it started and was last seen. Addresses are shown to the owner only, and only the owner sees the owner's.
+
+|  |  |
+|---|---|
+| Route | `GET /api/admin/users/{user_id}/sessions` |
+| Read only | yes |
+| Destructive | no |
+
+**Arguments**
+
+| Field | Type | Required | Limits | Description |
+|---|---|---|---|---|
+| `limit` | integer | no | 1 to 1000; default `200` | Rows to return. Default 200. |
+| `offset` | integer | no | at least 0 | Rows to skip: the next value of the previous page. |
+| `user_id` | integer | yes | at least 1 | The account's id, from GET /api/admin/users (admin_list_users over MCP). |
+
+### admin_list_users
+
+Accounts, a page at a time, including disabled ones, with each one's role and which is the owner. next is the offset of the following page, or null on the last one.
+
+|  |  |
+|---|---|
+| Route | `GET /api/admin/users` |
+| Read only | yes |
+| Destructive | no |
+
+**Arguments**
+
+| Field | Type | Required | Limits | Description |
+|---|---|---|---|---|
+| `dir` | string | no | one of `asc`, `desc` | Default asc. |
+| `limit` | integer | no | 1 to 1000; default `200` | Rows to return. Default 200. |
+| `offset` | integer | no | at least 0 | Rows to skip: the next value of the previous page. |
+| `q` | string | no |  | Keep accounts whose name or username contains this, in any case. |
+| `sort` | string | no | one of `display_name`, `role`, `disabled`, `created_at` | Field to sort the whole list by. Rows without it go last. |
+
+### admin_reissue_login
+
+For someone who lost their device or their link: a fresh login link for their account. Answers with login_url (open it to sign in), expires_at and max_uses. The link works once and expires within a day (links made with an API key are held to that; a browser can make longer or reusable ones). Any older link the account could still use stops working; its signed-in devices stay signed in. Revoking or deleting this API key voids the link while it is unused, and signs out every device it signed in.
+
+|  |  |
+|---|---|
+| Route | `POST /api/admin/users/{user_id}/reissue-login` |
+| Read only | no |
+| Destructive | no |
+
+**Arguments**
+
+| Field | Type | Required | Limits | Description |
+|---|---|---|---|---|
+| `expires_in_minutes` | integer or null | no | 0 to 525600 | 0 never expires. Default auth.login_token_ttl_seconds for a link that works once, auth.multi_use_login_token_ttl_seconds otherwise. |
+| `max_uses` | integer or null | no | 0 to 1000 | Sign-ins the link allows: 1-1000, or 0 for unlimited. Default 1. |
+| `user_id` | integer | yes | at least 1 | The account's id, from GET /api/admin/users (admin_list_users over MCP). |
+
+### admin_rename_invite_link
+
+Change the label people see on an invite link's join page (1-80 characters). expect, when given, is the label you think it has now.
+
+|  |  |
+|---|---|
+| Route | `POST /api/admin/invite-links/{link_id}/rename` |
+| Read only | no |
+| Destructive | no |
+
+**Arguments**
+
+| Field | Type | Required | Limits | Description |
+|---|---|---|---|---|
+| `expect` | string or null | no |  | The label you think it has. Answers 409 if it has another. |
+| `label` | string | yes | 1 to 80 characters | 1-80 characters. |
+| `link_id` | string | yes |  | The link's id, from GET /api/admin/invite-links (admin_list_invite_links over MCP). |
+
+### admin_rename_user
+
+Change another account's display name (1-80 characters). Only the owner renames an admin. expect, when given, is the name you think it has now; if it changed meanwhile the rename is refused with the current name.
+
+|  |  |
+|---|---|
+| Route | `POST /api/admin/users/{user_id}/rename` |
+| Read only | no |
+| Destructive | no |
+
+**Arguments**
+
+| Field | Type | Required | Limits | Description |
+|---|---|---|---|---|
+| `display_name` | string | yes | 1 to 80 characters | 1-80 characters. |
+| `expect` | string or null | no |  | The name you think they have. Answers 409 if it is another. |
+| `user_id` | integer | yes | at least 1 | The account's id, from GET /api/admin/users (admin_list_users over MCP). |
+
+### admin_reset_two_factor
+
+For someone who lost both their phone and their recovery codes: switches their two-factor sign-in off so a login link lets them in again. Only the owner resets an admin's; the owner's is reset from a shell.
+
+|  |  |
+|---|---|
+| Route | `POST /api/admin/users/{user_id}/reset-two-factor` |
+| Read only | no |
+| Destructive | yes |
+
+**Arguments**
+
+| Field | Type | Required | Limits | Description |
+|---|---|---|---|---|
+| `user_id` | integer | yes | at least 1 | The account's id, from GET /api/admin/users (admin_list_users over MCP). |
+
+### admin_restore_invite_link
+
+Bring back an invite link deleted in the last few minutes, working as before. The link then counts as this key's: revoking the key switches it off.
+
+|  |  |
+|---|---|
+| Route | `POST /api/admin/invite-links/{link_id}/restore` |
+| Read only | no |
+| Destructive | no |
+
+**Arguments**
+
+| Field | Type | Required | Limits | Description |
+|---|---|---|---|---|
+| `link_id` | string | yes |  | The link's id, from GET /api/admin/invite-links (admin_list_invite_links over MCP). |
+
+### admin_revoke_access
+
+For an account that may be compromised: ends every session and voids its live login link and every API key it holds, at once. The account stays enabled; admin_reissue_login lets its owner back in. The owner and your own account cannot be revoked.
+
+|  |  |
+|---|---|
+| Route | `POST /api/admin/users/{user_id}/revoke-access` |
+| Read only | no |
+| Destructive | yes |
+
+**Arguments**
+
+| Field | Type | Required | Limits | Description |
+|---|---|---|---|---|
+| `user_id` | integer | yes | at least 1 | The account's id, from GET /api/admin/users (admin_list_users over MCP). |
 
 ### admin_revoke_invite_link
 
@@ -6104,7 +5887,354 @@ Stop an invite link from letting anyone else join or sign in through it. Account
 
 | Field | Type | Required | Limits | Description |
 |---|---|---|---|---|
-| `link_id` | string | yes |  | The id from admin_list_invite_links. |
+| `link_id` | string | yes |  | The link's id, from GET /api/admin/invite-links (admin_list_invite_links over MCP). |
+
+### admin_revoke_user_session
+
+End one of an account's sessions, rather than all of them with admin_revoke_access.
+
+|  |  |
+|---|---|
+| Route | `POST /api/admin/users/{user_id}/sessions/{session_id}/revoke` |
+| Read only | no |
+| Destructive | yes |
+
+**Arguments**
+
+| Field | Type | Required | Limits | Description |
+|---|---|---|---|---|
+| `session_id` | string | yes |  | The device's id, from GET /api/account/sessions or GET /api/admin/users/{user_id}/sessions (list_my_sessions or admin_list_user_sessions over MCP). |
+| `user_id` | integer | yes | at least 1 | The account's id, from GET /api/admin/users (admin_list_users over MCP). |
+
+### admin_set_invite_link_limits
+
+Set how many people the link may take in (never fewer than have joined) and, when days is given, a new expiry counted from now. The link then counts as this key's: revoking the key switches it off.
+
+|  |  |
+|---|---|
+| Route | `POST /api/admin/invite-links/{link_id}/limits` |
+| Read only | no |
+| Destructive | no |
+
+**Arguments**
+
+| Field | Type | Required | Limits | Description |
+|---|---|---|---|---|
+| `days` | integer or null | no | 1 to 365 | Counted from now. Leave out to keep the expiry. |
+| `link_id` | string | yes |  | The link's id, from GET /api/admin/invite-links (admin_list_invite_links over MCP). |
+| `max_uses` | integer | yes | 1 to 1000 | Not fewer than have joined. |
+
+### admin_set_theme_defaults
+
+Replace the theme list everyone without their own list sees, 1 to 40 themes in the Theme schema of the API reference. null puts the built-in themes back.
+
+|  |  |
+|---|---|
+| Route | `POST /api/admin/theme-defaults` |
+| Read only | no |
+| Destructive | no |
+
+**Arguments**
+
+| Field | Type | Required | Limits | Description |
+|---|---|---|---|---|
+| `themes` | array of object or null | no |  | 1 to 40 themes. null goes back to the built-in ones. |
+| `themes[].accent` | string | yes |  | The main color: what you can press. |
+| `themes[].background` | string | no |  | The page. Left out: the mode's own. |
+| `themes[].button` | object or null | no |  | How the theme's buttons look. A choice left out is the default (rounded, normal, raised, normal). |
+| `themes[].button.case` | string | no | one of `normal`, `upper` |  |
+| `themes[].button.depth` | string | no | one of `flat`, `raised`, `glossy` |  |
+| `themes[].button.shape` | string | no | one of `square`, `soft`, `rounded`, `pill` |  |
+| `themes[].button.weight` | string | no | one of `normal`, `medium`, `bold` |  |
+| `themes[].dark` | object or null | no |  | A light theme's colors for dark mode, kept while it is light. Switching the theme to dark swaps them in. A light theme's light (or a dark theme's dark) is dropped. |
+| `themes[].dark.accent` | string | yes |  | The main color: what you can press. |
+| `themes[].dark.background` | string | no |  | The page. Left out: the mode's own. |
+| `themes[].dark.overrides` | map of string | no |  | Worked-out colors replaced by name: text, accent, accentFg, second, secondFg, secondText, link, navLink, background, surface, nested, chrome, info, infoBorder, border, and for each button variant V (Secondary, Success, Danger, Warning, Info, Light, Dark) btnV, btnVFg and btnVText. Leaving one out puts the readable color back. |
+| `themes[].dark.second` | string | yes |  | Says where you are: active nav item, headings, info. |
+| `themes[].dark.surface` | string | no |  | Cards. Left out: the mode's own. |
+| `themes[].id` | string | yes |  | Lower-case letters, digits, - and _, up to 32. |
+| `themes[].light` | object or null | no |  | A dark theme's colors for light mode, kept while it is dark. Switching the theme to light swaps them in. |
+| `themes[].light.accent` | string | yes |  | The main color: what you can press. |
+| `themes[].light.background` | string | no |  | The page. Left out: the mode's own. |
+| `themes[].light.overrides` | map of string | no |  | Worked-out colors replaced by name: text, accent, accentFg, second, secondFg, secondText, link, navLink, background, surface, nested, chrome, info, infoBorder, border, and for each button variant V (Secondary, Success, Danger, Warning, Info, Light, Dark) btnV, btnVFg and btnVText. Leaving one out puts the readable color back. |
+| `themes[].light.second` | string | yes |  | Says where you are: active nav item, headings, info. |
+| `themes[].light.surface` | string | no |  | Cards. Left out: the mode's own. |
+| `themes[].mode` | string | yes | one of `light`, `dark` |  |
+| `themes[].name` | string | yes |  | 1 to 60 characters. |
+| `themes[].overrides` | map of string | no |  | Worked-out colors replaced by name: text, accent, accentFg, second, secondFg, secondText, link, navLink, background, surface, nested, chrome, info, infoBorder, border, and for each button variant V (Secondary, Success, Danger, Warning, Info, Light, Dark) btnV, btnVFg and btnVText. Leaving one out puts the readable color back. |
+| `themes[].second` | string | yes |  | Says where you are: active nav item, headings, info. |
+| `themes[].surface` | string | no |  | Cards. Left out: the mode's own. |
+
+### admin_set_user_disabled
+
+Switch an account off (disabled: true) or back on (false). Disabling signs it out everywhere and voids its live login link; its API keys stop working while it is off. Reversible. The owner and your own account cannot be disabled.
+
+|  |  |
+|---|---|
+| Route | `POST /api/admin/users/{user_id}/disabled` |
+| Read only | no |
+| Destructive | no |
+
+**Arguments**
+
+| Field | Type | Required | Limits | Description |
+|---|---|---|---|---|
+| `disabled` | boolean | yes |  |  |
+| `user_id` | integer | yes | at least 1 | The account's id, from GET /api/admin/users (admin_list_users over MCP). |
+
+### admin_set_user_role
+
+Make an account an admin or an ordinary user. Only the owner takes an admin's rights away; the owner is always an admin, and nobody changes their own role. Becoming an admin ends the account's sessions and live login link.
+
+|  |  |
+|---|---|
+| Route | `POST /api/admin/users/{user_id}/role` |
+| Read only | no |
+| Destructive | no |
+
+**Arguments**
+
+| Field | Type | Required | Limits | Description |
+|---|---|---|---|---|
+| `role` | string | yes | one of `admin`, `user` |  |
+| `user_id` | integer | yes | at least 1 | The account's id, from GET /api/admin/users (admin_list_users over MCP). |
+
+### admin_switch_on_invite_link
+
+Undo admin_revoke_invite_link: anyone still holding the link can use it again. The link then counts as this key's: revoking the key switches it off.
+
+|  |  |
+|---|---|
+| Route | `POST /api/admin/invite-links/{link_id}/switch-on` |
+| Read only | no |
+| Destructive | no |
+
+**Arguments**
+
+| Field | Type | Required | Limits | Description |
+|---|---|---|---|---|
+| `link_id` | string | yes |  | The link's id, from GET /api/admin/invite-links (admin_list_invite_links over MCP). |
+
+### cancel_my_login_link
+
+Void your account's live login link without making a new one. Devices it already signed in stay signed in. Answers with removed: 0 or 1.
+
+|  |  |
+|---|---|
+| Route | `POST /api/account/login-link/cancel` |
+| Read only | no |
+| Destructive | yes |
+
+**Arguments**
+
+| Field | Type | Required | Limits | Description |
+|---|---|---|---|---|
+
+### create_my_login_link
+
+A link that signs your own account in on a browser or another device. Only a key with your account's full role may ask: one scoped down to user on an admin account is refused. Answers with login_url (open it to sign in), expires_at and max_uses. The link works once and expires within a day (links made with an API key are held to that; a browser can make longer or reusable ones). Any older link the account could still use stops working; its signed-in devices stay signed in. Revoking or deleting this API key voids the link while it is unused, and signs out every device it signed in.
+
+|  |  |
+|---|---|
+| Route | `POST /api/account/login-link` |
+| Read only | no |
+| Destructive | no |
+
+**Arguments**
+
+| Field | Type | Required | Limits | Description |
+|---|---|---|---|---|
+| `expires_in_minutes` | integer or null | no | 0 to 525600 | 0 never expires. Default auth.login_token_ttl_seconds for a link that works once, auth.multi_use_login_token_ttl_seconds otherwise. |
+| `max_uses` | integer or null | no | 0 to 1000 | Sign-ins the link allows: 1-1000, or 0 for unlimited. Default 1. |
+
+### label_my_session
+
+Give one of your devices a name (at most 80 characters; empty clears it). expect, when given, is the name you think it has now.
+
+|  |  |
+|---|---|
+| Route | `POST /api/account/sessions/{session_id}/label` |
+| Read only | no |
+| Destructive | no |
+
+**Arguments**
+
+| Field | Type | Required | Limits | Description |
+|---|---|---|---|---|
+| `expect` | string or null | no |  | The name you think it has. Answers 409 if it has another. |
+| `label` | string | yes | at most 80 characters | At most 80 characters. |
+| `session_id` | string | yes |  | The device's id, from GET /api/account/sessions or GET /api/admin/users/{user_id}/sessions (list_my_sessions or admin_list_user_sessions over MCP). |
+
+### list_my_sessions
+
+Where your account is signed in, a page at a time: id, when it started and was last seen, the browser, and the name you gave it. Through an API key no device is current. next is the offset of the following page, or null on the last one.
+
+|  |  |
+|---|---|
+| Route | `GET /api/account/sessions` |
+| Read only | yes |
+| Destructive | no |
+
+**Arguments**
+
+| Field | Type | Required | Limits | Description |
+|---|---|---|---|---|
+| `limit` | integer | no | 1 to 1000; default `200` | Rows to return. Default 200. |
+| `offset` | integer | no | at least 0 | Rows to skip: the next value of the previous page. |
+
+### list_team
+
+People with an active account, a page at a time: id and display name. Use the id wherever another tool asks for a user. next is the offset of the following page, or null on the last one.
+
+|  |  |
+|---|---|
+| Route | `GET /api/team` |
+| Read only | yes |
+| Destructive | no |
+
+**Arguments**
+
+| Field | Type | Required | Limits | Description |
+|---|---|---|---|---|
+| `limit` | integer | no | 1 to 1000; default `200` | Rows to return. Default 200. |
+| `offset` | integer | no | at least 0 | Rows to skip: the next value of the previous page. |
+
+### rename_account
+
+Change your own display name (1-80 characters). expect, when given, is the name you think it has now; if someone changed it meanwhile the rename is refused with the current name, so nothing is overwritten unseen.
+
+|  |  |
+|---|---|
+| Route | `POST /api/account/rename` |
+| Read only | no |
+| Destructive | no |
+
+**Arguments**
+
+| Field | Type | Required | Limits | Description |
+|---|---|---|---|---|
+| `display_name` | string | yes | 1 to 80 characters |  |
+| `expect` | string or null | no |  |  |
+
+### revoke_my_other_sessions
+
+End every session your account has: through an API key there is no current device to keep, so every browser signs in again. API keys keep working. Answers with how many were removed.
+
+|  |  |
+|---|---|
+| Route | `POST /api/account/sessions/revoke-others` |
+| Read only | no |
+| Destructive | yes |
+
+**Arguments**
+
+| Field | Type | Required | Limits | Description |
+|---|---|---|---|---|
+
+### revoke_my_session
+
+End one of your signed-in sessions; that browser has to sign in again.
+
+|  |  |
+|---|---|
+| Route | `POST /api/account/sessions/{session_id}/revoke` |
+| Read only | no |
+| Destructive | yes |
+
+**Arguments**
+
+| Field | Type | Required | Limits | Description |
+|---|---|---|---|---|
+| `session_id` | string | yes |  | The device's id, from GET /api/account/sessions or GET /api/admin/users/{user_id}/sessions (list_my_sessions or admin_list_user_sessions over MCP). |
+
+### set_shortcuts
+
+Replace your rebound keyboard shortcuts: action id to its list of keys, such as "undo": ["Mod+Z"] (Mod is Cmd on a Mac, Ctrl elsewhere). Send the whole map; an empty list switches an action's keys off, and {} puts every key back to its default. whoami shows the current map.
+
+|  |  |
+|---|---|
+| Route | `POST /api/account/shortcuts` |
+| Read only | no |
+| Destructive | no |
+
+**Arguments**
+
+| Field | Type | Required | Limits | Description |
+|---|---|---|---|---|
+| `shortcuts` | map of array of string | yes |  | Action id to the keys bound to it. Replaces the whole map; {} puts every key back to its default. Action ids the screens do not know are ignored. |
+
+### set_theme
+
+Switch to another theme from your list (or the defaults), by its id.
+
+|  |  |
+|---|---|
+| Route | `POST /api/account/theme` |
+| Read only | no |
+| Destructive | no |
+
+**Arguments**
+
+| Field | Type | Required | Limits | Description |
+|---|---|---|---|---|
+| `theme_id` | string | yes |  | A theme's id. Empty for the first in the list. |
+
+### set_themes
+
+Replace your whole list of color themes (1 to 40) and pick the one you use. themes: null goes back to following the app's defaults. A theme is the Theme schema in the API reference (config/openapi.json): id, name, mode light|dark, accent, second, and optional colors as #rrggbb. whoami shows the current list.
+
+|  |  |
+|---|---|
+| Route | `POST /api/account/themes` |
+| Read only | no |
+| Destructive | no |
+
+**Arguments**
+
+| Field | Type | Required | Limits | Description |
+|---|---|---|---|---|
+| `theme_id` | string | no |  | The theme you use. |
+| `themes` | array of object or null | no |  | Your whole list, 1 to 40 themes. null goes back to following the app's defaults. |
+| `themes[].accent` | string | yes |  | The main color: what you can press. |
+| `themes[].background` | string | no |  | The page. Left out: the mode's own. |
+| `themes[].button` | object or null | no |  | How the theme's buttons look. A choice left out is the default (rounded, normal, raised, normal). |
+| `themes[].button.case` | string | no | one of `normal`, `upper` |  |
+| `themes[].button.depth` | string | no | one of `flat`, `raised`, `glossy` |  |
+| `themes[].button.shape` | string | no | one of `square`, `soft`, `rounded`, `pill` |  |
+| `themes[].button.weight` | string | no | one of `normal`, `medium`, `bold` |  |
+| `themes[].dark` | object or null | no |  | A light theme's colors for dark mode, kept while it is light. Switching the theme to dark swaps them in. A light theme's light (or a dark theme's dark) is dropped. |
+| `themes[].dark.accent` | string | yes |  | The main color: what you can press. |
+| `themes[].dark.background` | string | no |  | The page. Left out: the mode's own. |
+| `themes[].dark.overrides` | map of string | no |  | Worked-out colors replaced by name: text, accent, accentFg, second, secondFg, secondText, link, navLink, background, surface, nested, chrome, info, infoBorder, border, and for each button variant V (Secondary, Success, Danger, Warning, Info, Light, Dark) btnV, btnVFg and btnVText. Leaving one out puts the readable color back. |
+| `themes[].dark.second` | string | yes |  | Says where you are: active nav item, headings, info. |
+| `themes[].dark.surface` | string | no |  | Cards. Left out: the mode's own. |
+| `themes[].id` | string | yes |  | Lower-case letters, digits, - and _, up to 32. |
+| `themes[].light` | object or null | no |  | A dark theme's colors for light mode, kept while it is dark. Switching the theme to light swaps them in. |
+| `themes[].light.accent` | string | yes |  | The main color: what you can press. |
+| `themes[].light.background` | string | no |  | The page. Left out: the mode's own. |
+| `themes[].light.overrides` | map of string | no |  | Worked-out colors replaced by name: text, accent, accentFg, second, secondFg, secondText, link, navLink, background, surface, nested, chrome, info, infoBorder, border, and for each button variant V (Secondary, Success, Danger, Warning, Info, Light, Dark) btnV, btnVFg and btnVText. Leaving one out puts the readable color back. |
+| `themes[].light.second` | string | yes |  | Says where you are: active nav item, headings, info. |
+| `themes[].light.surface` | string | no |  | Cards. Left out: the mode's own. |
+| `themes[].mode` | string | yes | one of `light`, `dark` |  |
+| `themes[].name` | string | yes |  | 1 to 60 characters. |
+| `themes[].overrides` | map of string | no |  | Worked-out colors replaced by name: text, accent, accentFg, second, secondFg, secondText, link, navLink, background, surface, nested, chrome, info, infoBorder, border, and for each button variant V (Secondary, Success, Danger, Warning, Info, Light, Dark) btnV, btnVFg and btnVText. Leaving one out puts the readable color back. |
+| `themes[].second` | string | yes |  | Says where you are: active nav item, headings, info. |
+| `themes[].surface` | string | no |  | Cards. Left out: the mode's own. |
+
+### whoami
+
+The account this API key belongs to, the role it acts with (role -- never higher than the key's own scope), and the account's own role.
+
+|  |  |
+|---|---|
+| Route | `GET /api/me` |
+| Read only | yes |
+| Destructive | no |
+
+**Arguments**
+
+| Field | Type | Required | Limits | Description |
+|---|---|---|---|---|
 
 ### list_batches
 
