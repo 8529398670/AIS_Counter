@@ -206,7 +206,7 @@ the start of an AIS gives the original's trace and length. **Enter** accepts,
   at the end nearer a soma and filters by that distance. Manual clicking
   works as on a TIFF pair; lengths still come from the unchanged
   `ais_auto.m` port. The reader (`app/analysis/czi.py`) is pure numpy and
-  takes uncompressed single-plane files.
+  takes uncompressed files: one plane, or a Z-stack (below).
 - **Channel roles.** Adding files with more than one colour channel (a `.czi`,
   a colour TIFF, Z-stack slices) asks, for each channel layout found, which
   channel is the *AIS*, which the *Soma/dendrite* stain (where auto mode starts
@@ -228,6 +228,15 @@ the start of an AIS gives the original's trace and length. **Enter** accepts,
   bottom of the image shows one slice at a time, with the part of each trace at
   that depth in pink. **Compare 3D with XY length, not with `length_um`**, and
   note these lengths have not yet been checked against AIS measured by hand.
+  A `.czi` with more than one slice is a Z-stack too: its z step and pixel
+  size come from the file, its channels are read at 12 bits with Alexa Fluor
+  488 picked, and an ApoTome file's grid images are made into *sectioned*
+  (default) or *widefield* slices, asked when adding. Settings' Z method
+  *Trace, lift to Z, ends from the slices* finds the AIS ends on the 3D route
+  instead of the projection. See `docs/z-stack.md`.
+- **Large files.** An upload is written to disk as it arrives, up to
+  `server.upload_limit_bytes` (1 GiB by default; a `.czi` Z-stack is about
+  300 MB). A reverse proxy in front needs its own limit raised to match.
   See [docs/z-stack.md](docs/z-stack.md).
 - **Edit and Delete.** Tools at the top of the image (T / E / X) act on
   any trace, saved or pink.

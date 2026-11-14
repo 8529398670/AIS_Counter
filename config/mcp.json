@@ -1422,6 +1422,19 @@
             },
             "type": "array"
           },
+          "czi_stack": {
+            "description": "Z-stack .czi files (files with zstack) become one image each: {apotome: sectioned (default) | widefield}, how an ApoTome stack's grid phases are made into slices. Their AIS channel is guessed (Alexa Fluor 488) unless channels says.",
+            "properties": {
+              "apotome": {
+                "enum": [
+                  "sectioned",
+                  "widefield"
+                ],
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
           "files": {
             "description": "The files, hashed on your side: name and rel (path inside the picked folder) as they are, sha256 of the bytes, size in bytes.",
             "items": {
@@ -1445,6 +1458,10 @@
                 },
                 "size": {
                   "type": "integer"
+                },
+                "zstack": {
+                  "description": "A .czi with more than one Z plane (a Z-stack): {slices, phases (ApoTome grid phases, 1 without), z_step_um, pixel_um} from its metadata (Scaling X and Z, in microns). Needs layout.",
+                  "type": "object"
                 }
               },
               "required": [
@@ -1465,7 +1482,7 @@
             "type": "boolean"
           },
           "stack": {
-            "description": "Z-stack slices (name_zNNN.tif) become one image each stack: {plane: 0 red | 1 green | 2 blue | 3, z_step_um, pixel_um}.",
+            "description": "Z-stack TIFF slices (name_zNNN.tif) become one image each stack: {plane: 0 red | 1 green | 2 blue | 3, z_step_um, pixel_um}.",
             "properties": {
               "pixel_um": {
                 "type": "number"
@@ -1540,6 +1557,19 @@
             },
             "type": "array"
           },
+          "czi_stack": {
+            "description": "Z-stack .czi files (files with zstack) become one image each: {apotome: sectioned (default) | widefield}, how an ApoTome stack's grid phases are made into slices. Their AIS channel is guessed (Alexa Fluor 488) unless channels says.",
+            "properties": {
+              "apotome": {
+                "enum": [
+                  "sectioned",
+                  "widefield"
+                ],
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
           "files": {
             "description": "The files, hashed on your side: name and rel (path inside the picked folder) as they are, sha256 of the bytes, size in bytes.",
             "items": {
@@ -1563,6 +1593,10 @@
                 },
                 "size": {
                   "type": "integer"
+                },
+                "zstack": {
+                  "description": "A .czi with more than one Z plane (a Z-stack): {slices, phases (ApoTome grid phases, 1 without), z_step_um, pixel_um} from its metadata (Scaling X and Z, in microns). Needs layout.",
+                  "type": "object"
                 }
               },
               "required": [
@@ -1580,7 +1614,7 @@
             "type": "boolean"
           },
           "stack": {
-            "description": "Z-stack slices (name_zNNN.tif) become one image each stack: {plane: 0 red | 1 green | 2 blue | 3, z_step_um, pixel_um}.",
+            "description": "Z-stack TIFF slices (name_zNNN.tif) become one image each stack: {plane: 0 red | 1 green | 2 blue | 3, z_step_um, pixel_um}.",
             "properties": {
               "pixel_um": {
                 "type": "number"

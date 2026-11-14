@@ -2,9 +2,10 @@
 on an image one POST that runs the ais_auto.m port (app/analysis/), and the
 accepted AIS stored with their batch (app/models/ais.py).
 
-Uploads are a file's raw bytes (CSRF token in a header), or JSON like every
-other POST here (base64 file + CSRF token), with a larger body limit on that
-one route; a TIFF pair is ~6 MB. A batch is created
+Uploads are a file's raw bytes (CSRF token in a header), streamed to disk as
+they come, up to server.upload_limit_bytes (a .czi Z-stack is ~300 MB); or
+JSON like every other POST here (base64 file + CSRF token), up to
+JSON_LIMIT_BYTES, as it is read whole. A TIFF pair is ~6 MB. A batch is created
 from names and sha-256s alone (the browser hashes its files first), so the
 duplicates and the shareable link exist before a single file is uploaded.
 """
@@ -16,7 +17,7 @@ import math
 from typing import Any, Callable
 
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
+from starlette.responses import FileResponse, JSONResponse, Response
 
 from app.analysis import ais_auto as aa
 from app.analysis import detect as auto
@@ -32,7 +33,10 @@ from app.models import ais as batches
 from app.models import users
 from app.routes.helpers import bad_request, conflict, error, forbidden, get_config, get_store, not_found, parse_id, read_json, run
 
-UPLOAD_LIMIT_BYTES = 64 * 1024 * 1024
+# JSON bodies larger than the usual 1 MiB, each read whole: a batch's file
+# list, a backup's record, results to import, a base64 upload.
+JSON_LIMIT_BYTES = 64 * 1024 * 1024
+UPLOAD_CHUNK = 1024 * 1024
 MAX_IMPORT_SHAS = 200_000
 
 
@@ -71,12 +75,35 @@ def _stale(exc: batches.RevConflict) -> Response:
 async def upload(request: Request) -> Response:
     """The file's bytes as application/octet-stream with the CSRF token in
     X-CSRF-Token (what the page sends: no base64, no JSON parse of a 6 MB
-    string), or JSON {data: base64} like every other POST."""
+    string), written to disk as they arrive (Library.receive); or JSON
+    {data: base64} like every other POST, up to JSON_LIMIT_BYTES."""
+    library = _library(request)
     if request.headers.get("content-type", "").split(";")[0].strip() == "application/octet-stream":
         if not check_csrf(request, request.headers.get("x-csrf-token")):
             return forbidden("invalid csrf token")
-        raw = await request.body()
+        incoming = await run(library.receive)
+        try:
+            pending: list[bytes] = []
+            held = 0
+            async for chunk in request.stream():
+                pending.append(chunk)
+                held += len(chunk)
+                if held >= UPLOAD_CHUNK:
+                    await run(incoming.write, b"".join(pending))
+                    pending, held = [], 0
+            if pending:
+                await run(incoming.write, b"".join(pending))
+            info = await run(incoming.finish)
+        except ImageError as exc:
+            return bad_request(str(exc))
+        finally:
+            # A 413 or a dropped connection leaves no half-written file.
+            await run(incoming.abort)
+        return JSONResponse(info)
     else:
+        length = request.headers.get("content-length", "")
+        if not length.isdigit() or int(length) > JSON_LIMIT_BYTES:
+            return error(413, f"send a file over {JSON_LIMIT_BYTES // 2**20} MiB as application/octet-stream")
         body, refused = await _body(request)
         if refused:
             return refused
@@ -88,7 +115,7 @@ async def upload(request: Request) -> Response:
         except (binascii.Error, ValueError):
             return bad_request("data must be a base64 string")
     try:
-        info = await run(_library(request).add, raw)
+        info = await run(library.add, raw)
     except ImageError as exc:
         return bad_request(str(exc))
     return JSONResponse(info)
@@ -248,11 +275,11 @@ async def file_bytes(request: Request) -> Response:
     """The stored file itself (a .czi or TIFF as it was added), for exports."""
     try:
         path = await run(_library(request).file_path, request.path_params["sha"])
-        data = await run(path.read_bytes)
     except ImageError as exc:
         return _unshown(exc)
     kind = "image/tiff" if path.suffix.lower() in (".tif", ".tiff") else "application/octet-stream"
-    return Response(data, media_type=kind, headers={"Cache-Control": "private, max-age=86400"})
+    # Streamed from disk: a Z-stack .czi is ~300 MB.
+    return FileResponse(path, media_type=kind, headers={"Cache-Control": "private, max-age=86400"})
 
 
 async def processed_tif(request: Request) -> Response:
@@ -759,7 +786,7 @@ async def batch_add(request: Request) -> Response:
         batch = await run(batches.add_files, get_store(request), batch_id, "upload", body.get("files"),
                           randomize_names=_randomize(body), user_id=_user_id(request), name=_add_name(body),
                           translations=body.get("translations"), stack=body.get("stack"),
-                          channel_roles=body.get("channels"))
+                          channel_roles=body.get("channels"), czi_stack=body.get("czi_stack"))
     except batches.BatchError as exc:
         return bad_request(str(exc))
     if batch is None:
@@ -1237,7 +1264,7 @@ async def batch_upload(request: Request) -> Response:
         batch = await run(batches.create_batch, get_store(request), body.get("name"), "upload",
                           body.get("files"), _user_id(request), randomize_names=_randomize(body),
                           translations=body.get("translations"), stack=body.get("stack"),
-                          channel_roles=body.get("channels"))
+                          channel_roles=body.get("channels"), czi_stack=body.get("czi_stack"))
     except batches.BatchError as exc:
         return bad_request(str(exc))
     return JSONResponse(await run(_batch_json, request, batch))
@@ -1675,12 +1702,14 @@ async def local_list(request: Request) -> Response:
 
 async def local_stacks(request: Request) -> Response:
     """Body: {path}. The Z-stacks under a folder, by name, for the Add dialog
-    to ask about before the server hashes anything."""
+    to ask about before the server hashes anything: TIFF slices (stacks) and
+    .czi files (czi_stacks)."""
     body, refused = await _local_body(request)
     if refused:
         return refused
     try:
-        return JSONResponse({"stacks": await run(local.stacks_under, body.get("path"))})
+        return JSONResponse({"stacks": await run(local.stacks_under, body.get("path")),
+                             "czi_stacks": await run(local.czi_stacks_under, body.get("path"))})
     except ImageError as exc:
         return bad_request(str(exc))
 
@@ -1708,7 +1737,7 @@ def _hashed(body: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
 def _path_name(folder: str, body: dict[str, Any]) -> str:
     """What an Open-path add is called: its folder, unless that is a blinded
     stack's folder, which would say what it is."""
-    if body.get("stack") is not None and _randomize(body):
+    if (body.get("stack") is not None or body.get("czi_stack") is not None) and _randomize(body):
         return "Z-stacks"
     return folder.rstrip("/\\").replace("\\", "/").split("/")[-1] or folder
 
@@ -1724,7 +1753,7 @@ async def batch_path(request: Request) -> Response:
         translations = await run(local.translations_under, folder)
         batch = await run(batches.create_batch, get_store(request), name, "path", files, _user_id(request), folder,
                           randomize_names=_randomize(body), translations=translations, stack=body.get("stack"),
-                                  channel_roles=body.get("channels"))
+                                  channel_roles=body.get("channels"), czi_stack=body.get("czi_stack"))
     except (ImageError, batches.BatchError) as exc:
         return bad_request(str(exc))
     return JSONResponse(await run(_batch_json, request, batch))
@@ -1745,7 +1774,7 @@ async def batch_add_path(request: Request) -> Response:
         batch = await run(batches.add_files, get_store(request), batch_id, "path", files, folder,
                           randomize_names=_randomize(body), user_id=_user_id(request), name=name,
                           translations=translations, stack=body.get("stack"),
-                          channel_roles=body.get("channels"))
+                          channel_roles=body.get("channels"), czi_stack=body.get("czi_stack"))
     except (ImageError, batches.BatchError) as exc:
         return bad_request(str(exc))
     if batch is None:

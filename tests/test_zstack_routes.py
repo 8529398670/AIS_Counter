@@ -166,7 +166,8 @@ def test_the_channels_dialog_shows_and_corrects_a_stack_s_calibration(h):
     batch = added(h, ann, randomize=False)
     path = f"/api/ais/batches/{batch['id']}/layouts"
     shown = json.loads(h.get("GET", path, session=ann).data)
-    assert shown["stacks"] == {"count": 1, "z_step_um": STACK["z_step_um"], "pixel_um": STACK["pixel_um"], "mixed": False}
+    assert shown["stacks"] == {"count": 1, "z_step_um": STACK["z_step_um"], "pixel_um": STACK["pixel_um"], "mixed": False,
+                               "from_file": 0}
     saved = post(h, path, ann, channels=[], stack={"z_step_um": 0.25, "pixel_um": 0.2})
     assert saved.status == 200, saved.data
     out = json.loads(saved.data)

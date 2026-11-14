@@ -9,16 +9,18 @@ TIFF (or .czi) in its default app. Only those are ever read, opened or revealed.
 from __future__ import annotations
 
 import hashlib
+import mmap
 import os
 import re
 import subprocess
 import sys
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from app.analysis import channels, zstack
-from app.analysis.czi import is_czi, read_channels
+from app.analysis.czi import is_czi, read_channels, read_header
 from app.analysis.images import ImageError, tiff_names
 
 TIFF_SUFFIXES = (".tif", ".tiff", ".czi")   # the images: TIFFs and CZI mode's .czi
@@ -156,6 +158,65 @@ def _dates(path: Path) -> dict[str, str]:
     return out
 
 
+CHUNK = 1024 * 1024
+
+
+@contextmanager
+def _contents(path: Path) -> Iterator[Any]:
+    """A file's bytes: a mmap for a .czi, which can be a 300 MB Z-stack and is
+    read here only for its header; read whole for a TIFF."""
+    if path.suffix.lower() != ".czi":
+        yield path.read_bytes()
+        return
+    with path.open("rb") as f:
+        if os.fstat(f.fileno()).st_size == 0:
+            yield b""
+            return
+        with mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as data:
+            yield data
+
+
+def _sha256(path: Path) -> tuple[str, int]:
+    found, size = hashlib.sha256(), 0
+    with path.open("rb") as f:
+        while chunk := f.read(CHUNK):
+            found.update(chunk)
+            size += len(chunk)
+    return found.hexdigest(), size
+
+
+def czi_stack_of(data: Any) -> dict[str, Any] | None:
+    """What a Z-stack .czi says of itself (zstack.clean_czi_header's fields),
+    as the page reads it too; None for anything else."""
+    if not is_czi(data):
+        return None
+    try:
+        header = read_header(data)
+    except ImageError:
+        return None
+    if header.slices < zstack.MIN_SLICES:
+        return None
+    return {"slices": header.slices, "phases": header.phases, "z_step_um": header.z_step_um,
+            "pixel_um": header.pixel_um}
+
+
+def czi_stacks_under(raw: Any) -> list[dict[str, Any]]:
+    """The Z-stack .czi files in the folder and its subfolders, [{cell,
+    slices, phases, z_step_um, pixel_um}], from their headers alone."""
+    found = []
+    for path in images_under(folder(raw)):
+        if path.suffix.lower() != ".czi":
+            continue
+        try:
+            with _contents(path) as data:
+                header = czi_stack_of(data)
+        except OSError:
+            continue
+        if header:
+            found.append({"cell": path.stem} | header)
+    return found
+
+
 def layout_of(data: bytes) -> tuple[dict[str, Any], list[str] | None] | None:
     """(layout, colors) of a file's bytes (channels.py), colors for a .czi
     alone; None when it can't be read."""
@@ -177,10 +238,10 @@ def layouts_under(raw: Any) -> list[dict[str, Any]]:
     found, slices = [], []
     for path in images_under(folder(raw)):
         try:
-            data = path.read_bytes()
+            with _contents(path) as data:
+                layout = layout_of(data)
         except OSError:
             continue
-        layout = layout_of(data)
         if layout:
             found.append(layout)
             slices.append(zstack.parse(path.name) is not None)
@@ -192,22 +253,26 @@ def layouts_under(raw: Any) -> list[dict[str, Any]]:
 
 def hashed_files(raw: Any) -> tuple[str, list[dict[str, Any]]]:
     """The folder's images, subfolders too, with the sha-256 of each, for an
-    Open-path batch: (folder, [{name, rel, sha, size, path}]). rel starts with
+    Open-path batch: (folder, [{name, rel, sha, size, path}]), a Z-stack
+    .czi's with what it says of itself (zstack). rel starts with
     the folder's own name, as a browser's folder pick does, so subfolders
     group the same way (app/models/ais.group)."""
     base = folder(raw)
     files = []
     for path in images_under(base):
         try:
-            data = path.read_bytes()
+            sha, size = _sha256(path)
+            with _contents(path) as data:
+                layout = layout_of(data)
+                stack = czi_stack_of(data)
         except OSError:
             continue
         rel = "/".join((base.name or str(base), *path.relative_to(base).parts))
-        item = {"name": path.name, "rel": rel, "sha": hashlib.sha256(data).hexdigest(),
-                "size": len(data), "path": str(path)}
-        layout = layout_of(data)
+        item = {"name": path.name, "rel": rel, "sha": sha, "size": size, "path": str(path)}
         if layout:
             item["layout"] = layout[0]
+        if stack and layout:
+            item["zstack"] = stack
         item.update(_dates(path))
         files.append(item)
     return str(base), files

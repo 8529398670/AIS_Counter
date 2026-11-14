@@ -40,6 +40,7 @@ from app.analysis import auto_runner
 from app.mcp.registry import Call, Content, InvalidArguments, Refusal, Registry, Tool
 from app.models import ais as batches
 from app.routes import ais
+from app.routes.helpers import get_config
 
 # --- argument schemas ---------------------------------------------------------------
 
@@ -60,13 +61,16 @@ FILES = {"type": "array", "description": "The files, hashed on your side: name a
                    "properties": {"name": {"type": "string"}, "rel": {"type": "string"},
                                   "sha": {"type": "string", "description": "sha-256 of the file, lower-case hex."},
                                   "size": {"type": "integer"}, "modified": {"type": "number"},
-                                  "layout": {"type": "object", "description": "Its channels, for channels: {kind: czi | tiff, names: [...]} (a .czi's channel names; a TIFF's planes as Red/Green/Blue or Channel N)."}}}}
+                                  "layout": {"type": "object", "description": "Its channels, for channels: {kind: czi | tiff, names: [...]} (a .czi's channel names; a TIFF's planes as Red/Green/Blue or Channel N)."},
+                                  "zstack": {"type": "object", "description": "A .czi with more than one Z plane (a Z-stack): {slices, phases (ApoTome grid phases, 1 without), z_step_um, pixel_um} from its metadata (Scaling X and Z, in microns). Needs layout."}}}}
 TRANSLATIONS = {"type": "array", "description": "__Translation.txt files that came with them: [{dir, text}].",
                 "items": {"type": "object", "properties": {"dir": {"type": "string"}, "text": {"type": "string"}}}}
 CHANNELS = {"type": "array", "description": "Channel roles per layout: [{layout: {kind, names}, roles: [{role: ais | soma | other, label}]}], one role per channel, exactly one ais, at most one soma, a label for each other. Images whose file layout matches get them; left out, the AIS is guessed (a .czi's Alexa Fluor 488, a TIFF's first plane).",
             "items": {"type": "object", "properties": {"layout": {"type": "object"}, "roles": {"type": "array"}}}}
-STACK = {"type": "object", "description": "Z-stack slices (name_zNNN.tif) become one image each stack: {plane: 0 red | 1 green | 2 blue | 3, z_step_um, pixel_um}.",
+STACK = {"type": "object", "description": "Z-stack TIFF slices (name_zNNN.tif) become one image each stack: {plane: 0 red | 1 green | 2 blue | 3, z_step_um, pixel_um}.",
          "properties": {"plane": {"type": "integer"}, "z_step_um": {"type": "number"}, "pixel_um": {"type": "number"}}}
+CZI_STACK = {"type": "object", "description": "Z-stack .czi files (files with zstack) become one image each: {apotome: sectioned (default) | widefield}, how an ApoTome stack's grid phases are made into slices. Their AIS channel is guessed (Alexa Fluor 488) unless channels says.",
+             "properties": {"apotome": {"type": "string", "enum": ["sectioned", "widefield"]}}}
 RANDOMIZE = {"type": "boolean", "description": "Blind the names (default true): images get random n-n-n names, the originals kept for admins."}
 GENERAL = {"type": "object", "description": "Settings' general auto mode fields (see auto_defaults), e.g. {auto_method: 'fitted', fitted_min_length: 13}. Left out: the defaults."}
 SETTINGS = {"type": "object", "description": "The method settings (see auto_defaults: settings), e.g. {pixconv: 0.161}. Left out: the defaults."}
@@ -300,8 +304,8 @@ def _upload_recipe(call: Call) -> dict[str, Any]:
     url = base + "/api/ais/files"
     return {"url": url, "method": "POST",
             "headers": {"Authorization": "Bearer <your API key>", "Content-Type": "application/octet-stream"},
-            "body": "the file's raw bytes (up to 64 MiB)",
-            "answer": "{sha256, width, height, dtype, czi}: sha256 must be the one you listed",
+            "body": f"the file's raw bytes (up to {get_config(call.request).upload_limit_bytes // 2**20} MiB)",
+            "answer": "{sha256, width, height, dtype, czi, z?}: sha256 must be the one you listed",
             "curl": f"curl -sS -X POST {url} -H 'Authorization: Bearer $AIS_KEY' "
                     "-H 'Content-Type: application/octet-stream' --data-binary @<file>"}
 
@@ -509,13 +513,13 @@ def _specs() -> list[Spec]:
              "A new batch from files you hashed (name, rel, sha, size each), grouped into images as the browser does (<cell>.tif raw, '<cell>.tif - Processed method 2.5.tif' processed, .czi, *_zNNN.tif with stack). Duplicates start left out. Answers with the files the server still needs and how to upload them (POST each file's bytes to /api/ais/files with your API key).",
              ais.batch_upload, "/api/ais/batches/upload", "POST",
              props={"name": {"type": "string"}, "files": FILES, "randomize": RANDOMIZE, "translations": TRANSLATIONS,
-                    "stack": STACK, "channels": CHANNELS},
+                    "stack": STACK, "czi_stack": CZI_STACK, "channels": CHANNELS},
              required=("name", "files"), shape=_shape_created),
         Spec("add_files_to_batch", "Add files to a batch",
              "More files into an existing batch, as create_batch_from_files. add_name names this add (a folder name).",
              ais.batch_add, "/api/ais/batches/{batch_id}/upload", "POST",
              props=b | {"files": FILES, "randomize": RANDOMIZE, "add_name": {"type": "string"},
-                        "translations": TRANSLATIONS, "stack": STACK, "channels": CHANNELS},
+                        "translations": TRANSLATIONS, "stack": STACK, "czi_stack": CZI_STACK, "channels": CHANNELS},
              required=("batch_id", "files"), path_args=("batch_id",), shape=_shape_created),
         Spec("get_channel_layouts", "List a batch's channel layouts",
              "The channel layouts of a batch's images (or one add's): each with its channel names, how many images, the roles in use and how many already have results.",

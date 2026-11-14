@@ -22,7 +22,7 @@ from typing import Any
 from app.analysis import auto_params as ap
 from app.analysis import compare
 
-# AisExport.cols, zCols, autoCols, measureCols (static/js/ais_export.js).
+# AisExport.cols, zCols, zEndsCols, autoCols, measureCols (static/js/ais_export.js).
 COLS = ("batch_name", "batch_id", "image", "n", "file", "source", "length_um", "start_um", "end_um", "mid_um",
         "max_um", "arc_um", "threshold_initial", "threshold", "click_x", "click_y", "click2_x", "click2_y",
         "profile_points", "smooth", "pixconv", "f", "kernel", "sigma", "strel", "min_pixels", "max_path",
@@ -30,6 +30,9 @@ COLS = ("batch_name", "batch_id", "image", "n", "file", "source", "length_um", "
         "soma_ais_y", "soma_x", "soma_y", "origin", "accepted_at", "edited_at", "notes")
 Z_COLS = ("length_3d_um", "length_xy_um", "z_start", "z_end", "z_span_um", "z_step_um", "z_confidence", "z_clipped",
           "volume_voxel_um3", "volume_tube_um3", "soma_xy_um", "soma_dz_um", "z_method")
+# The AIS ends the "ends from the slices" z method found (zlength.lift_ends),
+# as profile points; only when a row has them.
+Z_ENDS_COLS = ("z_ais_start", "z_ais_end")
 AUTO_COLS = ("auto_method", "auto_review", "auto_start", "auto_min_length", "auto_min_length_shown",
              "auto_min_brightness", "auto_min_contrast", "auto_min_width", "auto_max_soma_gap", "auto_max_branchiness",
              "auto_min_score")
@@ -88,6 +91,8 @@ def image_state(image: dict[str, Any]) -> str:
 def cols_for(rows: list[dict[str, Any]]) -> tuple[str, ...]:
     """AisExport.colsFor: the Z and auto columns only when a row has them."""
     cols = COLS + Z_COLS if any(r.get("z_method") for r in rows) else COLS
+    if any(r.get("z_ais_start") is not None for r in rows):
+        cols = cols + Z_ENDS_COLS
     if any(r.get("auto_method") for r in rows):
         cols = cols + AUTO_COLS
     return cols

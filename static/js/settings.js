@@ -43,6 +43,7 @@ const Settings = {
   // can't be picked, until zlength.py has it and this says so.
   zMethods: [
     { id: "trace_lift" , ready: true },
+    { id: "lift_ends" , ready: true },
     { id: "end_clicks" , ready: false },
     { id: "volume_trace" , ready: false },
   ],

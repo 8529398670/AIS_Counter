@@ -25,6 +25,7 @@ const SLICE_COLOUR = "rgba(255, 60, 255, 1)";
 const Ais = {
   processedSuffix: ".tif - Processed method 2.5.tif",
   concurrency: 4,        // files hashed, uploaded or exported at once
+  bigFile: 128 * 1024 * 1024,   // hashed one at a time from this size: a .czi Z-stack is ~300 MB
   imageCache: new Map(),   // view.png URL -> { promise, img, decoded, bitmap, gamma }: the last few previews, decoded
   imageCacheSize: 12,    // the image on screen, the 6 preloaded around it, and a few just left
   preloadAtOnce: 2,      // previews downloaded side by side ahead of the arrow keys
@@ -368,6 +369,14 @@ const Ais = {
   // finds each File again: the server may have blinded its name. A folder
   // blinded by RandomNames.bat brings its __Translation.txt along:
   // translations, [{ dir , text }] with dir its folder as an image's dir.
+  // A Z-stack's slice numbers: its slices' z, or 1..count for a .czi, which
+  // is one file holding them all (app/analysis/zstack.py).
+  zList( entry ) {
+    const z = entry.z_stack || {};
+    if ( z.source === "czi" ) return Array.from( { length: z.count } , ( _ , i ) => i + 1 );
+    return entry.files.stack.slices.map( ( f ) => f.z );
+  },
+
   // A picked file's path from the folder picked ("folder/sub/a.czi"), or ""
   // for a loose file: the folder picker's webkitRelativePath, or the path
   // Batches.withPath gave one read from a folder chooser or a drop.
@@ -389,8 +398,10 @@ const Ais = {
     const found = new Array( files.length );
     const bySha = new Map();
     let done = 0;
-    // A few at a time: reading one file while another hashes.
-    await this.pool( files , this.concurrency , async ( f , i ) => {
+    // A few at a time: reading one file while another hashes. Each is read
+    // whole (crypto.subtle has no streaming digest), so big ones take turns.
+    let big = Promise.resolve();
+    const one = async ( f , i ) => {
       const buffer = await f.arrayBuffer();
       const digest = await crypto.subtle.digest( "SHA-256" , buffer );
       const sha = Array.from( new Uint8Array( digest ) , ( b ) => b.toString( 16 ).padStart( 2 , "0" ) ).join( "" );
@@ -401,14 +412,23 @@ const Ais = {
       if ( read ) {
         described[ i ].layout = read.layout;
         found[ i ] = { layout: read.layout , colors: read.colors , stack: this.stackRe.test( f.name ) };
+        // A Z-stack .czi: one image of its slices (app/models/ais._czi_stack_image).
+        if ( read.zstack ) described[ i ].zstack = read.zstack;
       }
       if ( f.lastModified ) described[ i ].modified = new Date( f.lastModified ).toISOString();
       bySha.set( sha , f );
       done += 1;
       onProgress( done , files.length );
+    };
+    await this.pool( files , this.concurrency , ( f , i ) => {
+      if ( f.size < this.bigFile ) return one( f , i );
+      const turn = big.then( () => one( f , i ) );
+      big = turn.catch( () => {} );
+      return turn;
     } );
+    const cziStacks = described.filter( ( d ) => d.zstack ).map( ( d ) => Object.assign( { cell: d.name.replace( /\.czi$/i , "" ) } , d.zstack ) );
     return { name: root || I18n.get( "ais.loose_files" ) || "Files" , files: described , bySha: bySha , translations: translations ,
-      layouts: Channels.summarize( found.filter( Boolean ) ) };
+      layouts: Channels.summarize( found.filter( Boolean ) ) , cziStacks: cziStacks };
   },
 
   // Open folder / Open files: hash every image, create the batch from names
@@ -1308,7 +1328,7 @@ const Ais = {
         src: "/api/ais/files/" + this.sha( entry , "raw" ) + "/view.png" } ];
     } else if ( this.kind( entry ) === "stack" ) {
       // The Z slider's, not buttons of their own (renderViews).
-      list = entry.files.stack.slices.map( ( f , i ) => ( { key: "z" + i , name: "z" + f.z , label: String( f.z ) , color: "#ffffff" ,
+      list = this.zList( entry ).map( ( z , i ) => ( { key: "z" + i , name: "z" + z , label: String( z ) , color: "#ffffff" ,
         slice: true , src: "/api/ais/files/" + this.sha( entry ) + "/slice/" + i + ".png" } ) );
     }
     if ( this.index !== index ) return;
@@ -2034,7 +2054,8 @@ const Ais = {
     Dom.clear( notes );
     ( r.notes || [] ).forEach( ( note ) => notes.appendChild( Dom.el( "li" , { text: note } ) ) );
     if ( z && z.z_clipped ) notes.appendChild( Dom.el( "li" , { text: I18n.get( "ais.z_clipped" ) } ) );
-    this.renderProfile( r.profile );
+    // "Ends from the slices" found the ends on the 3D route's profile: that one.
+    this.renderProfile( z && z.z_profile && r.profile ? Object.assign( {} , r.profile , z.z_profile ) : r.profile );
     Dom.get( "ais-accept" ).disabled = !( r.ok && !waitingForSecond );
     Dom.text( Dom.get( "ais-accept" ).querySelector( "span" ) , I18n.get( this.editing ? "ais.update" : "ais.accept" ) );
     Dom.get( "ais-replay" ).disabled = !( r.path && !waitingForSecond );

@@ -19,6 +19,8 @@ const AisExport = {
   // and only when there are such rows (colsFor).
   zCols: [ "length_3d_um" , "length_xy_um" , "z_start" , "z_end" , "z_span_um" , "z_step_um" , "z_confidence" , "z_clipped" ,
     "volume_voxel_um3" , "volume_tube_um3" , "soma_xy_um" , "soma_dz_um" , "z_method" ],
+  // The AIS ends "ends from the slices" found (zlength.lift_ends), when a row has them.
+  zEndsCols: [ "z_ais_start" , "z_ais_end" ],
   // The auto mode settings a row auto mode saved was found with (ais_auto.js
   // autoFields), after those, and only when there are such rows (colsFor).
   autoCols: [ "auto_method" , "auto_review" , "auto_start" , "auto_min_length" , "auto_min_length_shown" ,
@@ -197,6 +199,7 @@ const AisExport = {
 
   colsFor( rows ) {
     let cols = rows.some( ( row ) => row.z_method ) ? this.cols.concat( this.zCols ) : this.cols;
+    if ( rows.some( ( row ) => row.z_ais_start != null ) ) cols = cols.concat( this.zEndsCols );
     if ( rows.some( ( row ) => row.auto_method ) ) cols = cols.concat( this.autoCols );
     return cols;
   },
@@ -479,7 +482,8 @@ const AisExport = {
         if ( !stored.has( f.sha ) ) {
           absent.add( f.sha );
         } else {
-          entries.set( "files/" + f.sha + ( role === "czi" ? ".czi" : ".tif" ) , "/api/ais/files/" + f.sha + "/file" );
+          const czi = role === "czi" || ( image.z_stack && image.z_stack.source === "czi" );
+          entries.set( "files/" + f.sha + ( czi ? ".czi" : ".tif" ) , "/api/ais/files/" + f.sha + "/file" );
         }
       } );
     } ) ) );
@@ -542,7 +546,12 @@ const AisExport = {
     if ( f.stack ) {
       // Named from the image, as a blinded stack's slices come without theirs.
       if ( opts.originals ) {
-        f.stack.slices.forEach( ( s ) => file( "originals" , { name: image.cell + "_z" + String( s.z ).padStart( 3 , "0" ) + ".tif" , sha: s.sha , size: s.size } ) );
+        if ( image.z_stack && image.z_stack.source === "czi" ) {
+          // One .czi holds every slice.
+          f.stack.slices.forEach( ( s ) => file( "originals" , { name: image.cell + ".czi" , sha: s.sha , size: s.size } ) );
+        } else {
+          f.stack.slices.forEach( ( s ) => file( "originals" , { name: image.cell + "_z" + String( s.z ).padStart( 3 , "0" ) + ".tif" , sha: s.sha , size: s.size } ) );
+        }
       }
       if ( opts.originalsPng ) png( "originals_png" , image.cell + ".png" , url( f.stack.sha , "composite.png" ) );
       if ( opts.processedPng ) png( "processed_png" , image.cell + "_processed.png" , url( f.stack.sha , "view.png" ) );

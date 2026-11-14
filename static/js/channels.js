@@ -65,6 +65,8 @@ const Channels = {
 
   // As app/analysis/czi.py read_channels: the channels are the C starts of
   // the directory's entries, named from the metadata, each with ZEN's colour.
+  // A Z-stack's (Z starts > 1) also says so, as local.czi_stack_of does:
+  // zstack: { slices , phases (ApoTome's H starts) , z_step_um , pixel_um }.
   readCzi( view ) {
     const directory = Number( view.getBigInt64( 32 + 52 , true ) );
     const metadata = Number( view.getBigInt64( 32 + 60 , true ) );
@@ -73,16 +75,27 @@ const Channels = {
     const count = view.getInt32( pos , true );
     pos += 128;
     const starts = new Set();
+    const zs = new Set();
+    const hs = new Set();
     for ( let e = 0; e < count; e += 1 ) {
       if ( this.ascii( view , pos , 2 ) !== "DV" ) return null;
       const pyramid = view.getUint8( pos + 22 );
       const ndims = view.getInt32( pos + 28 , true );
       let c = 0;
+      let z = 0;
+      let h = 0;
       for ( let d = 0; d < ndims; d += 1 ) {
         const at = pos + 32 + d * 20;
-        if ( this.ascii( view , at , 4 ) === "C" ) c = view.getInt32( at + 4 , true );
+        const dim = this.ascii( view , at , 4 );
+        if ( dim === "C" ) c = view.getInt32( at + 4 , true );
+        if ( dim === "Z" ) z = view.getInt32( at + 4 , true );
+        if ( dim === "H" ) h = view.getInt32( at + 4 , true );
       }
-      if ( pyramid === 0 ) starts.add( c );
+      if ( pyramid === 0 ) {
+        starts.add( c );
+        zs.add( z );
+        hs.add( h );
+      }
       pos += 32 + ndims * 20;
     }
     const n = starts.size;
@@ -107,7 +120,19 @@ const Channels = {
       } );
     }
     const colors = names.map( ( name , i ) => found[ name ] || this.fallbackColors[ i % this.fallbackColors.length ] );
-    return { layout: { kind: "czi" , names: names } , colors: colors };
+    const out = { layout: { kind: "czi" , names: names } , colors: colors };
+    if ( zs.size > 1 ) {
+      out.zstack = { slices: zs.size , phases: hs.size , z_step_um: this.scaling( xml , "Z" ) , pixel_um: this.scaling( xml , "X" ) };
+    }
+    return out;
+  },
+
+  // A CZI's Scaling for one axis in microns (it records metres), or null.
+  scaling( xml , axis ) {
+    if ( !xml ) return null;
+    const item = Array.from( xml.querySelectorAll( "Scaling > Items > Distance" ) ).find( ( d ) => d.getAttribute( "Id" ) === axis );
+    const value = item ? Number( ( ( item.querySelector( ":scope > Value" ) || {} ).textContent || "" ).trim() ) * 1e6 : NaN;
+    return Number.isFinite( value ) && value > 0 ? value : null;
   },
 
   // As app/analysis/images.py tiff_names: the first page's samples.
@@ -175,28 +200,43 @@ const Channels = {
 
   // --- the dialog ----------------------------------------------------------------
 
-  // Adding images: { layouts (summarize's) , stacks: [{ cell , slices }] } ->
-  // { channels , stack } or null when the person backs out. Not asked (and
-  // { channels: [] , stack: null } answered) when there is nothing to ask.
-  ask( layouts , stacks ) {
+  // Adding images: { layouts (summarize's) , stacks: [{ cell , slices }] of
+  // TIFF slices , cziStacks: [{ cell , slices , phases , z_step_um , pixel_um }]
+  // of Z-stack .czi files } -> { channels , stack , czi_stack } or null when
+  // the person backs out. Not asked (and { channels: [] , stack: null ,
+  // czi_stack: null } answered) when there is nothing to ask. A .czi stack's
+  // channels keep the usual guess (Alexa Fluor 488), as its are named.
+  ask( layouts , stacks , cziStacks = [] ) {
     const choosable = this.choosable( layouts ).map( ( o ) => Object.assign( {} , o , {
       // Slices of Z-stacks alone: no guess, as their merged export's AIS is
       // as often green as red. The person picks.
       roles: o.stacks && o.stacks === o.count && o.layout.kind === "tiff"
         ? o.layout.names.map( ( name ) => ( { role: "other" , label: name } ) ) : o.roles,
     } ) );
-    if ( !choosable.length && !stacks.length ) return Promise.resolve( { channels: [] , stack: null } );
+    if ( !choosable.length && !stacks.length && !cziStacks.length ) {
+      return Promise.resolve( { channels: [] , stack: null , czi_stack: null } );
+    }
     const found = [];
     if ( choosable.length ) found.push( I18n.get( "channels.found" ) );
     if ( stacks.length ) {
       found.push( I18n.get( "batches.stack_found" ).replace( "{count}" , stacks.length )
         .replace( "{slices}" , stacks.map( ( s ) => s.slices ).join( ", " ) ) );
     }
+    // A .czi that doesn't record its calibration takes the fields TIFF
+    // slices use (app/models/ais._czi_stack_image).
+    const uncalibrated = cziStacks.filter( ( s ) => !s.z_step_um || !s.pixel_um ).length;
+    if ( cziStacks.length ) {
+      found.push( I18n.get( "batches.czi_stack_found" ).replace( "{count}" , cziStacks.length )
+        .replace( "{slices}" , cziStacks.map( ( s ) => s.slices ).join( ", " ) ) );
+      if ( uncalibrated ) found.push( I18n.get( "batches.czi_stack_uncalibrated" ).replace( "{n}" , uncalibrated ) );
+    }
     return this.open( {
-      title: I18n.get( stacks.length && !choosable.length ? "batches.stack_title" : "channels.title" ),
+      title: I18n.get( ( stacks.length || cziStacks.length ) && !choosable.length ? "batches.stack_title" : "channels.title" ),
       found: found.join( " " ),
       layouts: choosable,
-      stacks: stacks.length > 0,
+      stacks: stacks.length > 0 || uncalibrated > 0,
+      apotome: cziStacks.some( ( s ) => s.phases > 1 ),
+      cziStacks: cziStacks.length > 0,
       submit: I18n.get( "batches.stack_add" ),
       warning: "",
     } );
@@ -219,6 +259,7 @@ const Channels = {
     const notes = [];
     if ( out.unread ) notes.push( I18n.get( "channels.unread" ).replace( "{n}" , out.unread ) );
     if ( stacks ) notes.push( I18n.get( stacks.mixed ? "channels.stack_mixed" : "channels.stack_edit" ).replace( "{n}" , stacks.count ) );
+    if ( stacks && stacks.from_file ) notes.push( I18n.get( "channels.stack_from_file" ).replace( "{n}" , stacks.from_file ) );
     const pixel = out.pixel || null;
     if ( pixel && pixel.mixed ) notes.push( I18n.get( "channels.pixel_mixed" ).replace( "{n}" , pixel.count ) );
     const chosen = await this.open( {
@@ -256,6 +297,10 @@ const Channels = {
       Dom.get( "batches-stack-pixel" ).value = known ? known.pixel_um : Settings.methods[ 0 ].defaults.pixconv;
       if ( known ) Dom.get( "batches-stack-z" ).value = known.z_step_um;
     }
+    Dom.show( Dom.get( "channels-apotome" ) , Boolean( options.apotome ) );
+    Dom.all( "#channels-apotome input" ).forEach( ( input ) => { input.disabled = !options.apotome; } );
+    this.apotomeAsked = Boolean( options.apotome );
+    this.cziStacksAsked = Boolean( options.cziStacks );
     this.openPixel( options.pixel || null );
     this.showError( "" );
     const holder = Dom.get( "channels-layouts" );
@@ -380,6 +425,9 @@ const Channels = {
       // applies; 0 stands for greyscale slices, which have only one.
       stack: this.stacksAsked ? { plane: 0 , z_step_um: Number( Dom.get( "batches-stack-z" ).value ) ,
         pixel_um: Number( Dom.get( "batches-stack-pixel" ).value ) } : null,
+      // How .czi stacks' ApoTome phases become slices: sectioned unless asked.
+      czi_stack: this.cziStacksAsked ? { apotome: this.apotomeAsked
+        ? Dom.get( "channels-form" ).querySelector( "input[name='channels-apotome']:checked" ).value : "sectioned" } : null,
       pixel_um: pixelUm,
     } );
     this.modal.hide();

@@ -239,6 +239,14 @@ const AisImages = {
     };
   },
 
+  // "Z-stack · 11 slices", and for an ApoTome .czi how its slices were made.
+  zBadge( entry ) {
+    const n = Ais.zList( entry ).length;
+    const mode = entry.z_stack && entry.z_stack.apotome;
+    if ( !mode ) return I18n.get( "ais.z_badge" ).replace( "{n}" , n );
+    return I18n.get( "ais.z_badge_apotome" ).replace( "{n}" , n ).replace( "{mode}" , I18n.get( "batches.apotome_" + mode + "_short" ) );
+  },
+
   badges( entry ) {
     const ctx = this.ctx;
     const pair = Ais.kind( entry ) === "pair";
@@ -247,7 +255,7 @@ const AisImages = {
     const count = ctx.count( entry );
     const badges = [
       Dom.el( "span" , { class: "badge " + ( pair || czi || stack ? "text-bg-secondary" : "text-bg-warning" ) ,
-        text: stack ? I18n.get( "ais.z_badge" ).replace( "{n}" , stack.slices.length ) : I18n.get( czi ? "ais.czi" : pair ? "ais.pair" : "ais.single" ) } ),
+        text: stack ? this.zBadge( entry ) : I18n.get( czi ? "ais.czi" : pair ? "ais.pair" : "ais.single" ) } ),
     ];
     if ( entry.dup_of != null ) {
       badges.push( Dom.el( "span" , { class: "badge text-bg-danger" , text: I18n.get( "ais.duplicate_of" ).replace( "{n}" , entry.dup_of + 1 ) } ) );

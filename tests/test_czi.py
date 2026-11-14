@@ -7,13 +7,15 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from app.analysis.czi import is_czi, read_channels, read_czi
+from app.analysis.czi import is_czi, read_channels, read_czi, read_header, read_stack
 from app.analysis.images import ImageError
-from tests.czidata import write_czi
+from tests.czidata import apotome_phases, write_czi, write_czi_stack
 
 ROOT = Path(__file__).resolve().parents[1]
 EXAMPLE = ROOT / "example-data/002-czi/11849-1137-974.czi"
 EXPORTED = ROOT / "example-data/006-both-tiff/11849-1137-974_b0c0x0-1388y0-1040_ORG.tif"
+STACK = ROOT / "example-data-4/Slide7zstackExperiment-27.czi"
+STACK_TIFF = ROOT / "example-data-3/Slide7zstack_27_IP-ApoTome-04/IP-ApoTome-04_z06c1+2.tif"
 
 
 def planes(H=30, W=40):
@@ -98,3 +100,81 @@ def test_channel_names_and_colors_read_without_the_pixels():
     got = read_czi(data)
     assert read_channels(data) == got.colors
     assert list(read_channels(data)) == list(got.channels)
+
+
+# Z-stacks (docs/z-stack.md)
+
+def volume(Z=4, H=12, W=16, seed=2):
+    return np.random.default_rng(seed).integers(0, 4096, (Z, H, W), dtype=np.uint16)
+
+
+@pytest.mark.parametrize("tiles, shuffle", [(1, False), (3, True)])
+def test_a_stack_reads_back_in_z_order_on_the_tiff_scale(tiles, shuffle):
+    ais, other = volume(), volume(seed=5)
+    data = write_czi_stack({"Alexa Fluor 594": other, "Alexa Fluor 488": ais}, tiles=tiles, shuffle=shuffle)
+    assert np.array_equal(read_stack(data, 1, None), ais * 16)
+    assert np.array_equal(read_stack(data, 0, None, [2, 0]), other[[2, 0]] * 16)
+    header = read_header(data)
+    assert (header.names, header.slices, header.phases, header.width, header.height, header.bits) == \
+        (["Alexa Fluor 594", "Alexa Fluor 488"], 4, 1, 16, 12, 12)
+    assert header.pixel_um == pytest.approx(0.10238) and header.z_step_um == pytest.approx(0.77)
+    assert list(read_channels(data)) == header.names
+
+
+def test_apotome_phases_give_the_section_or_the_widefield_image():
+    rng = np.random.default_rng(4)
+    amplitude = rng.integers(0, 600, (3, 10, 14)).astype(float)
+    mean = rng.integers(800, 2000, (3, 10, 14)).astype(float)
+    phases = np.stack([apotome_phases(amplitude[z], mean[z]) for z in range(3)])   # (Z, H, Y, X)
+    data = write_czi_stack({"Alexa Fluor 488": phases}, shuffle=True)
+    assert read_header(data).phases == 5
+    sectioned = read_stack(data, 0, "sectioned").astype(float)
+    widefield = read_stack(data, 0, "widefield").astype(float)
+    assert np.abs(sectioned - amplitude * 16).max() <= 2 * 16    # the grid's amplitude, rounding aside
+    assert np.abs(widefield - mean * 16).max() <= 16
+    with pytest.raises(ImageError, match="sectioned or widefield"):
+        read_stack(data, 0, None)
+    with pytest.raises(ImageError, match="no ApoTome"):
+        read_stack(write_czi_stack({"Alexa Fluor 488": volume()}), 0, "sectioned")
+
+
+def test_a_stack_without_z_scaling_has_no_z_step():
+    assert read_header(write_czi_stack({"Alexa Fluor 488": volume()}, z_um=None)).z_step_um is None
+
+
+def test_a_stack_read_as_one_plane_says_what_it_is():
+    data = write_czi_stack({"Alexa Fluor 488": volume()})
+    with pytest.raises(ImageError, match=r"Z-stack \(4 slices\)"):
+        read_czi(data)
+
+
+@pytest.mark.parametrize("kwargs, message", [
+    ({"drop": 3}, "missing slices"),
+    ({"extra": ("T", 0, 2)}, "one scene and time point"),
+])
+def test_stacks_it_cannot_read_are_refused(kwargs, message):
+    data = write_czi_stack({"Alexa Fluor 594": volume(seed=1), "Alexa Fluor 488": volume()}, **kwargs)
+    with pytest.raises(ImageError, match=message):
+        read_header(data)
+    with pytest.raises(ImageError, match=message):
+        read_stack(data, 0, None)
+
+
+def test_a_single_plane_czi_has_a_header_too():
+    header = read_header(write_czi(planes(), tiles=3))
+    assert (header.slices, header.phases, header.z_step_um) == (1, 1, None)
+
+
+@pytest.mark.skipif(not (STACK.exists() and STACK_TIFF.exists()), reason="needs example-data-4/ and example-data-3/")
+def test_the_sample_stack_sections_like_zen():
+    import mmap
+
+    from PIL import Image
+
+    with STACK.open("rb") as f, mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as data:
+        header = read_header(data)
+        assert (header.slices, header.phases, header.names) == (11, 5, ["Alexa Fluor 594", "Alexa Fluor 488"])
+        assert header.pixel_um == pytest.approx(0.10238, abs=1e-5) and header.z_step_um == pytest.approx(0.77)
+        section = read_stack(data, 1, "sectioned", [5])[0].astype(float)
+    green = np.asarray(Image.open(STACK_TIFF))[..., 1].astype(float)
+    assert np.corrcoef(section.ravel(), green.ravel())[0, 1] >= 0.98

@@ -1206,7 +1206,8 @@ def test_a_stack_s_z_step_and_pixel_size_can_be_corrected_later(store):
     from app.analysis import zstack
 
     batch = stack_batch(store)
-    assert ais.stack_calibration(batch["images"]) == {"count": 2, "z_step_um": 0.5, "pixel_um": 0.161, "mixed": False}
+    assert ais.stack_calibration(batch["images"]) == {"count": 2, "z_step_um": 0.5, "pixel_um": 0.161, "mixed": False,
+                                                    "from_file": 0}
     before = {im["key"]: im["files"]["stack"]["sha"] for im in batch["images"]}
     record, changed = ais.set_channels(store, batch["id"], None, [], {}, {"z_step_um": 0.3, "pixel_um": 0.2})
     assert sorted(changed) == sorted(before)

@@ -54,12 +54,25 @@ class OkTrashReply(TypedDict):
     trash_id: Annotated[int, Field(doc="Its entry in GET /api/ais/trash.")]
 
 
+class CziStackHeader(TypedDict):
+    slices: Annotated[int, Field(minimum=2, doc="Its Z planes.")]
+    phases: NotRequired[Annotated[int, Field(minimum=1, doc="Its ApoTome grid phases; 1 (the default) without.")]]
+    z_step_um: Annotated[float | None, Field(doc="Its Z scaling; null without, when stack's is used.")]
+    pixel_um: Annotated[float | None, Field(doc="Its X scaling; null without, when stack's is used.")]
+
+
+class CziStackChoice(TypedDict):
+    apotome: NotRequired[Annotated[str, Field(enum=("sectioned", "widefield"),
+                                              doc="How ApoTome phases become slices. Default sectioned.")]]
+
+
 class ChosenFile(TypedDict):
     name: str
     rel: NotRequired[Annotated[str, Field(doc="Its path under the folder picked. Default name.")]]
     sha: Annotated[str, Field(doc="sha-256, hex.")]
     size: NotRequired[int]
     layout: NotRequired[Annotated[dict[str, Any], Field(doc="Its channels as the browser read them.")]]
+    zstack: NotRequired[Annotated[CziStackHeader, Field(doc="A .czi with more than one slice: what it says of itself.")]]
     modified: NotRequired[Annotated[str, Field(doc="When it was last changed, ISO.")]]
 
 
@@ -520,7 +533,8 @@ class BatchUploadBody(TypedDict):
     files: Annotated[list[ChosenFile], Field(doc="1 to 5000.")]
     translations: NotRequired[list[Translation]]
     randomize: NotRequired[Annotated[bool, Field(doc="Blind the names. Default true.")]]
-    stack: NotRequired[Annotated[StackOptions | None, Field(doc="Group the files into Z-stacks.")]]
+    stack: NotRequired[Annotated[StackOptions | None, Field(doc="Group TIFF slices into Z-stacks.")]]
+    czi_stack: NotRequired[Annotated[CziStackChoice | None, Field(doc="For files with zstack: Z-stack .czi files.")]]
     channels: NotRequired[Annotated[list[ChannelChoice] | None, Field(doc="Channel roles per layout.")]]
 
 
@@ -718,6 +732,7 @@ class StackCalibration(TypedDict):
     z_step_um: float
     pixel_um: float
     mixed: bool
+    from_file: Annotated[int, Field(doc="How many are .czi files, calibrated from the file.")]
 
 
 class PixelSize(TypedDict):
@@ -818,7 +833,8 @@ class BatchAddBody(TypedDict):
     randomize: NotRequired[Annotated[bool, Field(doc="Blind the names. Default true.")]]
     add_name: NotRequired[str]
     translations: NotRequired[list[Translation]]
-    stack: NotRequired[Annotated[StackOptions | None, Field(doc="Group the files into Z-stacks.")]]
+    stack: NotRequired[Annotated[StackOptions | None, Field(doc="Group TIFF slices into Z-stacks.")]]
+    czi_stack: NotRequired[Annotated[CziStackChoice | None, Field(doc="For files with zstack: Z-stack .czi files.")]]
     channels: NotRequired[Annotated[list[ChannelChoice] | None, Field(doc="Channel roles per layout.")]]
 
 
@@ -1168,7 +1184,8 @@ class LocalPathBody(TypedDict):
     csrf_token: NotRequired[Annotated[str, Field(doc=CSRF_DOC)]]
     path: Annotated[str, Field(doc="A folder on this machine.")]
     randomize: NotRequired[Annotated[bool, Field(doc="Blind the names. Default true.")]]
-    stack: NotRequired[Annotated[StackOptions | None, Field(doc="Group the files into Z-stacks.")]]
+    stack: NotRequired[Annotated[StackOptions | None, Field(doc="Group TIFF slices into Z-stacks.")]]
+    czi_stack: NotRequired[Annotated[CziStackChoice | None, Field(doc="For files with zstack: Z-stack .czi files.")]]
     channels: NotRequired[Annotated[list[ChannelChoice] | None, Field(doc="Channel roles per layout.")]]
 
 

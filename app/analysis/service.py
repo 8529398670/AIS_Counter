@@ -24,7 +24,13 @@ A Z-stack (zstack.py) is many stored slices under one sha that isn't a file. It
 behaves like a .czi with no soma channel: the max projection of its AIS plane is
 the raw image, traced on a processed version of it, and each trace is then
 followed through the slices (zlength.py). Its manifest comes from the batch that
-holds it (`stacks`); the copy kept beside the files is only a cache.
+holds it (`stacks`); the copy kept beside the files is only a cache. A Z-stack
+.czi is one stored file holding every slice (and, from an ApoTome, every grid
+phase, made into slices by czi.read_stack); its manifest names that file.
+
+Files arrive in pieces (Incoming): an upload or a copy in from a path is
+written beside the files and hashed as it comes, and only checked and put in
+place once it is all there, so a 300 MB stack never sits in memory.
 
 A view (channels.py) is a stored file read with other channels than the app
 would pick: its AIS channel is the image, its soma channel (if any) gives the
@@ -42,6 +48,7 @@ import os
 import re
 import tempfile
 import threading
+import time
 from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Callable
@@ -60,7 +67,7 @@ from app.analysis import preprocess
 from app.analysis import soma as somata
 from app.analysis import channels as views
 from app.analysis import zlength, zstack
-from app.analysis.czi import is_czi, read_channels, read_czi
+from app.analysis.czi import is_czi, read_channels, read_czi, read_header, read_stack
 from app.analysis.images import (ImageError, composite_png, preview_png, read_planes, read_tiff, scaled_png,
                                  thumbnail_png, tiff_bytes, tiff_names)
 
@@ -71,11 +78,81 @@ class NotStored(ImageError):
 
 SHA_RE = re.compile(r"^[0-9a-f]{64}$")
 CACHE_SIZE = 6
-STACK_CACHE_SIZE = 2    # a whole stack each: the container has 256 MB
+STACK_CACHE_SIZE = 2    # a whole stack each (~32 MB for 11 slices of 1388x1040): the container has 256 MB
+TIFF_LIMIT_BYTES = 64 * 1024 * 1024   # a TIFF is decoded whole, here and wherever it is read
+PART_SUFFIX = ".part"
+STALE_PART_SECONDS = 24 * 3600
+COPY_CHUNK = 1024 * 1024
 CHANNEL_PERCENTILES = (0.1, 99.9)
 SINGLE_NOTE = "single image: traced and profiled from the same file (the original profiles the raw <cell>.tif)"
 UNLIFTED_NOTE = "could not follow this trace through the slices: no 3D length"
 NO_SOMA_NOTE = "no channel shows cell bodies: started from both ends instead of the soma"
+
+
+class Incoming:
+    """A file arriving in pieces: written to a temp beside the stored files
+    and hashed as it comes (write), then checked and put in place under its
+    sha (finish). abort, safe to call at any time and again, leaves nothing
+    behind; finish calls it too."""
+
+    def __init__(self, library: "Library") -> None:
+        library.files.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=library.files, prefix="upload.", suffix=PART_SUFFIX)
+        self._library = library
+        self._file = os.fdopen(fd, "wb")
+        self._tmp = Path(tmp)
+        self._hash = hashlib.sha256()
+        self.size = 0
+
+    def write(self, chunk: bytes) -> None:
+        self._file.write(chunk)
+        self._hash.update(chunk)
+        self.size += len(chunk)
+
+    @property
+    def sha(self) -> str:
+        return self._hash.hexdigest()
+
+    def finish(self, expect: str | None = None) -> dict[str, Any]:
+        """{sha256, width, height, dtype, czi} (and z: {slices, phases} for a
+        Z-stack .czi) of the file, now stored; ImageError, and nothing stored,
+        when it is not an image read here, or not the sha expected."""
+        try:
+            self._file.close()
+            sha = self.sha
+            if expect is not None and sha != expect:
+                raise ImageError("the file has changed")
+            if not self.size:
+                raise ImageError("empty file")
+            with self._tmp.open("rb") as f, mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as data:
+                info = _describe(data, self.size)
+            path = self._library._path(sha, info["czi"])
+            if not path.exists():
+                os.replace(self._tmp, path)
+            return {"sha256": sha} | info
+        finally:
+            self.abort()
+
+    def abort(self) -> None:
+        if not self._file.closed:
+            self._file.close()
+        self._tmp.unlink(missing_ok=True)
+
+
+def _describe(data: Any, size: int) -> dict[str, Any]:
+    """What a stored file is, checked the way it will be read: a CZI from its
+    header, or (one plane) read whole as before; a TIFF decoded."""
+    if is_czi(data):
+        header = read_header(data)
+        if header.slices > 1:
+            return {"width": header.width, "height": header.height, "dtype": header.dtype, "czi": True,
+                    "z": {"slices": header.slices, "phases": header.phases}}
+        arr = _read(data)
+        return {"width": int(arr.shape[1]), "height": int(arr.shape[0]), "dtype": str(arr.dtype), "czi": True}
+    if size > TIFF_LIMIT_BYTES:
+        raise ImageError(f"a TIFF over {TIFF_LIMIT_BYTES // 2**20} MiB is not read here")
+    arr = _read(bytes(data))
+    return {"width": int(arr.shape[1]), "height": int(arr.shape[0]), "dtype": str(arr.dtype), "czi": False}
 
 
 class Library:
@@ -97,6 +174,26 @@ class Library:
         self._somata: OrderedDict[str, somata.Somata | None] = OrderedDict()
         self._previews: OrderedDict[str, bytes] = OrderedDict()
         self._channels: dict[str, list[dict[str, Any]]] = {}
+        self._builds: dict[str, threading.Lock] = {}
+        self._sweep()
+
+    def _sweep(self) -> None:
+        """Temps left by uploads a crash cut short, once they are a day old."""
+        try:
+            parts = list(self.files.glob(f"*{PART_SUFFIX}"))
+        except OSError:
+            return
+        now = time.time()
+        for part in parts:
+            try:
+                if now - part.stat().st_mtime > STALE_PART_SECONDS:
+                    part.unlink()
+            except OSError:
+                pass
+
+    def receive(self) -> Incoming:
+        """A file to be written in pieces (Incoming)."""
+        return Incoming(self)
 
     def _path(self, sha: str, czi: bool = False) -> Path:
         if not isinstance(sha, str) or not SHA_RE.match(sha):
@@ -118,14 +215,13 @@ class Library:
             raise
 
     def add(self, data: bytes) -> dict[str, Any]:
-        czi = is_czi(data)
-        arr = _read(data)
-        sha = hashlib.sha256(data).hexdigest()
-        path = self._path(sha, czi)
-        if not path.exists():
-            self._store(path, data)
-        return {"sha256": sha, "width": int(arr.shape[1]), "height": int(arr.shape[0]), "dtype": str(arr.dtype),
-                "czi": czi}
+        """A whole file at once (receive, for one arriving in pieces)."""
+        incoming = self.receive()
+        try:
+            incoming.write(data)
+            return incoming.finish()
+        finally:
+            incoming.abort()
 
     def has(self, sha: str) -> bool:
         return self._path(sha).exists() or self._path(sha, czi=True).exists()
@@ -189,8 +285,8 @@ class Library:
     def require(self, sha: str) -> None:
         """NotStored unless the file, or every slice of a Z-stack, is here."""
         manifest = self._manifest(sha)
-        for part in manifest["slices"] if manifest else [{"sha": sha}]:
-            self.file_path(part["sha"])
+        for part in zstack.parts(manifest) if manifest else [sha]:
+            self.file_path(part)
 
     def stack(self, sha: str) -> np.ndarray:
         """A Z-stack's AIS plane as (slices, height, width). What a stack is
@@ -203,12 +299,33 @@ class Library:
         manifest = self._manifest(sha)
         if manifest is None:
             raise ImageError("not a Z-stack")
-        every = self._stack_planes(manifest)
-        stack = np.ascontiguousarray(every[..., 0 if every.shape[3] == 1 else manifest["plane"]])
+        # One build per stack: a stack's view, thumbnail and first click all
+        # ask for it at once, and three copies would not fit in 256 MB.
         with self._lock:
-            self._stacks[sha] = stack
-            while len(self._stacks) > STACK_CACHE_SIZE:
-                self._stacks.popitem(last=False)
+            building = self._builds.setdefault(sha, threading.Lock())
+        with building:
+            with self._lock:
+                if sha in self._stacks:
+                    return self._stacks[sha]
+            if zstack.from_czi(manifest):
+                stack = self._czi_stack(manifest)
+            else:
+                every = self._stack_planes(manifest)
+                stack = np.ascontiguousarray(every[..., 0 if every.shape[3] == 1 else manifest["plane"]])
+            with self._lock:
+                self._stacks[sha] = stack
+                while len(self._stacks) > STACK_CACHE_SIZE:
+                    self._stacks.popitem(last=False)
+        return stack
+
+    def _czi_stack(self, manifest: dict[str, Any], channel: int | None = None) -> np.ndarray:
+        """A Z-stack .czi's channel (its AIS plane unless said) as (slices,
+        height, width), read from a mmap of the file."""
+        with self.file_path(manifest["source"]).open("rb") as file, \
+                mmap.mmap(file.fileno(), 0, access=mmap.ACCESS_READ) as data:
+            stack = read_stack(data, manifest["plane"] if channel is None else channel, manifest["apotome"])
+        if len(stack) != len(manifest["slices"]):
+            raise ImageError("the .czi has other slices than when it was added")
         return stack
 
     def slice_png(self, sha: str, index: int) -> bytes:
@@ -241,6 +358,8 @@ class Library:
         bodies (soma.best; the AIS plane only when no other does), each body
         with its depth (soma.depths) in the stack's slice numbers."""
         manifest = self._manifest(sha)
+        if zstack.from_czi(manifest):
+            return self._czi_stack_soma(sha, manifest)
         every = self._stack_planes(manifest)
         count = every.shape[3]
         projections = [every[..., p].max(axis=0) for p in range(count)]
@@ -252,6 +371,28 @@ class Library:
         for bodies in (found.split, found.whole):
             if bodies is not None:
                 bodies.depths = somata.depths(every[..., index], bodies, zs)
+        return found
+
+    def _czi_stack_soma(self, sha: str, manifest: dict[str, Any]) -> somata.Somata | None:
+        """_stack_soma for a Z-stack .czi: a soma stain's projection first
+        when it has one (as for a .czi, Czi.soma_name), each channel read
+        and projected in turn, so only one other than the AIS plane is held."""
+        plane = manifest["plane"]
+        with self.file_path(manifest["source"]).open("rb") as file, \
+                mmap.mmap(file.fileno(), 0, access=mmap.ACCESS_READ) as data:
+            names = read_header(data).names
+        volume = {plane: self.stack(sha)}
+        projections = [volume[plane].max(axis=0) if c == plane else self._czi_stack(manifest, c).max(axis=0)
+                       for c in range(len(names))]
+        picked = somata.best(projections, manifest["pixel_um"], plane, first=views.soma_index(names))
+        if picked is None:
+            return None
+        index, found = picked
+        bodies_in = volume[plane] if index == plane else self._czi_stack(manifest, index)
+        zs = [s["z"] for s in manifest["slices"]]
+        for bodies in (found.split, found.whole):
+            if bodies is not None:
+                bodies.depths = somata.depths(bodies_in, bodies, zs)
         return found
 
     def _lifted(self, sha: str, answer: dict[str, Any], z_method: str | None) -> dict[str, Any]:
@@ -274,8 +415,9 @@ class Library:
         except (ValueError, IndexError, ArithmeticError, ml.MatlabError):
             found = None
         if found is not None and found.get("z_path"):
+            measured = zlength.section_widths(answer, found["z_path"]) if chosen.own_section else answer
             try:
-                found |= area.volumes(stack, levels, answer, found["z_path"], manifest["pixel_um"],
+                found |= area.volumes(stack, levels, measured, found["z_path"], manifest["pixel_um"],
                                       manifest["z_step_um"]) or {}
             except (ValueError, IndexError, ArithmeticError):
                 pass
@@ -311,15 +453,18 @@ class Library:
             return path
         source = self.resolver(sha) if self.resolver else None
         if source:
-            try:
-                data = Path(source).read_bytes()
-            except OSError:
-                data = b""
             # Only if the file there still has the same bytes.
-            if data and hashlib.sha256(data).hexdigest() == sha:
-                path = self._path(sha, is_czi(data))
-                self._store(path, data)
-                return path
+            incoming = self.receive()
+            try:
+                with open(source, "rb") as file:
+                    while chunk := file.read(COPY_CHUNK):
+                        incoming.write(chunk)
+                found = incoming.finish(expect=sha)
+                return self._path(sha, found["czi"])
+            except (OSError, ImageError):
+                pass
+            finally:
+                incoming.abort()
         raise NotStored("image not uploaded yet")
 
     def array(self, sha: str) -> np.ndarray:

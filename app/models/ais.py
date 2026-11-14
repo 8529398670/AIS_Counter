@@ -126,7 +126,7 @@ MAX_TYPES = 50
 # from RESULT_NUMBERS so a row on an ordinary image stays exactly as it was:
 # these are written only when present. z_clipped is 0 or 1.
 Z_NUMBERS = ("length_3d_um", "length_xy_um", "z_start", "z_end", "z_span_um", "z_step_um", "z_confidence", "z_clipped",
-             "volume_voxel_um3", "volume_tube_um3")
+             "volume_voxel_um3", "volume_tube_um3", "z_ais_start", "z_ais_end")
 # On a Z-stack the soma distance is 3D (soma_um); these say how it splits:
 # across the image and in depth. Optional, as Z_NUMBERS.
 SOMA_Z_NUMBERS = ("soma_xy_um", "soma_dz_um")
@@ -182,6 +182,17 @@ def clean_files(files: Any) -> list[dict[str, Any]]:
                 item["layout"] = channels.clean_layout(f["layout"])
             except channels.ChannelError as exc:
                 raise BatchError(str(exc)) from exc
+        # A .czi's slices, phases and calibration, when it is a Z-stack
+        # (zstack.clean_czi_header), as the client read them; not kept either.
+        if f.get("zstack") is not None:
+            if not CZI_RE.search(name):
+                raise BatchError("only a .czi can be a Z-stack file")
+            try:
+                item["zstack"] = zstack.clean_czi_header(f["zstack"])
+            except ValueError as exc:
+                raise BatchError(str(exc)) from exc
+            if item.get("layout") is None or item["layout"]["kind"] != "czi":
+                raise BatchError(f"{name} needs its channels")
         # When the file was last changed and (a server folder only) made, as ISO text.
         for k in ("modified", "created"):
             if f.get(k) is not None:
@@ -232,15 +243,54 @@ def _take_stacks(files: list[dict[str, Any]], options: dict[str, Any]) -> tuple[
     return images, [f for f in files if f["rel"] not in used]
 
 
+def _czi_stack_image(folder: str, cell: str, f: dict[str, Any], stack: dict[str, Any] | None,
+                     choice: dict[str, Any]) -> dict[str, Any]:
+    """A Z-stack .czi as one image: one file standing for its slices, which
+    are the .czi itself (zstack.czi_manifest). Calibration is the file's,
+    else what was entered for TIFF stacks; the AIS channel is the app's
+    guess (channels.ais_index, Alexa Fluor 488) until roles are chosen."""
+    header = f["zstack"]
+    calibration = {}
+    for k, label in (("z_step_um", "z step"), ("pixel_um", "pixel size")):
+        value = header[k] if header[k] is not None else (stack or {}).get(k)
+        if value is None:
+            raise BatchError(f"{f['name']} does not say its {label}: enter one")
+        calibration[k] = value
+    options = {"source": zstack.CZI, "count": header["slices"], "phases": header["phases"],
+               "apotome": choice["apotome"] if header["phases"] > 1 else None,
+               "plane": channels.ais_index(f["layout"]["names"])} | calibration
+    slices = [{k: v for k, v in f.items() if k != "zstack"}]
+    file = {"name": f["name"], "rel": f["rel"], "size": f["size"], "slices": slices}
+    file["sha"] = zstack.sha(zstack.manifest_of(file, options))
+    return {"key": f"{folder}/{cell}" if folder else cell, "cell": cell, "dir": folder, "files": {"stack": file},
+            "z_stack": options}
+
+
+def _take_czi_stacks(files: list[dict[str, Any]], stack: dict[str, Any] | None,
+                     choice: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """(Z-stack .czi files as images, the files left over)."""
+    images, rest = [], []
+    for f in files:
+        if f.get("zstack") and not f["name"].startswith("."):
+            images.append(_czi_stack_image(_folder(f), CZI_RE.sub("", f["name"]), f, stack, choice))
+        else:
+            rest.append(f)
+    return images, rest
+
+
 def group(files: list[dict[str, Any]], stack: dict[str, Any] | None = None,
-          choices: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+          choices: list[dict[str, Any]] | None = None, czi: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     """Files -> images, sorted by folder and cell. A cell is keyed by its
     folder inside the batch too, so same-named files in two subfolders stay two
     images. dup_of is the index of the first image with the same bytes. With
     stack (zstack.clean_options), Z-stack slices make one image each stack.
-    With choices (channels.clean_choices), each image whose file's layout has
-    one gets those channel roles (apply_channels)."""
+    A .czi the client says is a Z-stack is one too, its phases made into
+    slices as czi says (zstack.clean_czi_choice). With choices
+    (channels.clean_choices), each image whose file's layout has one gets
+    those channel roles (apply_channels)."""
+    czi_stacks, files = _take_czi_stacks(files, stack, czi or zstack.clean_czi_choice(None))
     stacks, files = _take_stacks(files, stack) if stack else ([], files)
+    stacks = czi_stacks + stacks
     images: dict[str, dict[str, Any]] = {}
     for f in files:
         name = f["name"]
@@ -293,8 +343,10 @@ def _file_layout(image: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
 def _drop_layouts(image: dict[str, Any]) -> None:
     for f in image["files"].values():
         f.pop("layout", None)
+        f.pop("zstack", None)
         for part in f.get("slices", []):
             part.pop("layout", None)
+            part.pop("zstack", None)
 
 
 def apply_channels(image: dict[str, Any], role: str, layout: dict[str, Any], roles: list[dict[str, str]]) -> None:
@@ -302,9 +354,8 @@ def apply_channels(image: dict[str, Any], role: str, layout: dict[str, Any], rol
     A stack's AIS channel is its plane, so it gets a new manifest and sha."""
     if role == "stack":
         f = image["files"]["stack"]
-        options = {k: image["z_stack"][k] for k in ("z_step_um", "pixel_um")} | {"plane": channels.picks(roles)[0]}
-        f["sha"] = zstack.sha(zstack.manifest(f["slices"], options))
-        image["z_stack"] = image["z_stack"] | {"plane": options["plane"]}
+        image["z_stack"] = image["z_stack"] | {"plane": channels.picks(roles)[0]}
+        f["sha"] = zstack.sha(zstack.manifest_of(f, image["z_stack"]))
         image["channels"] = channels.entry(role, layout, roles, None)
     else:
         image["channels"] = channels.entry(role, layout, roles, image["files"][role]["sha"])
@@ -909,18 +960,36 @@ def _stack_options(stack: Any) -> dict[str, Any] | None:
         raise BatchError(str(exc)) from exc
 
 
+def _stored_stack_options(stack: Any) -> dict[str, Any] | None:
+    if stack is None:
+        return None
+    try:
+        return zstack.clean_stored(stack)
+    except ValueError as exc:
+        raise BatchError(str(exc)) from exc
+
+
+def _czi_choice(value: Any) -> dict[str, Any]:
+    try:
+        return zstack.clean_czi_choice(value)
+    except ValueError as exc:
+        raise BatchError(str(exc)) from exc
+
+
 def add_files(store: Store, batch_id: int, source: str, files: Any, path: str | None = None, *,
               randomize_names: bool = False, user_id: int | None = None, name: str | None = None,
-              translations: Any = None, stack: Any = None, channel_roles: Any = None) -> Record | None:
+              translations: Any = None, stack: Any = None, channel_roles: Any = None,
+              czi_stack: Any = None) -> Record | None:
     """More files into a batch: a folder or files picked later, named by the
     __Translation.txt files that came with them (clean_translations), blinded
     with randomize_names, recorded as one add called name. With stack
-    (zstack.clean_options), Z-stack slices become one image each stack. None
-    when the batch is gone. A batch fed from both the browser and a server
+    (zstack.clean_options), Z-stack slices become one image each stack; with
+    czi_stack (zstack.clean_czi_choice), how Z-stack .czi files' ApoTome
+    phases become slices. None when the batch is gone. A batch fed from both the browser and a server
     folder becomes source "mixed"."""
     if source not in SOURCES:
         raise BatchError("unknown source")
-    images = group(clean_files(files), _stack_options(stack), _choices(channel_roles))
+    images = group(clean_files(files), _stack_options(stack), _choices(channel_roles), _czi_choice(czi_stack))
     if not images:
         raise BatchError("no TIFF or CZI files")
     images = name_images(images, clean_translations(translations))
@@ -941,12 +1010,12 @@ def add_files(store: Store, batch_id: int, source: str, files: Any, path: str | 
 
 def create_batch(store: Store, name: str, source: str, files: list[dict[str, Any]], user_id: int,
                  path: str | None = None, *, randomize_names: bool = False, translations: Any = None,
-                 stack: Any = None, channel_roles: Any = None) -> Record:
+                 stack: Any = None, channel_roles: Any = None, czi_stack: Any = None) -> Record:
     """A batch with its files in one go (Open folder, Open path), named by
     the __Translation.txt files that came with them."""
     if source not in SOURCES:
         raise BatchError("unknown source")
-    images = group(clean_files(files), _stack_options(stack), _choices(channel_roles))
+    images = group(clean_files(files), _stack_options(stack), _choices(channel_roles), _czi_choice(czi_stack))
     if not images:
         raise BatchError("no TIFF or CZI files")
     images = name_images(images, clean_translations(translations))
@@ -1620,7 +1689,7 @@ def manifest_for(store: Store, sha: str) -> dict[str, Any] | None:
         for image in batch["images"]:
             f = image["files"].get("stack")
             if f and f["sha"] == sha:
-                return zstack.manifest(f["slices"], image["z_stack"])
+                return zstack.manifest_of(f, image["z_stack"])
             chosen = image.get("channels")
             if chosen and chosen.get("sha") == sha:
                 return channels.manifest(image["files"][chosen["role"]]["sha"], *channels.picks(chosen["roles"]))
@@ -1651,13 +1720,15 @@ def channel_file(image: dict[str, Any]) -> tuple[str, str] | None:
 def stack_calibration(images: list[dict[str, Any]]) -> dict[str, Any] | None:
     """The Z-stacks among images and how they are calibrated, for the
     Channels dialog: {count, z_step_um, pixel_um (the first stack's), mixed
-    (whether the others differ)}; None when there are none."""
+    (whether the others differ), from_file (how many are .czi files, whose
+    calibration came from the file)}; None when there are none."""
     stacks = [im["z_stack"] for im in images if im["files"].get("stack") and im.get("z_stack")]
     if not stacks:
         return None
     first = stacks[0]
     mixed = any((s["z_step_um"], s["pixel_um"]) != (first["z_step_um"], first["pixel_um"]) for s in stacks)
-    return {"count": len(stacks), "z_step_um": first["z_step_um"], "pixel_um": first["pixel_um"], "mixed": mixed}
+    return {"count": len(stacks), "z_step_um": first["z_step_um"], "pixel_um": first["pixel_um"], "mixed": mixed,
+            "from_file": sum(zstack.is_czi(s) for s in stacks)}
 
 
 def image_pixel_size(images: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -1675,10 +1746,8 @@ def _calibrate(image: dict[str, Any], calibration: dict[str, Any]) -> None:
     """A stack image's new z step and pixel size: a new manifest and sha, as a
     new plane gives (apply_channels)."""
     f = image["files"]["stack"]
-    options = {"plane": image["z_stack"]["plane"], "z_step_um": calibration["z_step_um"],
-               "pixel_um": calibration["pixel_um"]}
-    f["sha"] = zstack.sha(zstack.manifest(f["slices"], options))
-    image["z_stack"] = image["z_stack"] | {"z_step_um": options["z_step_um"], "pixel_um": options["pixel_um"]}
+    image["z_stack"] = image["z_stack"] | {"z_step_um": calibration["z_step_um"], "pixel_um": calibration["pixel_um"]}
+    f["sha"] = zstack.sha(zstack.manifest_of(f, image["z_stack"]))
 
 
 def set_channels(store: Store, batch_id: int, add_id: int | None, choices: Any,
@@ -2212,6 +2281,13 @@ def _restored_stack(f: Any, options: dict[str, Any]) -> dict[str, Any]:
     a manifest is only as good as the record it comes from."""
     out = _restored_file(f)
     slices = f.get("slices")
+    if zstack.is_czi(options):
+        if not isinstance(slices, list) or len(slices) != 1:
+            raise BatchError("a .czi stack needs its .czi")
+        restored = [_restored_file(slices[0])]
+        if zstack.sha(zstack.manifest_of({"slices": restored}, options)) != out["sha"]:
+            raise BatchError("a stack does not match its .czi")
+        return out | {"slices": restored}
     if not isinstance(slices, list) or not zstack.MIN_SLICES <= len(slices) <= MAX_FILES:
         raise BatchError("a stack needs its slices")
     restored = [_restored_file(s) | {"z": _whole(s.get("z"), "z")} for s in slices]
@@ -2227,14 +2303,16 @@ def _restored_image(image: Any, count: int) -> dict[str, Any]:
         raise BatchError("each image needs its files")
     if not set(image["files"]) <= set(ROLES):
         raise BatchError("unknown file role")
-    options = _stack_options(image.get("z_stack")) if "stack" in image["files"] else None
+    options = _stored_stack_options(image.get("z_stack")) if "stack" in image["files"] else None
     if "stack" in image["files"] and options is None:
         raise BatchError("a stack needs its plane and calibration")
     out: dict[str, Any] = {"key": _text(image.get("key"), "key"), "cell": _text(image.get("cell"), "cell"),
                            "dir": _text(image.get("dir", ""), "dir", empty=True),
                            "files": {role: _restored_stack(f, options) if role == "stack" else _restored_file(f)
                                      for role, f in image["files"].items()}}
-    if options:
+    if options and zstack.is_czi(options):
+        out["z_stack"] = options
+    elif options:
         out["z_stack"] = {"count": len(out["files"]["stack"]["slices"])} | options
     if image.get("original_dir") is not None:
         out["original_dir"] = _text(image["original_dir"], "original_dir", empty=True)

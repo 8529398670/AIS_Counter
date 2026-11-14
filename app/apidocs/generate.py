@@ -41,7 +41,8 @@ def every_route() -> list[tuple[str, str, Any]]:
 
     # AIS Counter: the MATLAB helper's routes are set up once too, only while
     # matlab_helper and API keys are on; they are in the docs either way.
-    started_with = SimpleNamespace(logs=SimpleNamespace(enabled=True), matlab_helper=True, api_keys_enabled=True)
+    started_with = SimpleNamespace(logs=SimpleNamespace(enabled=True), matlab_helper=True, api_keys_enabled=True,
+                                   upload_limit_bytes=1073741824)
     return documented_routes(build_routes(StaticServer(assets.BUNDLED_STATIC), started_with))
 
 

@@ -415,6 +415,14 @@
               "null"
             ]
           },
+          "z_ais_end": {
+            "description": "Ends from the slices: the AIS end found on the 3D route, a profile point.",
+            "type": "number"
+          },
+          "z_ais_start": {
+            "description": "Ends from the slices: the AIS start found on the 3D route, a profile point.",
+            "type": "number"
+          },
           "z_clipped": {
             "description": "0 or 1.",
             "type": "number"
@@ -7058,6 +7066,27 @@
                     "description": "From GET /api/me. Browser sessions only.",
                     "type": "string"
                   },
+                  "czi_stack": {
+                    "description": "For files with zstack: Z-stack .czi files.",
+                    "oneOf": [
+                      {
+                        "properties": {
+                          "apotome": {
+                            "description": "How ApoTome phases become slices. Default sectioned.",
+                            "enum": [
+                              "sectioned",
+                              "widefield"
+                            ],
+                            "type": "string"
+                          }
+                        },
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
                   "path": {
                     "description": "A folder on this machine.",
                     "type": "string"
@@ -7067,7 +7096,7 @@
                     "type": "boolean"
                   },
                   "stack": {
-                    "description": "Group the files into Z-stacks.",
+                    "description": "Group TIFF slices into Z-stacks.",
                     "oneOf": [
                       {
                         "properties": {
@@ -7207,6 +7236,27 @@
                     "description": "From GET /api/me. Browser sessions only.",
                     "type": "string"
                   },
+                  "czi_stack": {
+                    "description": "For files with zstack: Z-stack .czi files.",
+                    "oneOf": [
+                      {
+                        "properties": {
+                          "apotome": {
+                            "description": "How ApoTome phases become slices. Default sectioned.",
+                            "enum": [
+                              "sectioned",
+                              "widefield"
+                            ],
+                            "type": "string"
+                          }
+                        },
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
                   "files": {
                     "description": "1 to 5000.",
                     "items": {
@@ -7232,6 +7282,41 @@
                         },
                         "size": {
                           "type": "integer"
+                        },
+                        "zstack": {
+                          "description": "A .czi with more than one slice: what it says of itself.",
+                          "properties": {
+                            "phases": {
+                              "description": "Its ApoTome grid phases; 1 (the default) without.",
+                              "minimum": 1,
+                              "type": "integer"
+                            },
+                            "pixel_um": {
+                              "description": "Its X scaling; null without, when stack's is used.",
+                              "type": [
+                                "number",
+                                "null"
+                              ]
+                            },
+                            "slices": {
+                              "description": "Its Z planes.",
+                              "minimum": 2,
+                              "type": "integer"
+                            },
+                            "z_step_um": {
+                              "description": "Its Z scaling; null without, when stack's is used.",
+                              "type": [
+                                "number",
+                                "null"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "pixel_um",
+                            "slices",
+                            "z_step_um"
+                          ],
+                          "type": "object"
                         }
                       },
                       "required": [
@@ -7250,7 +7335,7 @@
                     "type": "boolean"
                   },
                   "stack": {
-                    "description": "Group the files into Z-stacks.",
+                    "description": "Group TIFF slices into Z-stacks.",
                     "oneOf": [
                       {
                         "properties": {
@@ -8762,6 +8847,10 @@
                             "count": {
                               "type": "integer"
                             },
+                            "from_file": {
+                              "description": "How many are .czi files, calibrated from the file.",
+                              "type": "integer"
+                            },
                             "mixed": {
                               "type": "boolean"
                             },
@@ -8774,6 +8863,7 @@
                           },
                           "required": [
                             "count",
+                            "from_file",
                             "mixed",
                             "pixel_um",
                             "z_step_um"
@@ -9075,6 +9165,27 @@
                     "description": "From GET /api/me. Browser sessions only.",
                     "type": "string"
                   },
+                  "czi_stack": {
+                    "description": "For files with zstack: Z-stack .czi files.",
+                    "oneOf": [
+                      {
+                        "properties": {
+                          "apotome": {
+                            "description": "How ApoTome phases become slices. Default sectioned.",
+                            "enum": [
+                              "sectioned",
+                              "widefield"
+                            ],
+                            "type": "string"
+                          }
+                        },
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
                   "path": {
                     "description": "A folder on this machine.",
                     "type": "string"
@@ -9084,7 +9195,7 @@
                     "type": "boolean"
                   },
                   "stack": {
-                    "description": "Group the files into Z-stacks.",
+                    "description": "Group TIFF slices into Z-stacks.",
                     "oneOf": [
                       {
                         "properties": {
@@ -9947,6 +10058,27 @@
                     "description": "From GET /api/me. Browser sessions only.",
                     "type": "string"
                   },
+                  "czi_stack": {
+                    "description": "For files with zstack: Z-stack .czi files.",
+                    "oneOf": [
+                      {
+                        "properties": {
+                          "apotome": {
+                            "description": "How ApoTome phases become slices. Default sectioned.",
+                            "enum": [
+                              "sectioned",
+                              "widefield"
+                            ],
+                            "type": "string"
+                          }
+                        },
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
                   "files": {
                     "description": "1 to 5000.",
                     "items": {
@@ -9972,6 +10104,41 @@
                         },
                         "size": {
                           "type": "integer"
+                        },
+                        "zstack": {
+                          "description": "A .czi with more than one slice: what it says of itself.",
+                          "properties": {
+                            "phases": {
+                              "description": "Its ApoTome grid phases; 1 (the default) without.",
+                              "minimum": 1,
+                              "type": "integer"
+                            },
+                            "pixel_um": {
+                              "description": "Its X scaling; null without, when stack's is used.",
+                              "type": [
+                                "number",
+                                "null"
+                              ]
+                            },
+                            "slices": {
+                              "description": "Its Z planes.",
+                              "minimum": 2,
+                              "type": "integer"
+                            },
+                            "z_step_um": {
+                              "description": "Its Z scaling; null without, when stack's is used.",
+                              "type": [
+                                "number",
+                                "null"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "pixel_um",
+                            "slices",
+                            "z_step_um"
+                          ],
+                          "type": "object"
                         }
                       },
                       "required": [
@@ -9987,7 +10154,7 @@
                     "type": "boolean"
                   },
                   "stack": {
-                    "description": "Group the files into Z-stacks.",
+                    "description": "Group TIFF slices into Z-stacks.",
                     "oneOf": [
                       {
                         "properties": {

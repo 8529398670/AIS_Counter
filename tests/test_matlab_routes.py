@@ -63,7 +63,8 @@ class Harness:
     def helper(self, who):
         return self.key(who, api_keys.PURPOSE_MATLAB_HELPER)
 
-    async def call(self, method, path, session=None, key=None, body=None, extra=(), peer="127.0.0.1"):
+    async def call(self, method, path, session=None, key=None, body=None, extra=(), peer="127.0.0.1", raw=None):
+        """raw: bytes sent as they are, in three pieces, as a large upload arrives."""
         headers = [(b"host", b"t"), *extra]
         if session is not None:
             headers.append((b"cookie", session.cookie.encode()))
@@ -72,15 +73,17 @@ class Harness:
         payload = b""
         if body is not None:
             payload = json.dumps({**body, **({"csrf_token": session.csrf} if session else {})}).encode()
+        pieces = [payload]
+        if raw is not None:
+            third = len(raw) // 3 + 1
+            pieces = [raw[i:i + third] for i in range(0, len(raw), third)] or [b""]
         sent = []
-        delivered = False
 
         async def receive():
-            nonlocal delivered
-            if delivered:
+            if not pieces:
                 await asyncio.Event().wait()
-            delivered = True
-            return {"type": "http.request", "body": payload, "more_body": False}
+            piece = pieces.pop(0)
+            return {"type": "http.request", "body": piece, "more_body": bool(pieces)}
 
         async def send(message):
             sent.append(message)

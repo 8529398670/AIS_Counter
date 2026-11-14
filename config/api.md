@@ -2634,9 +2634,11 @@ Body: {path}: an Open-path batch, hashed and recorded by the server.
 | `channels[].roles[].label` | string | yes |  | The channel's name; empty unless role is other. |
 | `channels[].roles[].role` | string | yes | one of `ais`, `soma`, `other` |  |
 | `csrf_token` | string | no |  | From GET /api/me. Browser sessions only. |
+| `czi_stack` | object or null | no |  | For files with zstack: Z-stack .czi files. |
+| `czi_stack.apotome` | string | no | one of `sectioned`, `widefield` | How ApoTome phases become slices. Default sectioned. |
 | `path` | string | yes |  | A folder on this machine. |
 | `randomize` | boolean | no |  | Blind the names. Default true. |
-| `stack` | object or null | no |  | Group the files into Z-stacks. |
+| `stack` | object or null | no |  | Group TIFF slices into Z-stacks. |
 | `stack.pixel_um` | number | yes |  |  |
 | `stack.plane` | integer | yes | 0 to 3 | The channel of each slice that is the AIS. |
 | `stack.z_step_um` | number | yes |  |  |
@@ -2667,6 +2669,8 @@ Body: {name, files: [{name, rel, sha, size}], translations?: [{dir, text}]} -- a
 | `channels[].roles[].label` | string | yes |  | The channel's name; empty unless role is other. |
 | `channels[].roles[].role` | string | yes | one of `ais`, `soma`, `other` |  |
 | `csrf_token` | string | no |  | From GET /api/me. Browser sessions only. |
+| `czi_stack` | object or null | no |  | For files with zstack: Z-stack .czi files. |
+| `czi_stack.apotome` | string | no | one of `sectioned`, `widefield` | How ApoTome phases become slices. Default sectioned. |
 | `files` | array of object | yes |  | 1 to 5000. |
 | `files[].layout` | object | no |  | Its channels as the browser read them. |
 | `files[].modified` | string | no |  | When it was last changed, ISO. |
@@ -2674,9 +2678,14 @@ Body: {name, files: [{name, rel, sha, size}], translations?: [{dir, text}]} -- a
 | `files[].rel` | string | no |  | Its path under the folder picked. Default name. |
 | `files[].sha` | string | yes |  | sha-256, hex. |
 | `files[].size` | integer | no |  |  |
+| `files[].zstack` | object | no |  | A .czi with more than one slice: what it says of itself. |
+| `files[].zstack.phases` | integer | no | at least 1 | Its ApoTome grid phases; 1 (the default) without. |
+| `files[].zstack.pixel_um` | number or null | yes |  | Its X scaling; null without, when stack's is used. |
+| `files[].zstack.slices` | integer | yes | at least 2 | Its Z planes. |
+| `files[].zstack.z_step_um` | number or null | yes |  | Its Z scaling; null without, when stack's is used. |
 | `name` | string | yes |  |  |
 | `randomize` | boolean | no |  | Blind the names. Default true. |
-| `stack` | object or null | no |  | Group the files into Z-stacks. |
+| `stack` | object or null | no |  | Group TIFF slices into Z-stacks. |
 | `stack.pixel_um` | number | yes |  |  |
 | `stack.plane` | integer | yes | 0 to 3 | The channel of each slice that is the AIS. |
 | `stack.z_step_um` | number | yes |  |  |
@@ -3111,6 +3120,7 @@ A batch's channel layouts
 | `pixel.pixel_um` | number or null | yes |  | null: Settings', 40x by default. |
 | `stacks` | object or null | yes |  |  |
 | `stacks.count` | integer | yes |  |  |
+| `stacks.from_file` | integer | yes |  | How many are .czi files, calibrated from the file. |
 | `stacks.mixed` | boolean | yes |  |  |
 | `stacks.pixel_um` | number | yes |  |  |
 | `stacks.z_step_um` | number | yes |  |  |
@@ -3184,9 +3194,11 @@ Body: {path}: a folder on this machine added to an existing batch.
 | `channels[].roles[].label` | string | yes |  | The channel's name; empty unless role is other. |
 | `channels[].roles[].role` | string | yes | one of `ais`, `soma`, `other` |  |
 | `csrf_token` | string | no |  | From GET /api/me. Browser sessions only. |
+| `czi_stack` | object or null | no |  | For files with zstack: Z-stack .czi files. |
+| `czi_stack.apotome` | string | no | one of `sectioned`, `widefield` | How ApoTome phases become slices. Default sectioned. |
 | `path` | string | yes |  | A folder on this machine. |
 | `randomize` | boolean | no |  | Blind the names. Default true. |
-| `stack` | object or null | no |  | Group the files into Z-stacks. |
+| `stack` | object or null | no |  | Group TIFF slices into Z-stacks. |
 | `stack.pixel_um` | number | yes |  |  |
 | `stack.plane` | integer | yes | 0 to 3 | The channel of each slice that is the AIS. |
 | `stack.z_step_um` | number | yes |  |  |
@@ -3447,6 +3459,8 @@ Body: {files: [{name, rel, sha, size, modified?}], randomize?, add_name?, transl
 | `channels[].roles[].label` | string | yes |  | The channel's name; empty unless role is other. |
 | `channels[].roles[].role` | string | yes | one of `ais`, `soma`, `other` |  |
 | `csrf_token` | string | no |  | From GET /api/me. Browser sessions only. |
+| `czi_stack` | object or null | no |  | For files with zstack: Z-stack .czi files. |
+| `czi_stack.apotome` | string | no | one of `sectioned`, `widefield` | How ApoTome phases become slices. Default sectioned. |
 | `files` | array of object | yes |  | 1 to 5000. |
 | `files[].layout` | object | no |  | Its channels as the browser read them. |
 | `files[].modified` | string | no |  | When it was last changed, ISO. |
@@ -3454,8 +3468,13 @@ Body: {files: [{name, rel, sha, size, modified?}], randomize?, add_name?, transl
 | `files[].rel` | string | no |  | Its path under the folder picked. Default name. |
 | `files[].sha` | string | yes |  | sha-256, hex. |
 | `files[].size` | integer | no |  |  |
+| `files[].zstack` | object | no |  | A .czi with more than one slice: what it says of itself. |
+| `files[].zstack.phases` | integer | no | at least 1 | Its ApoTome grid phases; 1 (the default) without. |
+| `files[].zstack.pixel_um` | number or null | yes |  | Its X scaling; null without, when stack's is used. |
+| `files[].zstack.slices` | integer | yes | at least 2 | Its Z planes. |
+| `files[].zstack.z_step_um` | number or null | yes |  | Its Z scaling; null without, when stack's is used. |
 | `randomize` | boolean | no |  | Blind the names. Default true. |
-| `stack` | object or null | no |  | Group the files into Z-stacks. |
+| `stack` | object or null | no |  | Group TIFF slices into Z-stacks. |
 | `stack.pixel_um` | number | yes |  |  |
 | `stack.plane` | integer | yes | 0 to 3 | The channel of each slice that is the AIS. |
 | `stack.z_step_um` | number | yes |  |  |
@@ -5043,6 +5062,8 @@ The shapes the routes above refer to by name.
 | `volume_voxel_um3` | number | no |  |  |
 | `width_um` | number or null | no |  |  |
 | `window_um` | number or null | yes |  |  |
+| `z_ais_end` | number | no |  | Ends from the slices: the AIS end found on the 3D route, a profile point. |
+| `z_ais_start` | number | no |  | Ends from the slices: the AIS start found on the 3D route, a profile point. |
 | `z_clipped` | number | no |  | 0 or 1. |
 | `z_confidence` | number | no |  |  |
 | `z_end` | number | no |  |  |
@@ -6258,6 +6279,8 @@ A new batch from files you hashed (name, rel, sha, size each), grouped into imag
 | `channels` | array of object | no |  | Channel roles per layout: [{layout: {kind, names}, roles: [{role: ais \| soma \| other, label}]}], one role per channel, exactly one ais, at most one soma, a label for each other. Images whose file layout matches get them; left out, the AIS is guessed (a .czi's Alexa Fluor 488, a TIFF's first plane). |
 | `channels[].layout` | object | no |  |  |
 | `channels[].roles` | array of any | no |  |  |
+| `czi_stack` | object | no |  | Z-stack .czi files (files with zstack) become one image each: {apotome: sectioned (default) \| widefield}, how an ApoTome stack's grid phases are made into slices. Their AIS channel is guessed (Alexa Fluor 488) unless channels says. |
+| `czi_stack.apotome` | string | no | one of `sectioned`, `widefield` |  |
 | `files` | array of object | yes |  | The files, hashed on your side: name and rel (path inside the picked folder) as they are, sha256 of the bytes, size in bytes. |
 | `files[].layout` | object | no |  | Its channels, for channels: {kind: czi \| tiff, names: [...]} (a .czi's channel names; a TIFF's planes as Red/Green/Blue or Channel N). |
 | `files[].modified` | number | no |  |  |
@@ -6265,9 +6288,10 @@ A new batch from files you hashed (name, rel, sha, size each), grouped into imag
 | `files[].rel` | string | yes |  |  |
 | `files[].sha` | string | yes |  | sha-256 of the file, lower-case hex. |
 | `files[].size` | integer | yes |  |  |
+| `files[].zstack` | object | no |  | A .czi with more than one Z plane (a Z-stack): {slices, phases (ApoTome grid phases, 1 without), z_step_um, pixel_um} from its metadata (Scaling X and Z, in microns). Needs layout. |
 | `name` | string | yes |  |  |
 | `randomize` | boolean | no |  | Blind the names (default true): images get random n-n-n names, the originals kept for admins. |
-| `stack` | object | no |  | Z-stack slices (name_zNNN.tif) become one image each stack: {plane: 0 red \| 1 green \| 2 blue \| 3, z_step_um, pixel_um}. |
+| `stack` | object | no |  | Z-stack TIFF slices (name_zNNN.tif) become one image each stack: {plane: 0 red \| 1 green \| 2 blue \| 3, z_step_um, pixel_um}. |
 | `stack.pixel_um` | number | no |  |  |
 | `stack.plane` | integer | no |  |  |
 | `stack.z_step_um` | number | no |  |  |
@@ -6294,6 +6318,8 @@ More files into an existing batch, as create_batch_from_files. add_name names th
 | `channels` | array of object | no |  | Channel roles per layout: [{layout: {kind, names}, roles: [{role: ais \| soma \| other, label}]}], one role per channel, exactly one ais, at most one soma, a label for each other. Images whose file layout matches get them; left out, the AIS is guessed (a .czi's Alexa Fluor 488, a TIFF's first plane). |
 | `channels[].layout` | object | no |  |  |
 | `channels[].roles` | array of any | no |  |  |
+| `czi_stack` | object | no |  | Z-stack .czi files (files with zstack) become one image each: {apotome: sectioned (default) \| widefield}, how an ApoTome stack's grid phases are made into slices. Their AIS channel is guessed (Alexa Fluor 488) unless channels says. |
+| `czi_stack.apotome` | string | no | one of `sectioned`, `widefield` |  |
 | `files` | array of object | yes |  | The files, hashed on your side: name and rel (path inside the picked folder) as they are, sha256 of the bytes, size in bytes. |
 | `files[].layout` | object | no |  | Its channels, for channels: {kind: czi \| tiff, names: [...]} (a .czi's channel names; a TIFF's planes as Red/Green/Blue or Channel N). |
 | `files[].modified` | number | no |  |  |
@@ -6301,8 +6327,9 @@ More files into an existing batch, as create_batch_from_files. add_name names th
 | `files[].rel` | string | yes |  |  |
 | `files[].sha` | string | yes |  | sha-256 of the file, lower-case hex. |
 | `files[].size` | integer | yes |  |  |
+| `files[].zstack` | object | no |  | A .czi with more than one Z plane (a Z-stack): {slices, phases (ApoTome grid phases, 1 without), z_step_um, pixel_um} from its metadata (Scaling X and Z, in microns). Needs layout. |
 | `randomize` | boolean | no |  | Blind the names (default true): images get random n-n-n names, the originals kept for admins. |
-| `stack` | object | no |  | Z-stack slices (name_zNNN.tif) become one image each stack: {plane: 0 red \| 1 green \| 2 blue \| 3, z_step_um, pixel_um}. |
+| `stack` | object | no |  | Z-stack TIFF slices (name_zNNN.tif) become one image each stack: {plane: 0 red \| 1 green \| 2 blue \| 3, z_step_um, pixel_um}. |
 | `stack.pixel_um` | number | no |  |  |
 | `stack.plane` | integer | no |  |  |
 | `stack.z_step_um` | number | no |  |  |

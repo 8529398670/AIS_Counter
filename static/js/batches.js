@@ -822,14 +822,15 @@ const Batches = {
   // A folder on this machine: its channels and Z-stacks, asked about before
   // the server hashes anything (Channels.ask). null when the person backs out.
   async askAt( path ) {
-    const [ { stacks } , { layouts } ] = await Promise.all( [ Api.post( "/api/ais/local/stacks" , { path: path } ) ,
+    const [ found , { layouts } ] = await Promise.all( [ Api.post( "/api/ais/local/stacks" , { path: path } ) ,
       Api.post( "/api/ais/local/channels" , { path: path } ) ] );
-    return Channels.ask( layouts , stacks );
+    return Channels.ask( layouts , found.stacks , found.czi_stacks || [] );
   },
 
   // What an answer of Channels.ask adds to an add's body.
   addBody( asked ) {
-    return Object.assign( {} , asked.channels.length ? { channels: asked.channels } : {} , asked.stack ? { stack: asked.stack } : {} );
+    return Object.assign( {} , asked.channels.length ? { channels: asked.channels } : {} , asked.stack ? { stack: asked.stack } : {} ,
+      asked.czi_stack ? { czi_stack: asked.czi_stack } : {} );
   },
 
   // Fill in the area (and Z-stack volume) of this batch's AIS saved without
@@ -899,7 +900,7 @@ const Batches = {
       }
       // Which channel is the AIS (and the stacks' spacing), now the files
       // have been read; backing out adds nothing.
-      const asked = await Channels.ask( picked.layouts , stacks );
+      const asked = await Channels.ask( picked.layouts , stacks , picked.cziStacks );
       if ( !asked ) {
         this.local.delete( b.id );
         this.render();

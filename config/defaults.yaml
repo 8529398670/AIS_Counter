@@ -122,6 +122,11 @@ server:
   # make per window before getting 429s. Files the page loads (/js, /css,
   # /vendor, images) do not count: index.html alone pulls in over twenty.
   body_limit_bytes: 1048576        # 1 MiB [restart]
+  # The largest image file one upload may be (POST /api/ais/files): a .czi
+  # Z-stack from an ApoTome is 300 MB. It is written to disk as it arrives,
+  # so it costs disk space, not memory. A reverse proxy in front has a limit
+  # of its own (nginx: client_max_body_size) that must be raised to match.
+  upload_limit_bytes: 1073741824   # 1 GiB [restart]
   rate_limit_max: 600              # [live]
   rate_limit_window_seconds: 60    # [live]
 

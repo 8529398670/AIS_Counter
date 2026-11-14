@@ -85,6 +85,8 @@ class AISResultSchema(TypedDict):
     z_clipped: NotRequired[Annotated[float, Field(doc="0 or 1.")]]
     volume_voxel_um3: NotRequired[float]
     volume_tube_um3: NotRequired[float]
+    z_ais_start: NotRequired[Annotated[float, Field(doc="Ends from the slices: the AIS start found on the 3D route, a profile point.")]]
+    z_ais_end: NotRequired[Annotated[float, Field(doc="Ends from the slices: the AIS end found on the 3D route, a profile point.")]]
     z_method: NotRequired[str]
     z_path: NotRequired[Annotated[list[Any], Field(doc="The z of each pixel (a number), null outside the AIS. Z-stacks only.")]]
     auto_method: NotRequired[str]

@@ -1,14 +1,64 @@
 # Z-stacks
 
-A Z-stack comes from ZEN's Image Export as a folder of per-slice TIFFs, such as
-`IP-ApoTome-04_z01c1+2.tif` to `z11c1+2.tif`. The app keeps it as one image and
-measures each AIS through the slices.
+A Z-stack comes either as ZEN's own `.czi` file, holding every slice, or from
+ZEN's Image Export as a folder of per-slice TIFFs, such as
+`IP-ApoTome-04_z01c1+2.tif` to `z11c1+2.tif`. The app keeps either as one image
+and measures each AIS through the slices.
 
 Nothing here has been checked against an AIS measured by hand in 3D. The tests
 use synthetic stacks with known paths. Until someone has compared a handful of
 real AIS with ZEN or ImageJ, treat 3D lengths as unvalidated.
 
-## What the files do and don't carry
+## CZI Z-stacks
+
+A `.czi` with more than one Z plane is one Z-stack image. The two samples are
+`Slide7zstackExperiment-26.czi` (9 slices, 260 MB) and `-27.czi` (11 slices,
+318 MB), the originals of stacks 03 and 04 below.
+
+- **Calibration from the file.** The pixel size and z step come from its
+  Scaling (0.1024 µm/px and 0.77 µm on both samples, from a 63x/1.40 oil
+  objective). There are no fields for them when adding. *Channels…* can still
+  correct them later, which gives the stack a new sha, as for TIFF slices. A
+  file without Scaling takes the fields TIFF slices use.
+- **Separate channels at 12 bits.** Alexa Fluor 594 and Alexa Fluor 488 are
+  read as they were recorded, with nothing clipped at 254. They are put on
+  the same scale as a 2D `.czi` (times 16), so preprocessing sees what it
+  always sees.
+- **The AIS channel.** The Channels dialog still opens on every add, with
+  Alexa Fluor 488 picked, as for a 2D `.czi` (`channels.ais_index`). Picking
+  another channel gives another sha.
+- **ApoTome phases.** These files hold ApoTome's raw grid images, not ZEN's
+  processed ones: five per slice and channel (the CZI's H dimension), the grid
+  moved a fifth of its period each time. The add dialog asks how to make them
+  into slices:
+  - *Sectioned* (default): `|Σ P_k·e^(−2πik/5)| · 2/5`, the amplitude of the
+    grid's modulation, which only in-focus light has. On stack 04 it
+    correlates r = 0.99 (488) and 0.94 (594) with ZEN's IP-ApoTome export. ZEN
+    also corrects grid phase and bleaching, so it is close to ZEN's, not the
+    same.
+  - *Widefield*: the mean of the five, in-focus and out-of-focus light
+    together (r ≈ 0.56 with the export).
+
+  The choice is part of the stack's sha, so the same file added both ways is
+  two images with their own measurements. A `.czi` with no phases skips the
+  question.
+- **How it is stored.** The `.czi` is the stack's only real file, so uploads,
+  exports and backups handle one file. Its manifest
+  (`zstack.czi_manifest`) names that file (`source`), the channel (`plane`),
+  `apotome` and the calibration, with slices numbered 1 to Z as ZEN numbers
+  its exported `z01` files. `czi.read_stack` builds the slices from a mmap of
+  the file, one slice and phase at a time: about 0.3 s and 32 MB for stack 04.
+  The browser reads Z, H and Scaling from the file's header as it hashes it
+  (`Channels.readCzi`), and sends them with the file (`zstack`). Open path
+  reads the same from the server's copy (`local.czi_stack_of`).
+- **Uploads stream to disk.** An upload is written beside the stored files as
+  it arrives and is checked once it is complete (`service.Incoming`), so a
+  300 MB file never sits in memory, which matters in the 256 MB container.
+  The limit is `server.upload_limit_bytes`, 1 GiB by default. A reverse proxy
+  in front has a limit of its own. JSON bodies, such as file lists, backups
+  and base64 uploads, stay at 64 MiB.
+
+## What the TIFF exports do and don't carry
 
 - **No calibration.** There is no pixel size or z step in the files, and the
   96 dpi tag is a placeholder. Both are entered when stacks are added and are
@@ -43,8 +93,11 @@ projection back, so tracing, previews and thumbnails work as they do for a
 
 ## How length is worked out
 
-`Trace, then lift to Z` (`zlength.lift`) runs after `run_click`, which is
-unchanged:
+Two methods are built, chosen in Settings (Z method).
+
+### Trace, then lift to Z
+
+`zlength.lift` runs after `run_click`, which is unchanged:
 
 1. The existing tracer runs on the projection, giving the trace and the AIS start
    and end.
@@ -67,6 +120,30 @@ unchanged:
 | `z_clipped` | 1 if an end sits on the first or last slice, so the AIS may run out of the stack and the length is a lower bound |
 | `z_method` | Which method measured it |
 | `z_path` | z at each trace pixel, empty outside the AIS (stored on the row, not in the CSV) |
+| `z_ais_start`, `z_ais_end` | Ends from the slices only: the AIS ends it found, as profile points |
+
+### Trace, lift to Z, ends from the slices
+
+`zlength.lift_ends` is an opt-in method. `lift` is unchanged by it. It finds
+the AIS start and end again from the slices instead of the projection:
+
+1. A route through the slices along the **whole** trace. This route may climb
+   no steeper than 45° (`MAX_SLOPE`): it moves at most one slice per z step's
+   worth of XY travel. Slices are levelled by their own bright level, so a
+   patch alone in its slice looks as bright as the AIS. `lift`'s free route
+   can be drawn onto such a patch past an AIS's end; this one is not.
+2. The levelled intensity along that route, at each point's z.
+3. The original's own rules on that profile (`zlength._bounds`, a copy of
+   `ais_auto.measure`'s): sliding mean, scaled 0 to 1, the last point above
+   f after the peak, the last below f before it. A test checks that they
+   give `measure`'s own answer on a click's profile.
+4. The section between the new ends, measured as `lift` measures its, along
+   the same route.
+
+The row gets `z_ais_start` and `z_ais_end`, the new ends as profile points. The
+Profile panel then shows the 3D profile. `length_um` and the areas stay the
+projection's; the tube volume lays the projection's widths along the new
+section, so it is an estimate past the old ends.
 
 **Compare `length_3d_um` with `length_xy_um`, never with `length_um`.**
 `length_um` counts the rounded pixels a trace crosses, which reads above true
@@ -77,8 +154,12 @@ still come from it, including on stacks. `soma_um` is an XY distance.
 
 ## Known limits
 
-- The AIS start and end come from the projection's intensity profile, where
-  out-of-focus signal can shift them.
+- With `lift`, the AIS start and end come from the projection's intensity
+  profile, where out-of-focus signal can shift them. *Ends from the slices*
+  is the opt-in answer to that, and is not validated either.
+- The ApoTome sectioning here is not ZEN's (no grid-phase or bleaching
+  correction) and has a small positive noise floor, which `preprocess` and
+  the slice levels see as background.
 - An AIS running out of the stack is flagged, not corrected.
 - The stage's z step can differ from true depth in the sample if the objective's
   immersion doesn't match the mounting medium.
@@ -119,14 +200,13 @@ Listed in Settings as not built: `zlength.volume_trace`.
 
 ### Other
 
-- **CZI Z-stacks.** Waiting on a sample. `czi.py` refuses Z>1 until then. It would
-  read into `Library.stack`, with calibration from the file and no dialog fields,
-  and would also give 16-bit data with separate channels. Update
-  `tests/test_czi.py`.
+- **Check the sectioning against ZEN** on more stacks, and the 3D lengths of
+  a CZI stack against the same AIS on its TIFF export.
+- **Re-choose ApoTome after adding.** Today, add the file again the other way.
 - **Correcting a z step on saved rows.** `z_path` is stored, so 3D length can be
   worked out again without re-clicking. Nothing does this yet. Until then, re-add
   the stack with the right value and re-click.
 - **Tune auto mode for stacks.** It needs hand-clicked stacks as ground truth.
-- **AIS bounds along the lifted path.** Sample the intensity profile along the 3D
-  route instead of the projection, which would remove out-of-focus signal from
-  the start and end.
+- **Ends from the slices on the fast engine** lays the projection's widths
+  along the new section for the tube volume, like the classic engine; neither
+  measures the blob past the projection's ends.

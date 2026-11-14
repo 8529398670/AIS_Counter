@@ -200,7 +200,7 @@ def build_routes(static_server: StaticServer, cfg: Config) -> list[BaseRoute]:
         signed_in("/api/about/report", meta.get_report),
         # AIS analysis (app/routes/ais.py): files, tracing, and the batches and
         # accepted AIS every signed-in user shares.
-        signed_in("/api/ais/files", ais.upload, ["POST"], max_body_size=ais.UPLOAD_LIMIT_BYTES),
+        signed_in("/api/ais/files", ais.upload, ["POST"], max_body_size=cfg.upload_limit_bytes),
         signed_in("/api/ais/files/{sha}/view.png", ais.view),
         signed_in("/api/ais/files/{sha}/thumb.png", ais.thumb),
         signed_in("/api/ais/files/{sha}/channels", ais.channels),
@@ -217,7 +217,7 @@ def build_routes(static_server: StaticServer, cfg: Config) -> list[BaseRoute]:
         signed_in("/api/ais/batches", ais.batch_list),
         signed_in("/api/ais/batches", ais.batch_create, ["POST"]),
         # A folder's manifest is the whole of it: thousands of slices fill the default limit.
-        signed_in("/api/ais/batches/upload", ais.batch_upload, ["POST"], max_body_size=ais.UPLOAD_LIMIT_BYTES),
+        signed_in("/api/ais/batches/upload", ais.batch_upload, ["POST"], max_body_size=ais.JSON_LIMIT_BYTES),
         # The team's priority order: admins.
         admins("/api/ais/batches/order", ais.batch_order, ["POST"]),
         # The team's folders, and filing batches in them: everyone sees them, admins change them.
@@ -229,9 +229,9 @@ def build_routes(static_server: StaticServer, cfg: Config) -> list[BaseRoute]:
         admins("/api/ais/folders/{folder_id}/move", ais.folder_move, ["POST"]),
         admins("/api/ais/folders/{folder_id}/delete", ais.folder_delete, ["POST"]),
         # Backups hold the original names: admins.
-        admins("/api/ais/batches/import", ais.batch_import, ["POST"], max_body_size=ais.UPLOAD_LIMIT_BYTES),
+        admins("/api/ais/batches/import", ais.batch_import, ["POST"], max_body_size=ais.JSON_LIMIT_BYTES),
         admins("/api/ais/batches/import/missing", ais.batch_import_missing, ["POST"],
-               max_body_size=ais.UPLOAD_LIMIT_BYTES),
+               max_body_size=ais.JSON_LIMIT_BYTES),
         admins("/api/ais/batches/{batch_id}/backup", ais.batch_backup),
         signed_in("/api/ais/batches/{batch_id}", ais.batch_get),
         signed_in("/api/ais/batches/{batch_id}/status", ais.batch_status),
@@ -239,7 +239,7 @@ def build_routes(static_server: StaticServer, cfg: Config) -> list[BaseRoute]:
         signed_in("/api/ais/batches/{batch_id}/layouts", ais.batch_layouts),
         signed_in("/api/ais/batches/{batch_id}/layouts", ais.batch_layouts_set, ["POST"]),
         signed_in("/api/ais/batches/{batch_id}/fill-areas", ais.batch_fill_areas, ["POST"]),
-        signed_in("/api/ais/batches/{batch_id}/upload", ais.batch_add, ["POST"], max_body_size=ais.UPLOAD_LIMIT_BYTES),
+        signed_in("/api/ais/batches/{batch_id}/upload", ais.batch_add, ["POST"], max_body_size=ais.JSON_LIMIT_BYTES),
         signed_in("/api/ais/batches/{batch_id}/rename", ais.batch_rename, ["POST"]),
         signed_in("/api/ais/batches/{batch_id}/archive", ais.batch_archive, ["POST"]),
         signed_in("/api/ais/batches/{batch_id}/activity", ais.batch_activity, ["POST"]),
@@ -270,7 +270,7 @@ def build_routes(static_server: StaticServer, cfg: Config) -> list[BaseRoute]:
         signed_in("/api/ais/batches/{batch_id}/auto", ais.auto_start, ["POST"]),
         signed_in("/api/ais/results", ais.result_list),
         signed_in("/api/ais/results", ais.result_add, ["POST"]),
-        signed_in("/api/ais/results/import", ais.result_import, ["POST"], max_body_size=ais.UPLOAD_LIMIT_BYTES),
+        signed_in("/api/ais/results/import", ais.result_import, ["POST"], max_body_size=ais.JSON_LIMIT_BYTES),
         signed_in("/api/ais/results/{result_id}/delete", ais.result_delete, ["POST"]),
         signed_in("/api/ais/results/{result_id}/update", ais.result_update, ["POST"]),
         signed_in("/api/ais/results/{result_id}/soma", ais.result_soma, ["POST"]),

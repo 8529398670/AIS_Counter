@@ -173,9 +173,10 @@ def test_a_flat_black_stack_gives_numbers_or_nothing_never_nan():
     assert got is None or all(np.isfinite(v) for k, v in got.items() if k != "z_path")
 
 
-def test_only_the_built_method_can_be_chosen():
+def test_only_the_built_methods_can_be_chosen():
     assert zlength.method().id == zlength.DEFAULT_METHOD == "trace_lift"
     assert zlength.method("trace_lift").run is zlength.lift
+    assert zlength.method("lift_ends").run is zlength.lift_ends and zlength.method("lift_ends").own_section
     with pytest.raises(ValueError, match="not built yet"):
         zlength.method("end_clicks")
     with pytest.raises(ValueError, match="not built yet"):
@@ -184,5 +185,75 @@ def test_only_the_built_method_can_be_chosen():
         zlength.method("nothing")
 
 
-def test_the_three_methods_are_listed():
-    assert [(m.id, m.ready) for m in zlength.METHODS] == [("trace_lift", True), ("end_clicks", False), ("volume_trace", False)]
+def test_the_four_methods_are_listed():
+    assert [(m.id, m.ready) for m in zlength.METHODS] == [("trace_lift", True), ("lift_ends", True),
+                                                          ("end_clicks", False), ("volume_trace", False)]
+
+
+# --- ends from the slices (lift_ends) ---------------------------------------------
+
+
+def ais_with_haze(slices=9):
+    """A fibre at slice 4 whose AIS (points 20 to 50) is bright, and past its
+    end a bright patch at slice 8, which the projection shows as more AIS."""
+    spline, pixels = path()
+    volume = np.zeros((slices, SIZE, SIZE), np.float64)
+    for i, (x, y) in enumerate(spline):
+        volume[4, int(round(y)) - 1, int(round(x)) - 1] = (200.0 if 20 <= i <= 50 else 40.0) * 30
+        if 52 <= i <= 72:
+            volume[8, int(round(y)) - 1, int(round(x)) - 1] = 180.0 * 30
+    volume = ndi.gaussian_filter(volume, (0.6, 1.4, 1.4)) + 4.0
+    noise = np.random.default_rng(2).normal(0, 1.0, volume.shape)
+    return spline, pixels, np.clip(volume + noise, 0, 255).astype(np.uint8)
+
+
+def test_ends_from_the_slices_leave_out_light_from_another_depth():
+    from app.analysis import ais_auto as aa
+
+    spline, pixels, stack = ais_with_haze()
+    levels = zlength.slice_levels(stack)
+    projected = zlength._sample(stack.max(axis=0)[None], pixels)[0]
+    settings = aa.DEFAULT
+    _, _, proj_end, proj_start = zlength._bounds(projected, settings.slide_d, settings.f)
+    assert proj_end >= 68                    # the projection's AIS runs into the patch
+    data = answer(spline, pixels, int(proj_start), int(proj_end)) | {"settings": settings.to_dict()}
+    got = zlength.lift_ends(stack, levels, list(range(1, 10)), data, PIXEL_UM, Z_STEP)
+    # What the original's rules give on the fibre's own slice alone (its
+    # sliding mean puts an end some points past the bright segment).
+    _, _, true_end, true_start = zlength._bounds(zlength._sample(stack[4:5], pixels)[0], settings.slide_d, settings.f)
+    assert got["z_ais_end"] == pytest.approx(true_end, abs=2) and got["z_ais_start"] == pytest.approx(true_start, abs=2)
+    assert got["z_ais_end"] < proj_end - 8
+    assert got["z_start"] == pytest.approx(5, abs=0.4) and got["z_end"] == pytest.approx(5, abs=0.4)
+    on = [i for i, z in enumerate(got["z_path"]) if z is not None]
+    assert on[0] == int(got["z_ais_start"]) - 1 and on[-1] == int(got["z_ais_end"]) - 1
+    assert got["length_xy_um"] < measure(stack, data)["length_xy_um"]
+    assert got["z_profile"]["ais_end"] == got["z_ais_end"] and len(got["z_profile"]["norm_lv"]) == len(pixels)
+
+
+def test_lift_alone_still_takes_the_projections_ends():
+    spline, pixels, stack = ais_with_haze()
+    got = measure(stack, answer(spline, pixels, 18, 70))
+    on = [i for i, z in enumerate(got["z_path"]) if z is not None]
+    assert (on[0], on[-1]) == (17, 69) and "z_ais_start" not in got
+
+
+def test_the_ends_follow_the_originals_rules():
+    """_bounds on a click's own profile gives what ais_auto.measure gave."""
+    from app.analysis import ais_auto as aa
+    from app.analysis.service import run_click
+    from tests.test_service import synthetic
+
+    pic, raw = synthetic()
+    out = run_click(aa.PreparedImage.from_array(pic), raw, (38.0, 101.0), None, 0.01)
+    assert out["ok"]
+    lv_smooth = zlength._sample(raw[None].astype(np.float64), np.asarray(out["pixels"]))[0]
+    norm_lv, max_i, end, start = zlength._bounds(lv_smooth, aa.DEFAULT.slide_d, aa.DEFAULT.f)
+    assert np.allclose(norm_lv, out["profile"]["norm_lv"])
+    assert (max_i, start, end) == (out["profile"]["max_i"], out["profile"]["ais_start"], out["profile"]["ais_end"])
+
+
+def test_widths_are_laid_along_the_new_section():
+    data = {"pixels": [[i, 1] for i in range(1, 11)], "profile": {"ais_start": 3, "ais_end": 6},
+            "shape": {"widths_um": [1.0, 2.0, 3.0, 4.0]}}
+    z_path = [None, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, None, None]
+    assert zlength.section_widths(data, z_path)["shape"]["widths_um"] == [1.0, 1.0, 2.0, 3.0, 4.0, 4.0, 4.0]

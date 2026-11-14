@@ -1,8 +1,9 @@
 """AIS length across a Z-stack (docs/z-stack.md).
 
-Which method measures it is a Settings choice, METHODS below. Only "Trace, then
-lift to Z" is built; the other two are templates, listed but not selectable
-until their function is written and `ready` flipped.
+Which method measures it is a Settings choice, METHODS below. "Trace, then
+lift to Z" and "Trace, lift to Z, ends from the slices" are built; the other
+two are templates, listed but not selectable until their function is written
+and `ready` flipped.
 
 Trace, then lift (`lift`): tracing stays 2D. The tracer runs unchanged on the
 stack's max projection, and its AIS section is then followed through the
@@ -15,6 +16,15 @@ slices:
     refine   a centroid of the slices around the route, below one slice
     smooth   a spline, far stiffer than XY's (Z_SMOOTHING)
     measure  arc length along the tracer's spline, with z added
+
+Ends from the slices (`lift_ends`): a route through the slices along the
+whole trace, which may climb no steeper than MAX_SLOPE (_steady_route), then
+the AIS start and end found again from the intensity along it (levelled per
+slice, at each point's z) instead of the projection's, with the original's
+own rules (_bounds). Light from another depth past an end is then off the
+route and no longer moves the end. The section between the new ends is measured as
+lift measures its. It adds z_ais_start and z_ais_end, the new ends as profile
+points like ais_start and ais_end, and z_profile, for drawing.
 
 Compare length_3d_um with length_xy_um, measured the same way along the same
 section. length_um is not comparable: it counts the rounded pixels a trace
@@ -31,6 +41,7 @@ from typing import Any, Callable
 
 import numpy as np
 
+from app.analysis import ais_auto as aa
 from app.analysis import mlcompat as ml
 
 # What one slice of jump costs, against a slice's brightness scaled 0 to 1.
@@ -44,6 +55,8 @@ MIN_POINTS = 5
 # so noise is not scaled up into something to follow.
 LEVEL_FLOOR = 0.25
 LEVEL_PERCENTILE = 99.9
+# How steeply lift_ends' route may climb: z over xy distance. 1 is 45°.
+MAX_SLOPE = 1.0
 
 
 def slice_levels(stack: np.ndarray) -> np.ndarray:
@@ -144,6 +157,134 @@ def lift(stack: np.ndarray, levels: np.ndarray, zs: Any, answer: dict[str, Any],
             | {"z_step_um": z_step_um, "z_clipped": int(int(route[0]) in ends or int(route[-1]) in ends), "z_path": path})
 
 
+def _bounds(lv_smooth: np.ndarray, d: int, f: float) -> tuple[np.ndarray, int, float, float] | None:
+    """(norm_lv, max_i, ais_start, ais_end) of a profile by ais_auto.measure's
+    rules (lines 401-442): a sliding mean of half-width d, scaled 0 to 1; the
+    AIS ends at the last point above f after the peak and starts after the
+    last point below f before it, as 1-based profile points (ais_start 0 when
+    there is none; ais_end the last point, where the original falls back to a
+    coordinate). A copy, so ais_auto stays the MATLAB port it is. None when
+    the profile is too short or flat."""
+    n = lv_smooth.size
+    if n < 2 * d:
+        return None
+    lv_ss = np.zeros(n)
+    for i in range(1, n + 1):
+        if i < d + 1:
+            win = np.concatenate([lv_smooth[0:i], lv_smooth[i - 1:i + d]])
+        elif i > n - (d + 1):
+            win = np.concatenate([lv_smooth[i - d - 1:i], lv_smooth[i - 1:n]])
+        else:
+            win = np.concatenate([lv_smooth[i - d - 1:i], lv_smooth[i - 1:i + d]])
+        lv_ss[i - 1] = aa._matlab_mean(win)
+    lo, hi = lv_ss.min(), lv_ss.max()
+    if not hi > lo:
+        return None
+    norm_lv = (lv_ss - lo) / (hi - lo)
+    max_i = int(np.flatnonzero(norm_lv == norm_lv.max())[0]) + 1
+    idx = np.arange(1, n + 1)
+    after = np.flatnonzero((idx > max_i) & (norm_lv > f))
+    before = np.flatnonzero((idx < max_i) & (norm_lv < f))
+    return norm_lv, max_i, float(after[-1] + 1) if after.size else float(n), float(before[-1] + 1) if before.size else 0.0
+
+
+def _steady_route(brightness: np.ndarray, zs: np.ndarray, points_per_slice: float) -> np.ndarray:
+    """_route for lift_ends, over the whole trace: the trace is cut into runs
+    of points_per_slice points, and the route moves at most one slice from
+    run to run, so it climbs no steeper than MAX_SLOPE. lift's route may
+    jump anywhere at a small cost, which is right within an AIS but lets a
+    patch alone in its slice (levelled as bright as the AIS) draw it off past
+    the end, exactly where the ends are being found."""
+    k = max(int(round(points_per_slice)), 1)
+    n = brightness.shape[1]
+    runs = [slice(i, min(i + k, n)) for i in range(0, n, k)]
+    mean = np.stack([brightness[:, r].mean(axis=1) for r in runs], axis=1)   # (slices, runs)
+    count, steps = mean.shape
+    score = mean[:, 0].copy()
+    came_from = np.zeros(mean.shape, np.intp)
+    for j in range(1, steps):
+        new = np.full(count, -np.inf)
+        for s in range(count):
+            for prev in (s - 1, s, s + 1):
+                if 0 <= prev < count:
+                    value = score[prev] - JUMP_PENALTY * abs(zs[s] - zs[prev])
+                    if value > new[s]:
+                        new[s], came_from[s, j] = value, prev
+        score = new + mean[:, j]
+    at = np.zeros(steps, np.intp)
+    at[-1] = score.argmax()
+    for j in range(steps - 1, 0, -1):
+        at[j - 1] = came_from[at[j], j]
+    route = np.zeros(n, np.intp)
+    for r, s in zip(runs, at):
+        route[r] = s
+    return route
+
+
+def lift_ends(stack: np.ndarray, levels: np.ndarray, zs: Any, answer: dict[str, Any],
+              pixel_um: float, z_step_um: float) -> dict[str, Any] | None:
+    """lift, with the AIS's ends found from the slices (module docstring),
+    and the same numbers. None when the trace or its new section is too
+    short, or its 3D profile flat."""
+    pixels = np.asarray(answer["pixels"], np.intp).reshape(-1, 2)
+    n = len(pixels)
+    if n < MIN_POINTS:
+        return None
+    zs = np.asarray(zs, np.float64)
+    levelled = _sample(stack, pixels) / levels[:, None]
+    brightness = levelled / max(float(levelled.max()), 1e-9)
+    route = _steady_route(brightness, zs, z_step_um / pixel_um / MAX_SLOPE)
+    t = np.arange(1.0, n + 1)
+    z = ml.csaps(t, _centroid(brightness, route, zs)[None, :], Z_SMOOTHING, t)[0]
+    profile = np.array([np.interp(z[i], zs, levelled[:, i]) for i in range(n)])
+    settings = aa.Settings.from_dict(answer.get("settings"))
+    found = _bounds(profile, settings.slide_d, settings.f)
+    if found is None:
+        return None
+    norm_lv, max_i, ais_end, ais_start = found
+    moved = answer | {"profile": dict(answer["profile"]) | {"ais_start": ais_start, "ais_end": ais_end}}
+    first, last = _section(moved)
+    if last - first + 1 < MIN_POINTS:
+        return None
+    # Measured as lift measures its section, along this route: lift's own
+    # route on the new section could still take a patch at its very end.
+    section = pixels[first:last + 1]
+    bright = brightness[:, first:last + 1] / max(float(brightness[:, first:last + 1].max()), 1e-9)
+    steady = route[first:last + 1]
+    ts = np.arange(1.0, len(section) + 1)
+    zz = ml.csaps(ts, _centroid(bright, steady, zs)[None, :], Z_SMOOTHING, ts)[0]
+    xy = _on_spline(section, np.asarray(answer["spline"], np.float64)) * pixel_um
+    peak = bright[steady, np.arange(len(section))]
+    contrast = float(np.median((peak - np.median(bright, axis=0)) / np.maximum(peak, 1e-9)))
+    numbers = {"length_3d_um": _arc(xy[:, 0], xy[:, 1], zz * z_step_um), "length_xy_um": _arc(xy[:, 0], xy[:, 1]),
+               "z_start": float(zz[0]), "z_end": float(zz[-1]), "z_span_um": float(zz.max() - zz.min()) * z_step_um,
+               "z_confidence": min(max(contrast, 0.0), 1.0)}
+    if not all(math.isfinite(v) for v in numbers.values()):
+        return None
+    path: list[float | None] = [None] * n
+    path[first:last + 1] = [round(float(v), 2) for v in zz]
+    ends = {0, len(zs) - 1}
+    out = ({k: round(v, 3) for k, v in numbers.items()}
+           | {"z_step_um": z_step_um, "z_clipped": int(int(steady[0]) in ends or int(steady[-1]) in ends), "z_path": path})
+    return out | {"z_ais_start": ais_start, "z_ais_end": ais_end,
+                  "z_profile": {"norm_lv": [round(float(v), 4) for v in norm_lv], "max_i": max_i,
+                                "ais_start": ais_start, "ais_end": ais_end}}
+
+
+def section_widths(answer: dict[str, Any], z_path: list[float | None]) -> dict[str, Any]:
+    """answer with its shape's widths (one per point of the projection's
+    section) laid along the section z_path covers, each point taking the
+    width of the nearest point the projection measured, for area.volumes:
+    the blob was only measured over the projection's section. An estimate."""
+    widths = list((answer.get("shape") or {}).get("widths_um") or [])
+    idx = [i for i, v in enumerate(z_path) if v is not None]
+    if not widths or not idx:
+        return answer
+    first, _ = _section(answer)
+    laid = [widths[min(max(i - first, 0), len(widths) - 1)] for i in idx]
+    return answer | {"shape": dict(answer["shape"]) | {"widths_um": laid}}
+
+
 def end_clicks(stack: np.ndarray, levels: np.ndarray, zs: Any, answer: dict[str, Any],
                pixel_um: float, z_step_um: float) -> dict[str, Any] | None:
     """TODO: "Click ends per slice". See docs/z-stack.md."""
@@ -162,11 +303,13 @@ class Method:
     label: str
     ready: bool     # False: listed in Settings, not selectable
     run: Callable[..., dict[str, Any] | None]
+    own_section: bool = False   # finds its own AIS ends, not the projection's
 
 
 # Settings' Z method list (static/js/settings.js) follows this.
 METHODS = (
     Method("trace_lift", "Trace, then lift to Z", True, lift),
+    Method("lift_ends", "Trace, lift to Z, ends from the slices", True, lift_ends, own_section=True),
     Method("end_clicks", "Click ends per slice", False, end_clicks),
     Method("volume_trace", "Full 3D tracing", False, volume_trace),
 )

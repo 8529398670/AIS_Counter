@@ -650,6 +650,13 @@
                       <div id="batches-stack-pixel-help" class="form-text" data-i18n="batches.stack_pixel_help"></div>
                     </div>
                   </div>
+                  <!-- How a Z-stack .czi's ApoTome grid phases are made into slices (Channels.ask). -->
+                  <fieldset id="channels-apotome" class="mt-3" hidden>
+                    <legend class="form-label fs-6 mb-1" data-i18n="batches.apotome_label"></legend>
+                    <div class="form-check"><input class="form-check-input" type="radio" name="channels-apotome" id="channels-apotome-sectioned" value="sectioned" checked /><label class="form-check-label" for="channels-apotome-sectioned" data-i18n="batches.apotome_sectioned"></label></div>
+                    <div class="form-check"><input class="form-check-input" type="radio" name="channels-apotome" id="channels-apotome-widefield" value="widefield" /><label class="form-check-label" for="channels-apotome-widefield" data-i18n="batches.apotome_widefield"></label></div>
+                    <div class="form-text" data-i18n="batches.apotome_help"></div>
+                  </fieldset>
                   <!-- The images' pixel size (not Z-stacks'): 40x unless changed (Channels.edit). -->
                   <div id="channels-pixel" class="mt-3" hidden>
                     <label for="channels-pixel-um" class="form-label" data-i18n="channels.pixel_label"></label>

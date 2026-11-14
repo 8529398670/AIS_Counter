@@ -131,6 +131,7 @@ class ServerSection:
     trusted_proxies: list[str]
     proxy_header: str
     body_limit_bytes: int
+    upload_limit_bytes: int
     rate_limit_max: int
     rate_limit_window_seconds: int
     rate_limit_signin_max: int
@@ -345,6 +346,8 @@ class Config:
     # The separate budget for signing in and joining.
     rate_limit_signin_max: int = 60
     body_limit_bytes: int = 1048576
+    # One image file's upload, which is streamed to disk (routes/ais.upload).
+    upload_limit_bytes: int = 1073741824
 
     # proxy_header is believed only when trust_proxy is on *and* the
     # connection comes from an address in trusted_proxies (IPs or CIDR
@@ -747,6 +750,8 @@ def validate(file: File) -> list[str]:
             f"server.trusted_proxies entry {entry!r} trusts every address, which lets any client forge its own IP",
         )
     check(server.body_limit_bytes > 0, "server.body_limit_bytes must be positive")
+    check(server.upload_limit_bytes >= server.body_limit_bytes,
+          "server.upload_limit_bytes must be at least server.body_limit_bytes")
     check(server.rate_limit_max > 0, "server.rate_limit_max must be positive")
     check(server.rate_limit_window_seconds > 0, "server.rate_limit_window_seconds must be positive")
     check(server.rate_limit_signin_max > 0, "server.rate_limit_signin_max must be positive")
@@ -1013,6 +1018,7 @@ def build_config(file: File, path: Path, paths: "Paths", secret_key: str) -> Con
         rate_limit_window_seconds=file.server.rate_limit_window_seconds,
         rate_limit_signin_max=file.server.rate_limit_signin_max,
         body_limit_bytes=file.server.body_limit_bytes,
+        upload_limit_bytes=file.server.upload_limit_bytes,
         trust_proxy=file.server.trust_proxy,
         trusted_proxies=tuple(entry.strip() for entry in file.server.trusted_proxies),
         proxy_header=file.server.proxy_header,
